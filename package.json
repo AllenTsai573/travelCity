@@ -1,0 +1,11 @@
+{
+  "name": "travelcity",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TravelCity 交通城市：自由道路建設與微觀交通模擬遊戲",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node tests/sim.test.js"
+  }
+}

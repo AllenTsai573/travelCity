@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TravelCity 交通城市</title>
+  <meta name="description" content="自由角度道路建設 × 微觀交通模擬的城市交通遊戲">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚦</text></svg>">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <header id="topbar">
+    <div class="brand">🚦 <b>TravelCity</b><span>交通城市</span></div>
+    <div class="stats">
+      <div class="stat"><label>資金</label><span id="s-money">—</span></div>
+      <div class="stat"><label>人口</label><span id="s-pop">—</span></div>
+      <div class="stat"><label>工作</label><span id="s-jobs">—</span></div>
+      <div class="stat"><label>車輛</label><span id="s-veh">—</span></div>
+      <div class="stat"><label>平均車速</label><span id="s-speed">—</span></div>
+      <div class="stat"><label>成功行程/時</label><span id="s-trips">—</span></div>
+      <div class="stat"><label>失敗/時</label><span id="s-fails">—</span></div>
+      <div class="stat"><label>收支/時</label><span id="s-net">—</span></div>
+    </div>
+    <div class="clock"><span id="s-day"></span><b id="s-time"></b><span id="s-ms"></span></div>
+    <div class="speed" id="speedbtns">
+      <button data-speed="0" title="暫停（空白鍵）">⏸</button>
+      <button data-speed="1" title="1 倍速（1）">▶</button>
+      <button data-speed="3" title="3 倍速（2）">▶▶</button>
+      <button data-speed="8" title="8 倍速（3）">▶▶▶</button>
+    </div>
+    <div class="menu">
+      <button id="btn-heat" title="壅塞熱圖（H）">熱圖</button>
+      <button id="btn-grow" title="城市依需求自動長出建築">自動發展</button>
+      <button id="btn-stats">統計</button>
+      <button id="btn-menu">選單</button>
+    </div>
+  </header>
+
+  <div id="demand" title="分區需求：住宅 / 商業 / 工業">
+    <div class="col"><div class="track"><i id="d-R"></i></div><span>住</span></div>
+    <div class="col"><div class="track"><i id="d-C"></i></div><span>商</span></div>
+    <div class="col"><div class="track"><i id="d-I"></i></div><span>工</span></div>
+  </div>
+
+  <aside id="panel" class="hidden"></aside>
+  <div id="bottom">
+    <div id="subbar"></div>
+    <nav id="toolbar"></nav>
+  </div>
+  <div id="tip"></div>
+  <div id="toasts"></div>
+  <div id="modal" class="hidden"><div class="card" id="modal-card"></div></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

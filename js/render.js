@@ -1,0 +1,529 @@
+// Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
+import { LANE_W, LEVEL_H, ZONES } from './config.js';
+import { pointAt, offsetPoly, polyCum, clamp } from './util.js';
+import { halfWidth, laneOffset } from './network.js';
+
+const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
+
+function heatColor(r) {
+  r = clamp(r, 0, 1);
+  if (r > 0.75) return '#3ccf5a';
+  if (r > 0.5) return '#c6d93b';
+  if (r > 0.3) return '#f2a33a';
+  if (r > 0.15) return '#e8572e';
+  return '#b01e2e';
+}
+
+export class Renderer {
+  constructor(game, canvas) {
+    this.game = game;
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.cam = { x: 1200, y: 1200, z: 1 };
+    this.dpr = 1;
+    this.W = 0; this.H = 0;
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+  }
+
+  resize() {
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.W = this.canvas.clientWidth;
+    this.H = this.canvas.clientHeight;
+    this.canvas.width = Math.round(this.W * this.dpr);
+    this.canvas.height = Math.round(this.H * this.dpr);
+  }
+
+  toWorld(sx, sy) {
+    const c = this.cam;
+    return { x: (sx - this.W / 2) / c.z + c.x, y: (sy - this.H / 2) / c.z + c.y };
+  }
+  toScreen(wx, wy) {
+    const c = this.cam;
+    return { x: (wx - c.x) * c.z + this.W / 2, y: (wy - c.y) * c.z + this.H / 2 };
+  }
+  worldTf() {
+    const c = this.cam, d = this.dpr;
+    this.ctx.setTransform(d * c.z, 0, 0, d * c.z, d * (this.W / 2 - c.x * c.z), d * (this.H / 2 - c.y * c.z));
+  }
+  screenTf() { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); }
+  view(pad = 0) {
+    const a = this.toWorld(0, 0), b = this.toWorld(this.W, this.H);
+    return { x0: a.x - pad, y0: a.y - pad, x1: b.x + pad, y1: b.y + pad };
+  }
+  inView(bb, v) { return bb.x1 >= v.x0 && bb.x0 <= v.x1 && bb.y1 >= v.y0 && bb.y0 <= v.y1; }
+
+  strokePoly(pts) {
+    const ctx = this.ctx;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  }
+
+  draw() {
+    const g = this.game, ctx = this.ctx;
+    if (!g.terrain) return;
+    const z = this.cam.z;
+    this.screenTf();
+    ctx.fillStyle = g.terrain.biome.bg;
+    ctx.fillRect(0, 0, this.W, this.H);
+    this.worldTf();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(g.terrain.getCanvas(), 0, 0, g.terrain.size, g.terrain.size);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 3 / z;
+    ctx.strokeRect(0, 0, g.terrain.size, g.terrain.size);
+    const v = this.view(40);
+    this.drawTrees(v);
+    this.drawBuildings(v);
+    this.drawNetwork(v);
+    if (g.heatmap) this.drawHeatmap(v);
+    this.drawSelection();
+    g.tools.drawOverlay(ctx, this);
+    this.screenTf();
+    this.drawLabels(v);
+    g.tools.drawScreenOverlay(ctx, this);
+  }
+
+  drawTrees(v) {
+    const g = this.game, t = g.terrain, ctx = this.ctx, z = this.cam.z;
+    if (z < 0.3) return;
+    const cols = t.biome.tree;
+    const r = 3.6;
+    for (let k = 0; k < 3; k++) {
+      ctx.fillStyle = cols[k];
+      ctx.beginPath();
+      const g0 = Math.floor(v.x0 / 50), g1 = Math.floor(v.x1 / 50), h0 = Math.floor(v.y0 / 50), h1 = Math.floor(v.y1 / 50);
+      for (let gi = g0; gi <= g1; gi++) for (let hj = h0; hj <= h1; hj++) {
+        const arr = t.treeGrid.get(gi + ',' + hj);
+        if (!arr) continue;
+        for (const i of arr) {
+          if (!t.treeAlive[i] || t.treeK[i] !== k) continue;
+          const x = t.treeX[i], y = t.treeY[i];
+          ctx.moveTo(x + r, y);
+          ctx.arc(x, y, r * (0.8 + (i % 5) * 0.08), 0, Math.PI * 2);
+        }
+      }
+      ctx.fill();
+    }
+  }
+
+  drawBuildings(v) {
+    const g = this.game, ctx = this.ctx, z = this.cam.z;
+    for (const b of g.city.buildings) {
+      if (b.x < v.x0 - 30 || b.x > v.x1 + 30 || b.y < v.y0 - 30 || b.y > v.y1 + 30) continue;
+      const Z = ZONES[b.zone];
+      const c = b.corners;
+      // 地塊
+      ctx.fillStyle = b.abandoned ? '#8a8a84' : Z.color[0];
+      ctx.globalAlpha = 0.55;
+      ctx.beginPath();
+      ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      // 建物本體
+      const sh = 0.18 + (3 - b.level) * 0.06;
+      const ins = c.map(p => ({ x: b.x + (p.x - b.x) * (1 - sh), y: b.y + (p.y - b.y) * (1 - sh) }));
+      const hgt = b.level * (b.zone === 'C' ? 2.6 : 1.5);
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.beginPath();
+      ctx.moveTo(ins[0].x + hgt, ins[0].y + hgt); for (let i = 1; i < 4; i++) ctx.lineTo(ins[i].x + hgt, ins[i].y + hgt); ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = b.abandoned ? '#a5a39c' : Z.roof[(b.level - 1 + b.variant) % 3];
+      ctx.beginPath();
+      ctx.moveTo(ins[0].x, ins[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(ins[i].x, ins[i].y); ctx.closePath();
+      ctx.fill();
+      if (z > 0.8) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.lineWidth = 0.4;
+        ctx.stroke();
+        if (b.zone === 'R' && !b.abandoned) {
+          // 屋脊
+          ctx.beginPath();
+          ctx.moveTo((ins[0].x + ins[3].x) / 2, (ins[0].y + ins[3].y) / 2);
+          ctx.lineTo((ins[1].x + ins[2].x) / 2, (ins[1].y + ins[2].y) / 2);
+          ctx.stroke();
+        }
+        if (b.zone === 'I' && !b.abandoned) {
+          ctx.fillStyle = '#6b6159';
+          ctx.beginPath(); ctx.arc(b.x + (ins[2].x - b.x) * 0.5, b.y + (ins[2].y - b.y) * 0.5, 1.6, 0, Math.PI * 2); ctx.fill();
+          if (b.happy > 0.4) {
+            ctx.fillStyle = 'rgba(220,220,220,0.35)';
+            const t = (this.game.time * 0.6 + b.id) % 6;
+            ctx.beginPath(); ctx.arc(b.x + (ins[2].x - b.x) * 0.5 + t, b.y + (ins[2].y - b.y) * 0.5 - t * 1.2, 1.5 + t * 0.4, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+        if (b.zone === 'C' && !b.abandoned) {
+          ctx.fillStyle = 'rgba(255,255,255,0.35)';
+          const m = ins.map(p => ({ x: b.x + (p.x - b.x) * 0.55, y: b.y + (p.y - b.y) * 0.55 }));
+          ctx.beginPath(); ctx.moveTo(m[0].x, m[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(m[i].x, m[i].y); ctx.closePath(); ctx.fill();
+        }
+      }
+    }
+  }
+
+  // 道路標線快取
+  markings(seg) {
+    const net = this.game.net;
+    if (seg._mk && seg._mk.ver === net.version) return seg._mk.lines;
+    const T = seg.T, core = seg.core, lines = [];
+    const hw = halfWidth(T);
+    lines.push({ pts: offsetPoly(core, hw - 0.75), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
+    lines.push({ pts: offsetPoly(core, -(hw - 0.75)), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
+    if (T.bwd > 0) {
+      if ((T.median || 0) > 1) {
+        lines.push({ pts: core, c: T.green ? '#6f9e4f' : '#9a9a92', w: T.median - 0.4, dash: null, median: true });
+        lines.push({ pts: offsetPoly(core, T.median / 2 - 0.2), c: '#e8c547', w: 0.15, dash: null });
+        lines.push({ pts: offsetPoly(core, -(T.median / 2 - 0.2)), c: '#e8c547', w: 0.15, dash: null });
+      } else if ((T.median || 0) > 0) {
+        lines.push({ pts: offsetPoly(core, 0.18), c: '#e8c547', w: 0.15, dash: null });
+        lines.push({ pts: offsetPoly(core, -0.18), c: '#e8c547', w: 0.15, dash: null });
+      } else if (T.rank === 0) {
+        // 鄉間小路無標線
+      } else {
+        lines.push({ pts: core, c: '#e8c547', w: 0.15, dash: [3, 3] });
+      }
+    }
+    for (const dir of [1, -1]) {
+      const n = dir > 0 ? T.fwd : T.bwd;
+      for (let i = 0; i < n - 1; i++) {
+        const o = (laneOffset(T, dir, i) + laneOffset(T, dir, i + 1)) / 2;
+        lines.push({ pts: offsetPoly(core, o), c: 'rgba(255,255,255,0.8)', w: 0.14, dash: [3, 5] });
+      }
+    }
+    seg._mk = { ver: net.version, lines };
+    return lines;
+  }
+
+  drawNetwork(v) {
+    const g = this.game, ctx = this.ctx, net = g.net, z = this.cam.z;
+    const byLevel = new Map(DRAW_LEVELS.map(l => [l, []]));
+    for (const s of net.segs.values()) if (this.inView(s.bbox, v)) byLevel.get(s.drawLevel)?.push(s);
+    const nodesBy = new Map(DRAW_LEVELS.map(l => [l, []]));
+    for (const n of net.nodes.values()) if (n.x > v.x0 && n.x < v.x1 && n.y > v.y0 && n.y < v.y1) nodesBy.get(n.level)?.push(n);
+    const vehBy = new Map(DRAW_LEVELS.map(l => [l, []]));
+    for (const vh of g.traffic.vehicles) vehBy.get(vh.track.drawLevel)?.push(vh);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const L of DRAW_LEVELS) {
+      const segs = byLevel.get(L), nodes = nodesBy.get(L);
+      if (!segs.length && !vehBy.get(L).length) continue;
+      const tunnel = L < 0;
+      if (L > 0) {
+        // 陰影與橋墩
+        // 依各點高度偏移的陰影（坡道陰影逐漸收斂）
+        ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+        for (const s of segs) {
+          ctx.lineWidth = halfWidth(s.T) * 2;
+          const sh = [];
+          for (let t = 0; t <= s.len; t += Math.max(4, s.len / 30)) {
+            const p = pointAt(s.pts, s.cum, t), h = Math.max(0, net.segHeightAt(s, t));
+            sh.push({ x: p.x + h * LEVEL_H * 0.55, y: p.y + h * LEVEL_H * 0.85 });
+          }
+          const pe = s.pts[s.pts.length - 1], he = Math.max(0, net.segHeightAt(s, s.len));
+          sh.push({ x: pe.x + he * LEVEL_H * 0.55, y: pe.y + he * LEVEL_H * 0.85 });
+          this.strokePoly(sh);
+        }
+        for (const s of segs) {
+          for (let t = 12; t < s.len - 4; t += 28) {
+            const h = net.segHeightAt(s, t);
+            if (h < 0.4) continue;
+            const p = pointAt(s.pts, s.cum, t);
+            const w = halfWidth(s.T) * 0.7;
+            ctx.strokeStyle = '#7d7a72';
+            ctx.lineWidth = 2.2;
+            ctx.beginPath();
+            ctx.moveTo(p.x - p.dy * w, p.y + p.dx * w);
+            ctx.lineTo(p.x + p.dy * w, p.y - p.dx * w);
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.globalAlpha = tunnel ? 0.35 : 1;
+      // 路肩
+      for (const s of segs) {
+        ctx.strokeStyle = tunnel ? '#222' : (L > 0 ? '#9c9a93' : '#6d6a63');
+        ctx.lineWidth = halfWidth(s.T) * 2 + (L > 0 ? 1.2 : 0.8);
+        this.strokePoly(s.pts);
+      }
+      for (const n of nodes) {
+        if (n.segs.length < 3) continue;
+        let r = 0;
+        for (const sid of n.segs) { const s = net.segs.get(sid); if (s) r = Math.max(r, halfWidth(s.T)); }
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.beginPath(); ctx.arc(n.x, n.y, r + 0.4, 0, Math.PI * 2); ctx.fill();
+      }
+      // 柏油
+      for (const s of segs) {
+        ctx.strokeStyle = s.T.color;
+        ctx.lineWidth = halfWidth(s.T) * 2;
+        this.strokePoly(s.pts);
+      }
+      for (const n of nodes) {
+        if (n.segs.length < 3) continue;
+        let r = 0, col = '#45484d';
+        for (const sid of n.segs) { const s = net.segs.get(sid); if (s && halfWidth(s.T) > r) { r = halfWidth(s.T); col = s.T.color; } }
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(n.x, n.y, r - 0.1, 0, Math.PI * 2); ctx.fill();
+      }
+      // 標線
+      if (z > 0.9 && !tunnel) {
+        for (const s of segs) {
+          for (const m of this.markings(s)) {
+            ctx.strokeStyle = m.c;
+            ctx.lineWidth = m.w;
+            ctx.lineCap = m.median ? 'butt' : 'round';
+            ctx.setLineDash(m.dash || []);
+            this.strokePoly(m.pts);
+          }
+        }
+        ctx.setLineDash([]);
+        ctx.lineCap = 'round';
+        // 停止線
+        for (const n of nodes) {
+          if (n.control === 'auto' && n.segs.length < 3) continue;
+          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+          ctx.lineWidth = 0.4;
+          for (const Lk of net.inLinks(n)) for (const lane of Lk.lanes) {
+            const p = pointAt(lane.pts, lane.cum, lane.len - 0.3);
+            ctx.beginPath();
+            ctx.moveTo(p.x + p.dy * 1.6, p.y - p.dx * 1.6);
+            ctx.lineTo(p.x - p.dy * 1.6, p.y + p.dx * 1.6);
+            ctx.stroke();
+          }
+        }
+      }
+      if (tunnel) {
+        ctx.globalAlpha = 0.8;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = '#2a2a2a';
+        ctx.lineWidth = 0.6;
+        for (const s of segs) {
+          this.strokePoly(offsetPoly(s.pts, halfWidth(s.T)));
+          this.strokePoly(offsetPoly(s.pts, -halfWidth(s.T)));
+        }
+        ctx.setLineDash([]);
+      }
+      ctx.globalAlpha = tunnel ? 0.6 : 1;
+      this.drawVehicles(vehBy.get(L), v);
+      ctx.globalAlpha = 1;
+      if (z > 0.6) this.drawSignals(nodes);
+    }
+  }
+
+  drawVehicles(list, v) {
+    const ctx = this.ctx, c = this.cam, d = this.dpr, z = c.z;
+    const a = d * z;
+    const ox = d * (this.W / 2 - c.x * z), oy = d * (this.H / 2 - c.y * z);
+    const detail = z > 2.2;
+    for (const vh of list) {
+      const tr = vh.track;
+      const p = pointAt(tr.pts, tr.cum, vh.s - vh.len / 2);
+      const x = p.x - p.dy * vh.lat, y = p.y + p.dx * vh.lat;
+      if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
+      let dx = p.dx, dy = p.dy;
+      if (vh.lat) {
+        const k = -vh.lat * 0.08;
+        dx = p.dx - p.dy * k; dy = p.dy + p.dx * k;
+        const L = Math.hypot(dx, dy); dx /= L; dy /= L;
+      }
+      ctx.setTransform(a * dx, a * dy, -a * dy, a * dx, ox + a * x, oy + a * y);
+      const hl = vh.len / 2, hw = vh.w / 2;
+      ctx.fillStyle = vh.color;
+      ctx.fillRect(-hl, -hw, vh.len, vh.w);
+      if (detail) {
+        if (vh.truck) {
+          ctx.fillStyle = '#5b6f8a';
+          ctx.fillRect(hl - 2.2, -hw, 2.2, vh.w);
+        } else {
+          ctx.fillStyle = 'rgba(30,40,55,0.75)';
+          ctx.fillRect(hl - 1.9, -hw + 0.2, 0.9, vh.w - 0.4);
+          ctx.fillRect(-hl + 0.5, -hw + 0.25, 0.6, vh.w - 0.5);
+        }
+        if (vh.braking) {
+          ctx.fillStyle = '#ff3b30';
+          ctx.fillRect(-hl - 0.1, -hw, 0.35, 0.5);
+          ctx.fillRect(-hl - 0.1, hw - 0.5, 0.35, 0.5);
+        }
+      }
+    }
+    this.worldTf();
+  }
+
+  drawSignals(nodes) {
+    const ctx = this.ctx, g = this.game, net = g.net;
+    for (const n of nodes) {
+      if (n.control === 'signal' && n.signal) {
+        const sig = n.signal, ph = sig.phases[sig.cur];
+        for (const L of net.inLinks(n)) {
+          const inP = ph.set.has(L.key);
+          let col = '#e53935';
+          if (inP && sig.state === 'green') col = '#43d17a';
+          else if (inP && sig.state === 'yellow') col = '#ffc93c';
+          for (const lane of L.lanes) {
+            const p = pointAt(lane.pts, lane.cum, lane.len);
+            ctx.fillStyle = '#111';
+            ctx.beginPath(); ctx.arc(p.x, p.y, 1.05, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = col;
+            ctx.beginPath(); ctx.arc(p.x, p.y, 0.75, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+      } else if (n.control === 'stop') {
+        for (const L of net.inLinks(n)) {
+          const lane = L.lanes[L.lanes.length - 1];
+          const p = pointAt(lane.pts, lane.cum, lane.len);
+          ctx.fillStyle = '#d32f2f';
+          ctx.beginPath(); ctx.arc(p.x - p.dy * 2.4, p.y + p.dx * 2.4, 0.9, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    }
+  }
+
+  drawHeatmap(v) {
+    const ctx = this.ctx, net = this.game.net;
+    ctx.lineCap = 'butt';
+    for (const s of net.segs.values()) {
+      if (!this.inView(s.bbox, v)) continue;
+      for (const dir of [1, -1]) {
+        const L = s.links[dir];
+        if (!L.lanes.length) continue;
+        const ratio = L.count ? L.flow / L.limit : 1;
+        ctx.strokeStyle = heatColor(ratio);
+        ctx.globalAlpha = L.count ? 0.85 : 0.35;
+        const n = L.lanes.length;
+        ctx.lineWidth = n * LANE_W * 0.8;
+        const off = s.T.bwd === 0 ? 0 : dir * ((s.T.median || 0) / 2 + n * LANE_W / 2);
+        this.strokePoly(offsetPoly(s.core, off));
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineCap = 'round';
+  }
+
+  drawSelection() {
+    const g = this.game, ctx = this.ctx, sel = g.ui.selection;
+    if (!sel) return;
+    const z = this.cam.z;
+    if (sel.type === 'vehicle') {
+      const vh = sel.obj;
+      if (vh.dead) return;
+      ctx.strokeStyle = 'rgba(80,220,255,0.7)';
+      ctx.lineWidth = Math.max(1.2, 3 / z);
+      for (let i = vh.ri; i < vh.route.length; i++) {
+        const L = g.net.links.get(vh.route[i]);
+        if (!L || !L.lanes.length) continue;
+        this.strokePoly(L.lanes[L.lanes.length - 1].pts);
+      }
+      const tr = vh.track, p = pointAt(tr.pts, tr.cum, vh.s - vh.len / 2);
+      ctx.strokeStyle = '#50dcff';
+      ctx.lineWidth = 2 / z;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.stroke();
+      const dest = vh.trip.to;
+      const ds = g.net.segs.get(dest.seg);
+      if (ds) {
+        const q = pointAt(ds.pts, ds.cum, dest.u);
+        ctx.fillStyle = '#50dcff';
+        ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(2, 5 / z), 0, Math.PI * 2); ctx.fill();
+      }
+    } else if (sel.type === 'building') {
+      const c = sel.obj.corners;
+      ctx.strokeStyle = '#50dcff';
+      ctx.lineWidth = 2 / z;
+      ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath(); ctx.stroke();
+    } else if (sel.type === 'segment') {
+      const s = sel.obj;
+      if (!g.net.segs.has(s.id)) return;
+      ctx.strokeStyle = 'rgba(80,220,255,0.5)';
+      ctx.lineWidth = halfWidth(s.T) * 2 + 2;
+      this.strokePoly(s.pts);
+      // 方向箭頭
+      ctx.fillStyle = '#fff';
+      for (const lane of s.lanes) {
+        for (let t = 10; t < lane.len - 4; t += 25) this.arrow(lane, t, 1.4);
+      }
+    } else if (sel.type === 'node') {
+      this.drawJunctionEditor(sel.obj);
+    }
+  }
+
+  arrow(lane, t, sz) {
+    const ctx = this.ctx, p = pointAt(lane.pts, lane.cum, t);
+    ctx.beginPath();
+    ctx.moveTo(p.x + p.dx * sz, p.y + p.dy * sz);
+    ctx.lineTo(p.x - p.dx * sz - p.dy * sz * 0.7, p.y - p.dy * sz + p.dx * sz * 0.7);
+    ctx.lineTo(p.x - p.dx * sz + p.dy * sz * 0.7, p.y - p.dy * sz - p.dx * sz * 0.7);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  drawJunctionEditor(node) {
+    const g = this.game, ctx = this.ctx, net = g.net, z = this.cam.z;
+    if (!net.nodes.has(node.id)) return;
+    const selLane = g.ui.jSelLane;
+    ctx.lineCap = 'round';
+    const turnCol = { L: '#ffb74d', R: '#81c784', S: '#e0e0e0', U: '#ce93d8', MR: '#90caf9', ML: '#90caf9' };
+    for (const c of node.conns) {
+      const hl = selLane && c.from === selLane;
+      ctx.strokeStyle = hl ? '#50dcff' : turnCol[c.turn];
+      ctx.globalAlpha = selLane && !hl ? 0.25 : 0.9;
+      ctx.lineWidth = hl ? 0.7 : 0.45;
+      this.strokePoly(c.pts);
+      ctx.fillStyle = ctx.strokeStyle;
+      const p = pointAt(c.pts, c.cum, c.len);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x - p.dx * 1.4 - p.dy * 0.7, p.y - p.dy * 1.4 + p.dx * 0.7);
+      ctx.lineTo(p.x - p.dx * 1.4 + p.dy * 0.7, p.y - p.dy * 1.4 - p.dx * 0.7);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for (const L of net.inLinks(node)) for (const lane of L.lanes) {
+      const p = lane.pts[lane.pts.length - 1];
+      ctx.fillStyle = lane === selLane ? '#50dcff' : '#ff8a3d';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 0.95, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#111'; ctx.lineWidth = 0.2; ctx.stroke();
+    }
+    for (const L of net.outLinks(node)) for (const lane of L.lanes) {
+      const p = lane.pts[0];
+      ctx.fillStyle = selLane ? '#7cf29a' : '#2fbf71';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 0.95, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#111'; ctx.lineWidth = 0.2; ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(80,220,255,0.6)';
+    ctx.lineWidth = 1.5 / z;
+    ctx.setLineDash([4 / z, 4 / z]);
+    ctx.beginPath(); ctx.arc(node.x, node.y, Math.max(node.radius + 6, 10), 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  drawLabels(v) {
+    const g = this.game, ctx = this.ctx, z = this.cam.z;
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    for (const o of g.city.outside) {
+      const n = g.net.nodes.get(o.node);
+      if (!n) continue;
+      const p = this.toScreen(n.x, n.y);
+      if (p.x < -50 || p.y < -50 || p.x > this.W + 50 || p.y > this.H + 50) continue;
+      const lbl = `⇄ ${o.name}`;
+      const w = ctx.measureText(lbl).width + 14;
+      ctx.fillStyle = 'rgba(20,28,40,0.85)';
+      ctx.beginPath(); ctx.roundRect(p.x - w / 2, p.y - 32, w, 20, 6); ctx.fill();
+      ctx.fillStyle = '#ffd25e';
+      ctx.fillText(lbl, p.x, p.y - 18);
+    }
+    if (z > 0.7) {
+      ctx.font = '700 11px system-ui, sans-serif';
+      for (const b of g.city.buildings) {
+        if (b.x < v.x0 || b.x > v.x1 || b.y < v.y0 || b.y > v.y1) continue;
+        if (b.happy >= 0.35 && !b.abandoned) continue;
+        const p = this.toScreen(b.x, b.y);
+        ctx.fillStyle = b.abandoned ? '#666' : '#e53935';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(b.abandoned ? '×' : '!', p.x, p.y + 4);
+      }
+    }
+  }
+}

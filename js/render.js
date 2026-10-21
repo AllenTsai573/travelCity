@@ -7,6 +7,12 @@ const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
 const ASPHALT = '#46494e';
 // 鋪面道路統一柏油色，銜接處不會出現色差；鄉間小路為碎石色
 const roadColor = T => (T.rank === 0 ? T.color : ASPHALT);
+// 路肩顏色：地面深、高架淺，依高度線性內插
+function curbColor(h) {
+  const t = clamp(h, 0, 1);
+  const a = [0x6d, 0x6a, 0x63], b = [0xa3, 0xa1, 0x99];
+  return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',')})`;
+}
 
 function heatColor(r) {
   r = clamp(r, 0, 1);
@@ -320,7 +326,8 @@ export class Renderer {
       });
       pieces.push({
         lv, mk, col: roadColor(seg.T),
-        body: Renderer.ribbonPoly(C, 0), curb: Renderer.ribbonPoly(C, lv > 0 ? 0.6 : 0.4),
+        grad: hA !== hB ? { p0: C[0], p1: C[C.length - 1], h0: C[0].h, h1: C[C.length - 1].h } : null,
+        body: Renderer.ribbonPoly(C, 0), curb: Renderer.ribbonPoly(C, 0.5),
         shadow: lv > 0 ? Renderer.ribbonPoly(C, 0, shadowOf) : null,
         left: C.map(c => ({ x: c.x + c.nx * c.w, y: c.y + c.ny * c.w })),
         right: C.map(c => ({ x: c.x - c.nx * c.w, y: c.y - c.ny * c.w })),
@@ -370,29 +377,21 @@ export class Renderer {
         const sm = t => t * t * (3 - 2 * t);
         const C = Renderer.withNormals(pts.map((p, i) => ({ x: p.x, y: p.y, w: e1.hw + (e2.hw - e1.hw) * sm(clamp(cum[i] / tot, 0, 1)), h: n.level })));
         return {
-          body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, n.level > 0 ? 0.6 : 0.4),
+          body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, 0.5),
           mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc) : [],
         };
       };
       if (segs.length === 2) {
         j = { kind: 'hub', col: roadColor(widest.T), strips: [strip(ends[0], ends[1])], hull: null, ribbons: [] };
       } else {
-        // 找出直通的主線（同一條路穿過節點）
-        const pairs = [], used = new Set();
-        const ringEnds = ends.filter(e => e.s.ring);
-        if (ringEnds.length === 2) { pairs.push([ringEnds[0], ringEnds[1]]); ringEnds.forEach(e => used.add(e)); }
-        const cand = [];
-        for (let a = 0; a < ends.length; a++) for (let b = a + 1; b < ends.length; b++) {
-          const st = -(ends[a].t.x * ends[b].t.x + ends[a].t.y * ends[b].t.y);
-          if (st > 0.906) cand.push({ a: ends[a], b: ends[b], st });
-        }
-        cand.sort((p, q) => q.st - p.st);
-        for (const c of cand) if (!used.has(c.a) && !used.has(c.b)) { pairs.push([c.a, c.b]); used.add(c.a); used.add(c.b); }
+        // 路口型態由路網計算（與車道截斷一致）
+        const info = n.jinfo || net.junctionInfo(n);
+        const endOf = sg => ends.find(e => e.s === sg);
+        const pairs = info.ring ? [ends.filter(e => e.s.ring)].filter(p => p.length === 2) : info.pairs.map(([a, b]) => [endOf(a), endOf(b)]);
+        const used = new Set(pairs.flat());
         const others = ends.filter(e => !used.has(e));
-        const ring = ringEnds.length > 0;
-        // 匝道匯入 / 分出：其餘道路都以小角度貼著主線
-        const rampJunction = !ring && pairs.length === 1 && others.length > 0 &&
-          others.every(o => Math.abs(o.t.x * pairs[0][0].t.x + o.t.y * pairs[0][0].t.y) > 0.766);
+        const ring = info.ring;
+        const rampJunction = info.ramp;
         let hull = null;
         if (!ring && !rampJunction) {
           const edge = [];
@@ -403,9 +402,25 @@ export class Renderer {
           hull = convexHull(edge);
         }
         const strips = (ring || rampJunction) ? pairs.map(([a, b]) => strip(a, b)) : [];
-        // 一般路口不在路口內畫車道線
-        if (!(ring || rampJunction)) for (const st of strips) st.mk = [];
-        j = { kind: 'hub', col: roadColor(widest.T), strips, hull, ribbons: n.conns.map(c => c.pts) };
+        let ribbons = n.conns.map(c => c.pts);
+        if (rampJunction) {
+          // 匝道：以完整匝道寬度沿匯入 / 分出軌跡接到主線外側車道，並加上加速 / 減速車道漸變段
+          ribbons = [];
+          const main = new Set(pairs[0].map(e => e.s));
+          for (const o of others) {
+            for (const merge of [true, false]) {
+              let best = null, bd = -2;
+              for (const c of n.conns) {
+                if (merge ? !(c.from.seg === o.s && main.has(c.to.seg)) : !(c.to.seg === o.s && main.has(c.from.seg))) continue;
+                const a = pointAt(c.pts, c.cum, 0), b = pointAt(c.pts, c.cum, c.len);
+                const dd = a.dx * b.dx + a.dy * b.dy;
+                if (dd > bd) { bd = dd; best = c; }
+              }
+              if (best) strips.push(...this.rampMergeGeom(best, merge, o.hw, n.level));
+            }
+          }
+        }
+        j = { kind: 'hub', col: roadColor(widest.T), strips, hull, ribbons };
       }
       if (j.kind === 'hub') j.mk = j.strips.flatMap(st => st.mk);
     }
@@ -430,6 +445,20 @@ export class Renderer {
       ctx.lineCap = 'round';
       for (const r of j.ribbons) this.strokePoly(r);
     }
+  }
+
+  // 匝道與主線的銜接：匝道寬度漸變到一個車道寬的匯流帶，加上沿主線外側的漸變車道
+  rampMergeGeom(c, merge, rampHW, level) {
+    const curbW = level > 0 ? 0.5 : 0.5;
+    const laneHW = LANE_W / 2 + 0.25;
+    const sm = t => t * t * (3 - 2 * t);
+    const n = c.pts.length;
+    const C = Renderer.withNormals(c.pts.map((p, i) => {
+      const f = sm(c.cum[i] / (c.len || 1));
+      return { x: p.x, y: p.y, w: merge ? rampHW + (laneHW - rampHW) * f : laneHW + (rampHW - laneHW) * f, h: level };
+    }));
+    const out = [{ body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, curbW), mk: [] }];
+    return out;
   }
 
   vehLevel(vh) {
@@ -483,10 +512,18 @@ export class Renderer {
       }
       ctx.globalAlpha = tunnel ? 0.35 : 1;
       // 路肩（先畫全部路肩，再畫柏油，接縫處不會出現邊線）
-      const curbCol = tunnel ? '#222' : (L > 0 ? '#a3a199' : '#6d6a63');
-      const curbW = L > 0 ? 0.6 : 0.4;
-      ctx.fillStyle = curbCol;
-      for (const pc of pieces) this.fillPoly(pc.curb);
+      const curbCol = tunnel ? '#222' : curbColor(L);
+      const curbW = 0.5;
+      for (const pc of pieces) {
+        // 坡道路肩顏色依高度漸變，地面段與高架段之間不會出現色塊斷層
+        if (pc.grad && !tunnel) {
+          const gr = ctx.createLinearGradient(pc.grad.p0.x, pc.grad.p0.y, pc.grad.p1.x, pc.grad.p1.y);
+          gr.addColorStop(0, curbColor(pc.grad.h0));
+          gr.addColorStop(1, curbColor(pc.grad.h1));
+          ctx.fillStyle = gr;
+        } else ctx.fillStyle = curbCol;
+        this.fillPoly(pc.curb);
+      }
       for (const [n, j] of joints) { ctx.fillStyle = curbCol; this.drawJoint(n, j, 'curb', curbW); }
       // 柏油
       for (const pc of pieces) { ctx.fillStyle = pc.col; this.fillPoly(pc.body); }

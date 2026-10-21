@@ -29,6 +29,13 @@ function startTangent(lane) {
   return { x: p.dx, y: p.dy };
 }
 
+// 匯入車道在出口車道的右側或左側（以位置判斷）
+function mergeSide(inL, outL) {
+  const o = outL.lanes[0], p = o.pts[0], t = startTangent(o);
+  const q = inL.lanes[0].pts[inL.lanes[0].pts.length - 1];
+  return (q.x - p.x) * -t.y + (q.y - p.y) * t.x > 0 ? 'MR' : 'ML';
+}
+
 function mapLanes(A, B) {
   const n = A.length, m = B.length, out = new Map();
   const add = (i, j) => out.set(i + ':' + j, [i, j]);
@@ -169,7 +176,48 @@ export class Network {
   }
 
   // ---------- 幾何重建 ----------
+  // 路口型態：找出直通主線；其餘道路都以小角度貼著主線者為「匝道路口」
+  junctionInfo(node) {
+    const segs = node.segs.map(id => this.segs.get(id)).filter(Boolean);
+    const info = { ring: segs.some(s => s.ring), pairs: [], others: [], ramp: false, mainDir: null };
+    if (segs.length < 3) return info;
+    const dirs = segs.map(s => { const d = this.segDirAt(s, node.id); const L = Math.hypot(d.x, d.y) || 1; return { s, x: d.x / L, y: d.y / L }; });
+    const cand = [];
+    for (let a = 0; a < dirs.length; a++) for (let b = a + 1; b < dirs.length; b++) {
+      const dot = dirs[a].x * dirs[b].x + dirs[a].y * dirs[b].y;
+      if (dot < -0.906) cand.push({ a: dirs[a], b: dirs[b], st: -dot });
+    }
+    cand.sort((p, q) => q.st - p.st);
+    const used = new Set(), pairs = [];
+    for (const c of cand) if (!used.has(c.a) && !used.has(c.b)) { pairs.push([c.a, c.b]); used.add(c.a); used.add(c.b); }
+    const others = dirs.filter(d => !used.has(d));
+    info.pairs = pairs.map(([a, b]) => [a.s, b.s]);
+    info.others = others.map(o => o.s);
+    info.ramp = !info.ring && pairs.length === 1 && others.length > 0 &&
+      others.every(o => Math.abs(o.x * pairs[0][0].x + o.y * pairs[0][0].y) > 0.766);
+    if (pairs.length) info.mainDir = { x: pairs[0][0].x, y: pairs[0][0].y };
+    return info;
+  }
+
+  // 匝道在節點處的截斷距離：走到匝道完全離開主線路面為止
+  rampTrim(node, seg, info) {
+    const main = info.pairs[0];
+    const mainHW = Math.max(halfWidth(main[0].T), halfWidth(main[1].T));
+    const need = mainHW + halfWidth(seg.T) + 0.3;
+    const u = info.mainDir, atA = seg.a === node.id;
+    const maxT = seg.len * 0.45;
+    for (let t = 2; t < maxT; t += 1) {
+      const p = pointAt(seg.pts, seg.cum, atA ? t : seg.len - t);
+      if (Math.abs(u.x * (p.y - node.y) - u.y * (p.x - node.x)) >= need) return t;
+    }
+    return maxT;
+  }
+
   computeRadius(node) {
+    if (node.jinfo && node.jinfo.ramp) {
+      const [m1, m2] = node.jinfo.pairs[0];
+      return Math.max(halfWidth(m1.T), halfWidth(m2.T)) + 3;
+    }
     const segs = node.segs.map(id => this.segs.get(id)).filter(Boolean);
     if (segs.length <= 1) return 0;
     let maxHW = 0;
@@ -195,8 +243,9 @@ export class Network {
 
   updateSegGeom(seg) {
     const A = this.nodes.get(seg.a), B = this.nodes.get(seg.b);
-    seg.ra = Math.min(A.radius, seg.len * 0.42);
-    seg.rb = Math.min(B.radius, seg.len * 0.42);
+    seg.ra = A.trims && A.trims.has(seg.id) ? A.trims.get(seg.id) : Math.min(A.radius, seg.len * 0.42);
+    seg.rb = B.trims && B.trims.has(seg.id) ? B.trims.get(seg.id) : Math.min(B.radius, seg.len * 0.42);
+    if (seg.ra + seg.rb > seg.len - 2) { const k = (seg.len - 2) / (seg.ra + seg.rb); seg.ra *= k; seg.rb *= k; }
     seg.core = cutPoly(seg.pts, seg.cum, seg.ra, seg.len - seg.rb);
     seg.coreCum = polyCum(seg.core);
     seg.coreLen = seg.coreCum[seg.coreCum.length - 1];
@@ -231,7 +280,15 @@ export class Network {
   }
 
   rebuild() {
-    for (const n of this.nodes.values()) n.radius = this.computeRadius(n);
+    for (const n of this.nodes.values()) n.jinfo = this.junctionInfo(n);
+    for (const n of this.nodes.values()) {
+      n.radius = this.computeRadius(n);
+      n.trims = null;
+      if (n.jinfo.ramp) {
+        n.trims = new Map();
+        for (const o of n.jinfo.others) n.trims.set(o.id, this.rampTrim(n, o, n.jinfo));
+      }
+    }
     for (const s of this.segs.values()) this.updateSegGeom(s);
     for (const n of this.nodes.values()) { for (const c of n.conns) c.dead = true; n.conns = []; }
     for (const s of this.segs.values()) for (const l of s.lanes) { l.conns = []; l.outLinks.clear(); }
@@ -343,8 +400,20 @@ export class Network {
       const list = [];
       for (const [inL, cands] of per) for (const c of cands) if (c.outL === outL && c.cls === 'S') list.push({ inL, c });
       if (list.length > 1) {
-        list.sort((a, b) => (Math.abs(a.c.ang) - Math.abs(b.c.ang)) - (b.inL.seg.T.rank - a.inL.seg.T.rank) * 0.3);
-        for (const { c } of list.slice(1)) c.cls = c.ang < 0 ? 'MR' : 'ML';
+        list.sort((a, b) => (Math.abs(a.c.ang) - Math.abs(b.c.ang)) + (b.inL.seg.T.rank - a.inL.seg.T.rank) * 0.3);
+        for (const { inL, c } of list.slice(1)) c.cls = mergeSide(inL, c.outL);
+      }
+    }
+    // 匝道路口：依匝道「位置」在主線哪一側決定匯入 / 分出車道（不能只看行進方向）
+    if (node.jinfo && node.jinfo.ramp) {
+      const main = new Set(node.jinfo.pairs[0]);
+      for (const [inL, cands] of per) for (const c of cands) {
+        const inMain = main.has(inL.seg), outMain = main.has(c.outL.seg);
+        if (!inMain && outMain) c.cls = mergeSide(inL, c.outL);
+        else if (inMain && !outMain) {
+          const lane = inL.lanes[0], p = lane.pts[lane.pts.length - 1], t = endTangent(lane), q = c.outL.lanes[0].pts[0];
+          c.cls = (q.x - p.x) * -t.y + (q.y - p.y) * t.x > 0 ? 'R' : 'L';
+        }
       }
     }
     const conns = [];
@@ -355,7 +424,7 @@ export class Network {
       for (const c of cands) {
         const m = c.outL.lanes.length;
         let inIdx, outIdx;
-        if (cands.length === 1 || c.cls === 'S' || c.cls === 'U') { inIdx = range(0, n); outIdx = range(0, m); }
+        if ((cands.length === 1 && c.cls !== 'MR' && c.cls !== 'ML') || c.cls === 'S' || c.cls === 'U') { inIdx = range(0, n); outIdx = range(0, m); }
         else if (c.cls === 'MR') { inIdx = range(0, n); outIdx = range(Math.max(0, m - n), m); }
         else if (c.cls === 'ML') { inIdx = range(0, n); outIdx = range(0, Math.min(n, m)); }
         else if (c.cls === 'R' && inL.seg.ring && !c.outL.seg.ring) {

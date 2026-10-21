@@ -55,11 +55,13 @@ export function lotArt(b) {
       if (r() > fill + 0.1) { if (r() < 0.7) { const c = P(W / 2, D / 2); tree(c.u, c.v); } return; }
       const gw = 3.6, hw = Math.min(W - gw - 2.2, 6.5 + r() * 1.5), hd = Math.min(D - 7, 7 + r() * 2), setback = 5.6;
       const left = r() < 0.5, ha = left ? W - 1 - hw : 1, ga = left ? ha - gw : ha + hw;
-      R(ga + 0.4, 0, ga + gw - 0.4, setback, '#bdb8ae');
       R(ha, setback, ha + hw, setback + hd, pick(r, ROOF_R), 4 + lv * 0.6 + r(), { ridge: tu ? 'u' : 'v', wall: pick(r, ['#efe6d6', '#e6dccb', '#f2efe8', '#e9d9c4', '#dfe3e6']) });
-      R(ga, setback, ga + gw, setback + 5.6, '#d9d3c7', 3, {});
-      const c0 = P(ga + 0.9, 0.5), c1 = P(ga + gw - 0.9, 4.7);
-      items.push({ t: 'rect', u0: Math.min(c0.u, c1.u), v0: Math.min(c0.v, c1.v), du: Math.abs(c1.u - c0.u), dv: Math.abs(c1.v - c0.v), c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r(), along: tu ? 'v' : 'u' });
+      // 隨機：車庫（車開進去就看不到）或室外停車位（車停在車道盡頭）
+      const garage = r() < 0.5;
+      R(ga + 0.4, 0, ga + gw - 0.4, garage ? setback : setback + 5.6, '#bdb8ae');
+      if (garage) R(ga, setback, ga + gw, setback + 5.6, '#d9d3c7', 3, {});
+      const cs = garage ? setback + 0.7 : setback + 0.5, c0 = P(ga + 0.9, cs), c1 = P(ga + gw - 0.9, cs + 4.3);
+      items.push({ t: 'rect', u0: Math.min(c0.u, c1.u), v0: Math.min(c0.v, c1.v), du: Math.abs(c1.u - c0.u), dv: Math.abs(c1.v - c0.v), c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r(), indoor: garage });
       if (r() < 0.7) { const c = P(ha + hw / 2, setback + hd + 2.5); tree(c.u, c.v, 0.8); }
     };
     const lane = b.rows >= 6 && b.cols >= 4;
@@ -69,14 +71,16 @@ export function lotArt(b) {
       for (let i = 0; i + 2 <= b.cols; i += 2) home(i * CELL, 0, 1, 0, 0, 1, 12, D);
     } else {
       // 中央巷道（盡頭迴車），巷道兩側的宅地面向巷道
-      const lu = Math.round(b.cols / 2) * CELL;
-      road([{ u: lu, v: 0 }, { u: lu, v: d - 7 }], 5); items.push({ t: 'circle', u: lu, v: d - 7, r: 5.5, c: '#5b5f64', h: 0 });
+      // 巷道是實際的場內道路（寬 8.6 m）時由路網畫出，只畫盡頭的迴車圓
+      const lu = w / 2, le = b.roads ? 4.6 : 2.5;
+      if (!b.roads) road([{ u: lu, v: 0 }, { u: lu, v: d - 7 }], 5);
+      items.push({ t: 'circle', u: lu, v: d - 7, r: le + 3, c: b.roads ? '#878a8f' : '#5b5f64', h: 0 });
       // 巷口兩側先放面向主要道路的宅地
-      if (lu - 2.5 >= 12) for (let a = 0; a + 12 <= lu - 2.5; a += 12) home(a, 0, 1, 0, 0, 1, 12, 12);
-      for (let a = lu + 2.5; a + 12 <= w; a += 12) home(a, 0, 1, 0, 0, 1, 12, 12);
-      for (let v = 12; v + 12 <= d; v += 12) {
-        if (lu - 2.5 >= 12) home(lu - 2.5, v + 12, 0, -1, -1, 0, 12, Math.min(lu - 2.5, 22));
-        if (w - lu - 2.5 >= 12) home(lu + 2.5, v, 0, 1, 1, 0, 12, Math.min(w - lu - 2.5, 22));
+      for (let a = lu - le - 12; a >= 0; a -= 12) home(a, 0, 1, 0, 0, 1, 12, 12);
+      for (let a = lu + le; a + 12 <= w; a += 12) home(a, 0, 1, 0, 0, 1, 12, 12);
+      for (let v = 12; v + 12 <= d - 2; v += 12) {
+        if (lu - le >= 12) home(lu - le, v + 12, 0, -1, -1, 0, 12, Math.min(lu - le, 22));
+        if (w - lu - le >= 12) home(lu + le, v, 0, 1, 1, 0, 12, Math.min(w - lu - le, 22));
       }
     }
   } else if (b.zt === 'R2') {

@@ -36,7 +36,12 @@ export function step(g, n) {
 // 以大道把每個外部連線接到市中心
 export function connectOutside(g, type = 'avenue') {
   const c = g.terrain.size / 2, res = [];
+  // 已經與市中心相連的（例如開局就接好的高速公路）不用再接
+  const centerNode = g.net.nodeNear(c, c, 400) || [...g.net.nodes.values()].reduce((a, n) => (!a || Math.hypot(n.x - c, n.y - c) < Math.hypot(a.x - c, a.y - c) ? n : a), null);
+  const reach = new Set([centerNode.id]), st = [centerNode.id];
+  while (st.length) { const n = g.net.nodes.get(st.pop()); for (const sid of n.segs) { const s = g.net.segs.get(sid); for (const o of [s.a, s.b]) if (!reach.has(o)) { reach.add(o); st.push(o); } } }
   for (const o of g.city.outside) {
+    if (reach.has(o.node)) { res.push(true); continue; }
     const n = g.net.nodes.get(o.node);
     const s0 = g.net.segs.get(n.segs[0]);
     const inner = g.net.nodes.get(s0.a === n.id ? s0.b : s0.a);
@@ -46,8 +51,11 @@ export function connectOutside(g, type = 'avenue') {
       const p1 = g.net.planRoad({ x: inner.x, y: inner.y, node: inner.id }, { x: mid.x, y: mid.y }, null, type, lv);
       if (!p1.ok) continue;
       const m = g.net.executeRoad(p1);
-      const p2 = g.net.planRoad({ x: m.x, y: m.y, node: m.id }, snapAt(g.net, { x: c, y: c }), null, type, lv);
-      if (!p2.ok) continue;
+      // 接到市中心；不行就接到最近的、已與市中心相連的路口
+      const targets = [snapAt(g.net, { x: c, y: c }), ...[...reach].map(id => g.net.nodes.get(id)).filter(n => n && n.level === 0)
+        .sort((p, q) => Math.hypot(p.x - m.x, p.y - m.y) - Math.hypot(q.x - m.x, q.y - m.y)).slice(0, 6).map(n => ({ x: n.x, y: n.y, node: n.id }))];
+      const p2 = targets.map(t => g.net.planRoad({ x: m.x, y: m.y, node: m.id }, t, null, type, lv)).find(p => p.ok);
+      if (!p2) continue;
       g.net.executeRoad(p2);
       built = true; break;
     }

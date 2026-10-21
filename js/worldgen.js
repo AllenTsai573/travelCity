@@ -43,24 +43,68 @@ export function generateWorld(g) {
   }
   net.rebuild();
 
-  // 市中心小鎮
+  // 市中心小鎮：棋盤狀街道（兩條大道十字交叉＋街道）
   const ang = rng.range(-0.35, 0.35);
   const u = { x: Math.cos(ang), y: Math.sin(ang) }, v = { x: -Math.sin(ang), y: Math.cos(ang) };
   const P = (a, b) => ({ x: c + u.x * a + v.x * b, y: c + u.y * a + v.y * b });
   const road = (p, q, type) => {
     const plan = net.planRoad(snapAt(net, p), snapAt(net, q), null, type, 0);
     if (plan.ok) net.executeRoad(plan);
+    return plan.ok;
   };
-  road(P(-240, 0), P(240, 0), 'avenue');
-  road(P(0, -170), P(0, 170), 'street');
-  road(P(-150, 95), P(140, 95), 'street');
-  road(P(-130, -95), P(140, -95), 'street');
-  road(P(140, -95), P(140, 95), 'street');
-  road(P(-150, 95), P(-150, 170), 'dirt');
+  // 一條街分成數段（每個街廓一段）鋪，碰到水域時只有那一段失敗，其餘仍然相連
+  const street = (pts, type) => { for (let i = 0; i + 1 < pts.length; i++) road(pts[i], pts[i + 1], type); };
+  const xs = [-420, -240, 0, 240, 420], ys = [-300, -150, 0, 150, 300];
+  street(xs.map(a => P(a, 0)), 'avenue');
+  street(ys.map(b => P(0, b)), 'avenue');
+  for (const a of [-240, 240]) street(ys.map(b => P(a, b)), 'street');
+  for (const b of [-150, 150]) street(xs.map(a => P(a, b)), 'street');
+  street(ys.map(b => P(-420, b)), 'street');
+  street([-150, 0, 150].map(b => P(420, b)), 'street');
+  net.rebuild();
 
-  // 初始建築
+  // 小鎮最大的連通區
+  const comp = new Map();
+  let best = null;
+  for (const id of net.nodes.keys()) {
+    if (comp.has(id)) continue;
+    const set = [id], st = [id];
+    comp.set(id, set);
+    while (st.length) { const n = net.nodes.get(st.pop()); for (const sid of n.segs) { const sg = net.segs.get(sid); for (const o of [sg.a, sg.b]) if (!comp.has(o)) { comp.set(o, set); set.push(o); st.push(o); } } }
+    if (!best || set.length > best.length) best = set;
+  }
+  const town = best.map(id => net.nodes.get(id)).filter(n => n.level === 0 && !n.outside);
+
+  // 接上一條外部高速公路：連到小鎮最大連通區裡最近的路口；直線過不去就試著繞（兩段都可行才鋪）
+  for (const o of g.city.outside) {
+    const on = net.nodes.get(o.node), s0 = on && net.segs.get(on.segs[0]);
+    if (!s0 || s0.type !== 'highway') continue;
+    const inner = net.nodes.get(s0.a === on.id ? s0.b : s0.a);
+    const cands = [...town].sort((p, q) => Math.hypot(p.x - inner.x, p.y - inner.y) - Math.hypot(q.x - inner.x, q.y - inner.y)).slice(0, 4);
+    let ok = false;
+    for (const e of cands) {
+      const to = { x: e.x, y: e.y, node: e.id }, from = { x: inner.x, y: inner.y, node: inner.id };
+      const direct = net.planRoad(from, to, null, 'highway', 0);
+      if (direct.ok) { net.executeRoad(direct); ok = true; break; }
+      for (const off of [300, -300, 600, -600]) {
+        const mx = (inner.x + e.x) / 2, my = (inner.y + e.y) / 2, L = Math.hypot(e.x - inner.x, e.y - inner.y) || 1;
+        const w = { x: mx - (e.y - inner.y) / L * off, y: my + (e.x - inner.x) / L * off };
+        const p1 = net.planRoad(from, w, null, 'highway', 0), p2 = net.planRoad(w, to, null, 'highway', 0);
+        if (!p1.ok || !p2.ok) continue;
+        const mid = net.executeRoad(p1);
+        const p3 = net.planRoad({ x: mid.x, y: mid.y, node: mid.id }, to, null, 'highway', 0);
+        if (p3.ok) { net.executeRoad(p3); ok = true; }
+        break;
+      }
+      if (ok) break;
+    }
+    if (ok) break;
+  }
+  net.rebuild();
+
+  // 初始建築：較大的分區
   const city = g.city;
-  const segs = () => [...net.segs.values()].filter(s => s.T.access && s.drawLevel === 0 && s.len > 30 && Math.hypot((s.bbox.x0 + s.bbox.x1) / 2 - c, (s.bbox.y0 + s.bbox.y1) / 2 - c) < 400);
+  const segs = () => [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.drawLevel === 0 && s.len > 40 && Math.hypot((s.bbox.x0 + s.bbox.x1) / 2 - c, (s.bbox.y0 + s.bbox.y1) / 2 - c) < 650);
   const place = (zt, count, size) => {
     let n = 0;
     for (let tries = 0; tries < 900 && n < count; tries++) {
@@ -71,19 +115,23 @@ export function generateWorld(g) {
       const lo = city.gridStart(s) + cols * CELL / 2, hi = s.len - s.rb - cols * CELL / 2;
       if (hi <= lo) continue;
       const uu = lo + Math.floor(rng.next() * (hi - lo) / CELL) * CELL, side = rng.chance(0.5) ? 1 : -1;
-      if (city.canPlaceLot(s, uu, side, cols, rows)) continue;
-      const geo = city.lotGeom(s, uu, side, cols, rows);
+      let r = rows;
+      while (r >= 2 && city.canPlaceLot(s, uu, side, cols, r)) r--;
+      if (r < Math.max(2, rows - 4)) continue;
+      const geo = city.lotGeom(s, uu, side, cols, r);
       // 工業放在小鎮外圍，住宅與工業保持距離
-      if (zt === 'I' && Math.hypot(geo.x - c, geo.y - c) < 190) continue;
+      if (zt === 'I' && Math.hypot(geo.x - c, geo.y - c) < 300) continue;
       if (zt === 'I' && city.buildings.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110 + geo.rad)) continue;
       if (zt !== 'I' && zt !== 'C' && city.buildings.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 90 + b.rad)) continue;
-      city.develop(city.addLot(zt, s, uu, side, cols, rows));
+      city.develop(city.addLot(zt, s, uu, side, cols, r));
       n++;
     }
   };
-  place('I', 2, () => ({ cols: rng.int(6, 8), rows: rng.int(5, 7) }));
-  place('C', 4, () => ({ cols: rng.int(3, 5), rows: rng.int(3, 4) }));
-  place('R1', 20, () => ({ cols: rng.int(2, 3) * 2, rows: 4 }));
+  place('I', 2, () => ({ cols: rng.int(10, 14), rows: rng.int(10, 12) }));
+  place('C', 1, () => ({ cols: rng.int(15, 18), rows: 15 }));
+  place('C', 4, () => ({ cols: rng.int(5, 8), rows: rng.int(5, 7) }));
+  place('R2', 3, () => ({ cols: rng.int(8, 12), rows: rng.int(6, 8) }));
+  place('R1', 12, () => ({ cols: rng.int(4, 6) * 2, rows: rng.int(6, 10) }));
   city.recount();
   g.money = savedMoney;
 }

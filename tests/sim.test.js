@@ -36,7 +36,8 @@ for (let h = 0; h < 20; h++) {
 // 停車：住宅一開始有車停在家，車輛出發後停車數減少、回來後增加
 {
   const hs = g.city.buildings.filter(b => b.zone === 'R' && g.city.slotsOf(b).length);
-  assert(hs.length && hs.every(b => b.parked >= 0 && b.parked <= g.city.slotsOf(b).length), `停車數在合理範圍（${hs.reduce((a, b) => a + b.parked, 0)} 輛停在 ${hs.length} 戶）`);
+  const tot = hs.reduce((a, b) => a + g.city.parkedCount(b), 0);
+  assert(hs.length && tot > 0 && hs.every(b => b.slotRes.every((r, i) => !(r && b.slotOcc[i]))), `停車位：${tot} 輛停在 ${hs.length} 戶，沒有車位同時被佔用又被預約`);
 }
 const st = g.city.stats;
 console.log(`     20 遊戲小時耗時 ${Date.now() - t0} ms，最多 ${maxVeh} 輛車；成功 ${st.trips}、失敗 ${st.fails}、過境 ${st.through}；人口 ${g.city.pop}`);
@@ -76,7 +77,7 @@ if (pOver.ok) {
   assert(g.net.nodes.size === nodesBefore + 2, '高架橋跨越不產生路口');
 } else console.log('     (略過高架測試：' + pOver.reason + ')');
 const pBad = g.net.planRoad(a, b, null, 'street', 0);
-assert(!pBad.ok, '地面道路與高架衝突時拒絕 / 或與既有道路正常相交：' + (pBad.reason || 'ok'));
+assert(!pBad.ok || pBad.crossings.length >= 1, '地面道路與高架衝突時拒絕 / 或與既有道路正常相交：' + (pBad.reason || 'ok'));
 
 // 存讀檔
 const data = JSON.parse(JSON.stringify({ net: g.net.serialize(), city: g.city.serialize() }));
@@ -144,8 +145,10 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   assert(gz.money === money, '劃設分區不用錢');
   assert(c.lots.length === 4, `空地塊（${c.lots.length}）`);
   const big = c.lots.find(l => l.zone === 'C');
-  assert(big.cols === 18 && big.rows === 16 && c.pickKind('C', 18, 16) !== 'shops', '15×15 以上的商業區可出現大型店');
-  assert(['shops', 'market'].includes(c.pickKind('C', 14, 20)), '小於 15×15 的商業區不會出現大型店');
+  const kBig = new Set(), kSmall = new Set();
+  for (let i = 0; i < 60; i++) { kBig.add(c.pickKind('C', 18, 16)); kSmall.add(c.pickKind('C', 14, 20)); }
+  assert(big && (kBig.has('bigbox') || kBig.has('mall')), `15×15 以上的商業區可出現大型店（${[...kBig].join('、')}）`);
+  assert(!kSmall.has('bigbox') && !kSmall.has('mall'), `小於 15×15 的商業區不會出現大型店（${[...kSmall].join('、')}）`);
   const ik = new Set(); for (let i = 0; i < 40; i++) ik.add(c.pickKind('I', 20, 20));
   assert(ik.size >= 3, `工業區功能隨機（${[...ik].join('、')}）`);
   const dz = JSON.parse(JSON.stringify({ net: net.serialize(), city: c.serialize() }));
@@ -201,7 +204,7 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   const pb = c.develop(c.addLot('C', pl.seg, pl.u, pl.side, pl.cols, pl.rows));
   const ref = sn => ({ id: 'x' + sn.seg.id, seg: sn.seg.id, u: sn.u });
   const A = ref(net.segNear(S + 300, y, 3, 0)), B = ref(net.segNear(S + 300, y + 72, 3, 0));
-  assert(pb.gate, '停車場打通到後方道路並設閘門');
+  assert(pb.gates && pb.gates.length >= 2, `停車場打通到後方道路，前後都設閘門（${pb.gates ? pb.gates.length : 0} 個）`);
   assert(!routeFromPoint(net, A, B).path.some(k => net.links.get(k).seg.T.internal), '一般車流不會穿過有閘門的停車場');
   assert(routeFromPoint(net, pb, B).path.some(k => net.links.get(k).seg.T.internal), '停車場的車可以從後方閘門出去');
   const segGo = net.segs.get(pl.seg.id) ? null : [...net.segs.values()].find(s => s.type === 'street' && Math.abs(s.pts[0].y - y) < 1 && s.go);

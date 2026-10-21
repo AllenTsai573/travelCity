@@ -4,7 +4,7 @@
 // - 依即時壅塞重新規劃路線
 import { LANE_W, VEHICLE_COLORS } from './config.js';
 import { findRoute, routeFromPoint } from './routing.js';
-import { clamp, pointAt } from './util.js';
+import { clamp, pointAt, closestOnPoly } from './util.js';
 
 const FREE = { gap: Infinity, lv: 0 };
 const MAX_VEHICLES = 3000;
@@ -81,61 +81,94 @@ export class Traffic {
   }
 
   // ---------- 生成 / 結束 ----------
+  // 路段上離某點（停車位）最近的位置；太遠就不用
+  projU(segId, pt) {
+    const seg = this.net.segs.get(segId);
+    if (!seg || !pt) return null;
+    const c = closestOnPoly(seg.pts, seg.cum, pt);
+    return c.d < 45 ? clamp(c.s, 1, seg.len - 1) : null;
+  }
+  // 這輛車實際要停的位置：預約的車位在道路上的對應點（沒有預約就用建築的出入口）
+  destOf(v) {
+    const to = v.trip.to;
+    if (!v.slotPt || to.outside) return to;
+    const ver = this.net.version;
+    if (!v._dest || v._dest.ver !== ver || v._dest.seg !== to.seg) {
+      const u = this.projU(to.seg, v.slotPt);
+      v._dest = { ver, seg: to.seg, u: u ?? to.u, id: to.id };
+    }
+    return v._dest;
+  }
+
   trySpawn(trip) {
     if (this.vehicles.length >= MAX_VEHICLES) return 'wait';
-    const net = this.net;
-    if (!net.segs.get(trip.from.seg) || !net.segs.get(trip.to.seg)) return 'noroute';
-    const r = routeFromPoint(net, trip.from, trip.to);
+    const net = this.net, city = this.game.city, from = trip.from, to = trip.to;
+    if (!net.segs.get(from.seg) || !net.segs.get(to.seg)) return 'noroute';
+    // 從建築出發：挑一輛停著的車，從它的車位對應的路邊出發
+    let fromPt = from, leave = null;
+    if (city && from.zone && !from.dead && !trip.truck) {
+      leave = city.pickParked(from);
+      const u = leave ? this.projU(from.seg, leave.slot) : null;
+      if (u !== null) fromPt = { seg: from.seg, u, id: from.id }; else leave = null;
+    }
+    // 目的地是建築：先預約一個空車位，開到車位對應的路邊
+    let slotIdx = null, slotPt = null;
+    if (city && to.zone && !to.dead && !trip.truck) {
+      const list = city.slotsOf(to);
+      for (let i = 0; i < list.length; i++) if (!to.slotOcc[i] && !to.slotRes[i]) { slotIdx = i; break; }
+      if (slotIdx !== null) {
+        // 隨機挑一個空位
+        const free = list.map((_, i) => i).filter(i => !to.slotOcc[i] && !to.slotRes[i]);
+        slotIdx = free[Math.floor(this.game.rng.next() * free.length)];
+        slotPt = list[slotIdx];
+      }
+    }
+    const du = slotPt ? this.projU(to.seg, slotPt) : null;
+    const destPt = du !== null ? { seg: to.seg, u: du, id: to.id } : to;
+    const r = routeFromPoint(net, fromPt, destPt);
     if (!r) return 'noroute';
     const link = net.links.get(r.path[0]);
     const len = trip.truck ? 9 : 4.6;
     for (let i = link.lanes.length - 1; i >= 0; i--) {
       const lane = link.lanes[i];
-      const s = clamp(net.segUToLaneS(lane, trip.from.u), 0, lane.len - 0.5);
+      const s = clamp(net.segUToLaneS(lane, fromPt.u), 0, lane.len - 0.5);
       if (this.spaceAt(lane, s, len)) {
         const v = this.createVehicle(trip.truck);
         v.route = r.path; v.ri = 0; v.trip = trip;
-        v.v = trip.from.outside ? Math.min(lane.speed * 0.7, 14) : 0;
-        v.fadeIn = trip.from.outside ? 1 : 0;   // 從建築出發的車由路邊慢慢出現
+        v.v = from.outside ? Math.min(lane.speed * 0.7, 14) : 0;
+        v.fadeIn = from.outside ? 1 : 0;   // 沒有停車位的建築：車由路邊慢慢出現
+        if (du !== null) { v.slotIdx = slotIdx; v.slotPt = slotPt; to.slotRes[slotIdx] = true; }
         this.place(v, lane, s);
         this.vehicles.push(v);
-        // 從建築出發：先從停車位開出來，到路邊才加入車流
-        const from = trip.from;
-        if (from.zone && !from.dead && from.parked > 0 && !trip.truck && this.game.city) {
-          const slots = this.game.city.slotsOf(from);
-          const sl = slots[Math.min(from.parked, slots.length) - 1];
-          from.parked--;
-          if (sl) {
-            const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
-            const f = this.parkPath(p, sl, v, false, null);
-            this.fx.push(f);
-            v.hold = f.dur;
-          }
+        // 從停車位開出來，到路邊才加入車流（車子就是原本停著的那輛）
+        if (leave) {
+          from.slotOcc[leave.idx] = null;
+          v.color = leave.color;
+          const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
+          const f = this.parkPath(p, leave.slot, v, false);
+          this.fx.push(f);
+          v.hold = f.dur;
         }
         return 'ok';
       }
-      if (!trip.from.outside) break;
+      if (!from.outside) break;
     }
     return 'wait';
   }
 
   finish(v, ok) {
     if (v.dead) return;
-    // 抵達建築：開進一個空的停車位停好（車位滿了或沒有車位就開進建物 / 地下停車場）
+    // 抵達建築：開進預約好的車位停好（沒有車位就開進建物 / 地下停車場）
     const to = v.trip && v.trip.to;
-    if (ok && to && to.zone && !to.dead && v.track && v.track.pts && this.fx.length < 300) {
+    const hasSlot = v.slotIdx !== undefined && v.slotIdx !== null && to && to.slotRes;
+    if (ok && to && to.zone && !to.dead && v.track && v.track.pts) {
       const p = pointAt(v.track.pts, v.track.cum, clamp(v.s - v.len / 2, 0, v.track.len));
-      const slots = !v.truck && this.game.city ? this.game.city.slotsOf(to) : [];
-      const reserved = to.parkingIn || 0;
-      if (to.parked + reserved < slots.length) {
-        const sl = slots[to.parked + reserved];
-        to.parkingIn = reserved + 1;
-        this.fx.push(this.parkPath(p, sl, v, true, to));
-      } else {
+      if (hasSlot) this.fx.push(this.parkPath(p, v.slotPt, v, true, to, v.slotIdx));
+      else if (this.fx.length < 300) {
         const gx = to.x - p.x, gy = to.y - p.y, L = Math.hypot(gx, gy) || 1, k = Math.min(10, L * 0.5);
-        this.fx.push(this.parkPath(p, { x: p.x + gx / L * k, y: p.y + gy / L * k, ax: gx / L, ay: gy / L }, v, true, null, true));
+        this.fx.push(this.parkPath(p, { x: p.x + gx / L * k, y: p.y + gy / L * k, ax: gx / L, ay: gy / L, indoor: true }, v, true));
       }
-    }
+    } else if (hasSlot) to.slotRes[v.slotIdx] = false;
     this.removeFromTrack(v);
     v.dead = true;
     v.track = null;
@@ -172,13 +205,13 @@ export class Traffic {
   }
 
   // ---------- 路徑 ----------
-  destS(v) { return this.net.segUToLaneS(v.track, v.trip.to.u); }
+  destS(v) { return this.net.segUToLaneS(v.track, this.destOf(v).u); }
 
   reroute(v) {
     v.needRoute = false;
     const lane = v.track;
     if (!lane || lane.kind !== 'lane') { v.needRoute = true; return false; }
-    const net = this.net, L = lane.link, dest = v.trip.to;
+    const net = this.net, L = lane.link, dest = this.destOf(v);
     // 目的地就在目前車道前方（含即將抵達）：維持原路線，不要重新規劃成繞一圈回來
     if (dest.seg === L.seg.id && net.segUToLaneS(lane, dest.u) >= v.s - 0.5) {
       v.route = [L.key]; v.ri = 0; v.nextConn = null; v.lost = false;
@@ -201,11 +234,11 @@ export class Traffic {
           if (!r || cost < r.cost) r = { path: [tl.key], cost };
         }
       }
-      const r2 = findRoute(net, starts, dest, [v.trip.from.id, dest.id]);
+      const r2 = findRoute(net, starts, dest, [v.trip.from.id, v.trip.to.id]);
       if (r2 && (!r || r2.cost < r.cost)) r = r2;
       if (r) r = { path: [L.key, ...r.path], cost: r.cost };
     } else {
-      r = findRoute(net, [{ link: L, cost: distEnd / L.eff }], dest, [v.trip.from.id, dest.id]);
+      r = findRoute(net, [{ link: L, cost: distEnd / L.eff }], dest, [v.trip.from.id, v.trip.to.id]);
     }
     if (!r) { v.lost = true; v.route = [L.key]; v.ri = 0; return false; }
     v.lost = false;
@@ -537,17 +570,17 @@ export class Traffic {
     }
   }
 
-  // 停車 / 出車的路徑：三次貝茲曲線，起點沿車道方向、終點沿車位方向（車頭朝前開進 / 開出）
-  parkPath(p, sl, v, arrive, b, garage = false) {
+  // 停車 / 出車的路徑：三次貝茲曲線，起點沿車道方向、終點沿車位方向（車頭朝前開進 / 開出），約 4.5 m/s
+  parkPath(p, sl, v, arrive, b = null, idx = null) {
     const dx = sl.x - p.x, dy = sl.y - p.y, dist = Math.hypot(dx, dy) || 1;
     let ax = sl.ax, ay = sl.ay;
     if ((arrive ? 1 : -1) * (ax * dx + ay * dy) < 0) { ax = -ax; ay = -ay; }
-    const k0 = Math.min(6, dist / 3), k1 = Math.min(5, dist / 2);
+    const k0 = Math.min(5, dist * 0.45), k1 = Math.min(5, dist * 0.45);
     const pts = arrive
       ? [{ x: p.x, y: p.y }, { x: p.x + p.dx * k0, y: p.y + p.dy * k0 }, { x: sl.x - ax * k1, y: sl.y - ay * k1 }, { x: sl.x, y: sl.y }]
       : [{ x: sl.x, y: sl.y }, { x: sl.x + ax * k1, y: sl.y + ay * k1 }, { x: p.x - p.dx * k0, y: p.y - p.dy * k0 }, { x: p.x, y: p.y }];
-    const dur = clamp(dist * 1.3 / 4, 1.2, 6);
-    return { pts, dur, t: 0, color: v.color, len: v.len, w: v.w, truck: v.truck, arrive, b, garage };
+    const dur = clamp(dist * 1.25 / 4.5, 1.4, 12);
+    return { pts, dur, t: 0, color: v.color, len: v.len, w: v.w, truck: v.truck, arrive, b, idx, indoor: !!sl.indoor };
   }
 
   step(dt) {
@@ -557,10 +590,11 @@ export class Traffic {
         f.t += dt;
         if (f.t >= f.dur && !f.done) {
           f.done = true;
-          if (f.b && f.arrive) { f.b.parkingIn = Math.max(0, (f.b.parkingIn || 0) - 1); if (!f.b.dead) f.b.parked = Math.min(f.b.parked + 1, this.game.city.slotsOf(f.b).length); }
+          // 停好了：車位記下這輛車（顏色），取消預約
+          if (f.b && f.arrive && f.idx !== null && f.b.slotOcc) { f.b.slotRes[f.idx] = false; if (!f.b.dead) f.b.slotOcc[f.idx] = f.color; }
         }
       }
-      this.fx = this.fx.filter(f => !f.done || (f.garage && f.t < f.dur + 0.6));
+      this.fx = this.fx.filter(f => !f.done);
     }
     const vs = this.vehicles;
     for (const v of vs) if (!v.dead) v.acc = this.computeAccel(v);

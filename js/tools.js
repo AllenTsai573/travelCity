@@ -50,6 +50,7 @@ export class Tools {
   }
 
   cancel() {
+    if (this.zStroke) { this.zStroke = null; this.dirty = true; return; }
     if (this.pts.length) { this.pts = []; this.plan = null; this.dirty = true; return; }
     if (this.g.ui.jSelLane) { this.g.ui.jSelLane = null; return; }
     if (this.g.ui.selection) { this.g.ui.select(null); return; }
@@ -58,7 +59,7 @@ export class Tools {
 
   bind() {
     const cv = this.canvas;
-    cv.addEventListener('contextmenu', e => e.preventDefault());
+    cv.addEventListener('contextmenu', e => { e.preventDefault(); if (this.zStroke) { this.zStroke = null; this.zoneCancelled = true; this.dirty = true; } });
     cv.addEventListener('pointerdown', e => {
       cv.setPointerCapture(e.pointerId);
       this.ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
@@ -69,6 +70,8 @@ export class Tools {
         return;
       }
       this.updateMouse(e);
+      // 劃分區途中按右鍵：取消這次劃設
+      if (e.button === 2 && this.zStroke) { this.zStroke = null; this.zoneCancelled = true; this.dirty = true; this.down = null; return; }
       this.down = { btn: e.button, sx: e.offsetX, sy: e.offsetY, cx: this.cam.x, cy: this.cam.y, moved: false, touch: e.pointerType === 'touch' };
       if (e.button === 0 && this.tool === 'zone') this.zoneStart();
       // 路口車道連接：從進入車道（橘點）按住拖曳到離開車道（綠點）
@@ -90,6 +93,7 @@ export class Tools {
       if (d && this.jDrag) { if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 6) d.moved = true; return; }
       if (d) {
         if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 6) d.moved = true;
+        if (this.zStroke && (e.buttons & 2)) { this.zStroke = null; this.zoneCancelled = true; this.dirty = true; return; }
         if (this.zStroke) { this.zoneMove(); return; }
         if (d.moved) {
           this.cam.x = d.cx - (e.offsetX - d.sx) / this.cam.z;
@@ -103,7 +107,8 @@ export class Tools {
       if (this.ptrs.size < 2) this.pinch = null;
       const d = this.down;
       this.down = null;
-      if (this.zStroke) { this.zoneCommit(d && d.moved); return; }
+      if (this.zStroke) { if (d && d.btn === 0) this.zoneCommit(d.moved); return; }
+      if (this.zoneCancelled) { this.zoneCancelled = false; if (!d) return; }
       if (this.jDrag) {
         const jd = this.jDrag;
         this.jDrag = null;

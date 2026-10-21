@@ -250,7 +250,7 @@ export class Renderer {
       if (detail) {
         ctx.fillStyle = 'rgba(20,24,30,0.24)';
         for (const it of items) {
-          if (!it.h || it.t === 'line' || it.t === 'sign' || (it.rank !== undefined ? it.rank >= (b.parked || 0) : it.slot !== undefined && it.slot > occ)) continue;
+          if (!it.h || it.t === 'line' || it.t === 'sign' || it.car) continue;
           const o = it.h * 0.55;
           if (it.t === 'circle') {
             const p = P(it.u, it.v);
@@ -265,7 +265,18 @@ export class Renderer {
       }
       for (const it of items) {
         if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2))) continue;
-        if (it.rank !== undefined ? it.rank >= (b.parked || 0) : it.slot !== undefined && it.slot > occ) continue;
+        if (it.rank !== undefined ? it.indoor || !(b.slotOcc && b.slotOcc[it.rank]) : it.slot !== undefined && it.slot > occ) continue;
+        if (it.car && detail) {
+          // 停著的車與路上的車同樣畫法（顏色是實際停進來的那輛車）
+          const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv, pc = P(cu, cv);
+          const ax = alongU ? tx : nx, ay = alongU ? ty : ny, a = this.dpr * z;
+          const ox = this.dpr * (this.W / 2 - this.cam.x * z), oy = this.dpr * (this.H / 2 - this.cam.y * z);
+          ctx.setTransform(a * ax, a * ay, -a * ay, a * ax, ox + a * pc.x, oy + a * pc.y);
+          const L = Math.max(it.du, it.dv) + 0.2, W = Math.min(it.du, it.dv) + 0.1;
+          this.carBody(it.rank !== undefined ? b.slotOcc[it.rank] : it.c, it.truck ? Math.max(L, 7) : Math.min(L, 4.6), it.truck ? 2.4 : Math.min(W, 1.85), !!it.truck, z > 2.2);
+          this.worldTf();
+          continue;
+        }
         if (it.car) {
           // 停著的車：車身＋前後擋風玻璃
           quad(box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv)); ctx.fillStyle = it.c; ctx.fill();
@@ -999,7 +1010,8 @@ export class Renderer {
       let dy = 3 * n * n * (p1.y - p0.y) + 6 * n * tt * (p2.y - p1.y) + 3 * tt * tt * (p3.y - p2.y);
       const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
       ctx.setTransform(a * dx, a * dy, -a * dy, a * dx, ox + a * x, oy + a * y);
-      ctx.globalAlpha = f.garage ? Math.max(0, 1 - Math.max(0, f.t - f.dur * 0.6) / (f.dur * 0.4 + 0.6)) : 1;
+      // 開進 / 開出車庫：在車庫門口淡出 / 淡入
+      ctx.globalAlpha = !f.indoor ? 1 : f.arrive ? clamp((1 - k) / 0.35, 0, 1) : clamp(k / 0.35, 0, 1);
       this.carBody(f.color, f.len, f.w, f.truck, z > 2.2);
     }
     ctx.globalAlpha = 1;

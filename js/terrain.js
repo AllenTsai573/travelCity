@@ -23,7 +23,10 @@ export class Terrain {
     const rng = new RNG(seed ^ 0x5bd1e995);
     // 河流：與市中心保持距離的蜿蜒水道
     const riverSide = rng.chance(0.5) ? 1 : -1;
-    const riverOff = riverSide * rng.range(330, 520);
+    // 3.6 km 地圖：小鎮較大，河流離市中心遠一點、保證陸地的範圍也大一點（2.4 km 舊存檔維持原本地形）
+    const big = size >= 3600;
+    const riverOff = riverSide * (big ? rng.range(700, 1000) : rng.range(330, 520));
+    const landR = big ? 700 : 430;
     const riverVertical = rng.chance(0.5);
     const riverW = rng.range(26, 40);
     for (let j = 0; j < n; j++) {
@@ -41,7 +44,7 @@ export class Terrain {
           else if (rd < w + 30) e = Math.min(e, lerp(b.water - 0.02, e, (rd - w) / 30));
         }
         // 市中心保證是陸地
-        e += 0.4 * clamp(1 - d / 430, 0, 1);
+        e += 0.4 * clamp(1 - d / landR, 0, 1);
         this.h[j * n + i] = e;
         this.water[j * n + i] = e < b.water ? 1 : 0;
       }
@@ -113,31 +116,39 @@ export class Terrain {
   }
 
   // 繪製地形底圖（瀏覽器才會呼叫）
+  // 地表圖：每像素 2 m，高度以雙線性內插（不會看到 8 m 的格子而顯得模糊、塊狀），加上細微的雜訊
   getCanvas() {
     if (this.canvas) return this.canvas;
-    const n = this.n, b = this.biome;
+    const n = this.n, b = this.biome, R = 2, N = Math.ceil(this.size / R), cell = this.cell;
     const cv = document.createElement('canvas');
-    cv.width = n; cv.height = n;
+    cv.width = N; cv.height = N;
     const ctx = cv.getContext('2d');
-    const img = ctx.createImageData(n, n);
+    const img = ctx.createImageData(N, N), D = img.data;
     const land = b.land.map(hexToRgb), high = hexToRgb(b.high), shore = hexToRgb(b.shore);
     const wc = b.waterC.map(hexToRgb);
-    for (let k = 0; k < n * n; k++) {
-      const e = this.h[k];
-      let col;
-      if (this.water[k]) {
-        const t = clamp((b.water - e) / 0.12, 0, 1);
-        col = mix(wc[0], wc[1], t);
-      } else {
-        const t = clamp((e - b.water) / (1 - b.water), 0, 1);
-        if (t < 0.03) col = mix(shore, land[0], t / 0.03);
-        else if (t < 0.35) col = mix(land[0], land[1], (t - 0.03) / 0.32);
-        else if (t < 0.65) col = mix(land[1], land[2], (t - 0.35) / 0.3);
-        else col = mix(land[2], high, clamp((t - 0.65) / 0.35, 0, 1));
-        const nz = (hash2(k % n, Math.floor(k / n), this.seed) - 0.5) * 8;
-        col = [col[0] + nz, col[1] + nz, col[2] + nz];
+    const stops = [[0, shore], [0.03, land[0]], [0.35, land[1]], [0.65, land[2]], [1, high]];
+    const H = this.h, wl = b.water;
+    for (let j = 0; j < N; j++) {
+      const gy = Math.min(n - 1.001, Math.max(0, (j + 0.5) * R / cell - 0.5)), y0 = Math.floor(gy), fy = gy - y0;
+      for (let i = 0; i < N; i++) {
+        const gx = Math.min(n - 1.001, Math.max(0, (i + 0.5) * R / cell - 0.5)), x0 = Math.floor(gx), fx = gx - x0;
+        const k0 = y0 * n + x0;
+        const e = (H[k0] * (1 - fx) + H[k0 + 1] * fx) * (1 - fy) + (H[k0 + n] * (1 - fx) + H[k0 + n + 1] * fx) * fy;
+        let r, g, bb;
+        if (e < wl) {
+          const t = clamp((wl - e) / 0.12, 0, 1);
+          r = wc[0][0] + (wc[1][0] - wc[0][0]) * t; g = wc[0][1] + (wc[1][1] - wc[0][1]) * t; bb = wc[0][2] + (wc[1][2] - wc[0][2]) * t;
+        } else {
+          const t = clamp((e - wl) / (1 - wl), 0, 1);
+          let s = 0;
+          while (s < 3 && t > stops[s + 1][0]) s++;
+          const [t0, c0] = stops[s], [t1, c1] = stops[s + 1], f = clamp((t - t0) / (t1 - t0), 0, 1);
+          const nz = (hash2(i, j, this.seed) - 0.5) * 5;
+          r = c0[0] + (c1[0] - c0[0]) * f + nz; g = c0[1] + (c1[1] - c0[1]) * f + nz; bb = c0[2] + (c1[2] - c0[2]) * f + nz;
+        }
+        const o = (j * N + i) * 4;
+        D[o] = r; D[o + 1] = g; D[o + 2] = bb; D[o + 3] = 255;
       }
-      img.data[k * 4] = col[0]; img.data[k * 4 + 1] = col[1]; img.data[k * 4 + 2] = col[2]; img.data[k * 4 + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
     this.canvas = cv;

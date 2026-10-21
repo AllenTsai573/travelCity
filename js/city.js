@@ -12,6 +12,8 @@ export function driveway(zone, kind, geo) {
   const d = geo.d;
   if (geo.rows < 5 || geo.cols < 3) return null;
   if (zone === 'I') return { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null, through: true };
+  // 低密度住宅的巷道（盡頭迴車，不打通）
+  if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 4 && geo.zt === 'R1') return { end: d - 7 };
   if (zone !== 'C') return null;
   if (kind === 'bigbox') return { end: d * 0.45 - 4 };
   if (kind === 'mall' || kind === 'market') return { end: d * 0.32 - 4 };
@@ -148,7 +150,7 @@ export class City {
     this.removeLot(l);
     const geo = this.lotGeom(seg, l.u, l.side, l.cols, l.rows);
     const kind = this.pickKind(l.zt, l.cols, l.rows);
-    const plan = driveway(l.zone, kind, geo);
+    const plan = driveway(l.zone, kind, Object.assign({ zt: l.zt }, geo));
     const roads = plan ? this.buildParkRoads(geo, seg, l.u, plan) : null;
     const b = this.addBuilding(l.zt, seg, l.u, l.side, l.cols, l.rows, level, kind, geo);
     if (roads) {
@@ -157,7 +159,7 @@ export class City {
       const fr = net.segNear(m.x - geo.nx * (halfWidth(seg.T) - 0.5), m.y - geo.ny * (halfWidth(seg.T) - 0.5), 6, 0);
       b.front = fr ? { seg: fr.seg.id, u: fr.u } : null;
       b.roads = roads.segs; b.seg = roads.access.seg; b.u = roads.access.u;
-      if (roads.gate) { b.gate = roads.gate; this.applyGate(b); }
+      if (roads.gates.length) { b.gates = roads.gates; this.applyGate(b); }
     }
     return b;
   }
@@ -176,7 +178,7 @@ export class City {
       return true;
     };
     const before = new Set(net.segs.keys());
-    let gate = null;
+    const gates = [];
     try {
       const fp = pointAt(seg.pts, seg.cum, u);
       if (!build({ x: fp.x, y: fp.y, seg: seg.id, u }, P(geo.w / 2, plan.end))) return null;
@@ -189,18 +191,30 @@ export class City {
         if (build(P(geo.w / 2, plan.end), { x: sn.x, y: sn.y, seg: sn.seg.id, u: sn.u })) {
           net.rebuild();
           const gp = P(geo.w / 2, geo.d - 1.5);
-          gate = { x: gp.x, y: gp.y, dx: geo.nx, dy: geo.ny };
+          gates.push({ x: gp.x, y: gp.y, dx: geo.nx, dy: geo.ny });
         }
       }
+      // 橫向道路的兩端若緊鄰側邊道路，也打通（同樣設閘門）
+      if (plan.cross && plan.through) for (const [ue, uo, sg] of [[-2, 6, -1], [geo.w + 2, geo.w - 6, 1]]) {
+        const q = P(ue, plan.cross), sd = net.segNear(q.x, q.y, 14, 0);
+        if (!sd || sd.seg.T.internal || Math.hypot(sd.x - q.x, sd.y - q.y) > halfWidth(sd.seg.T) + 6) continue;
+        if (build(P(uo, plan.cross), { x: sd.x, y: sd.y, seg: sd.seg.id, u: sd.u })) {
+          net.rebuild();
+          const gp = P(sg < 0 ? 1.5 : geo.w - 1.5, plan.cross);
+          gates.push({ x: gp.x, y: gp.y, dx: geo.tx * sg, dy: geo.ty * sg });
+        }
+      }
+      // 有打通到其他道路時，正門也設閘門（每個對外出入口都有閘門）
+      if (gates.length) { const gp = P(geo.w / 2, 1.5); gates.push({ x: gp.x, y: gp.y, dx: -geo.nx, dy: -geo.ny }); }
     } finally { g.spend = spend; g.canAfford = can; }
     const segs = [...net.segs.values()].filter(s => s.type === 'service' && !before.has(s.id)).map(s => s.id);
     const q = P(geo.w / 2, Math.max(8, plan.end - 6)), acc = net.segNear(q.x, q.y, 4, 0);
     if (!segs.length || !acc) return null;
-    return { segs, access: { seg: acc.seg.id, u: acc.u }, gate };
+    return { segs, access: { seg: acc.seg.id, u: acc.u }, gates };
   }
   applyGate(b) {
     const net = this.game.net;
-    for (const id of b.roads || []) { const s = net.segs.get(id); if (s) s.gate = b.gate ? b.id : null; }
+    for (const id of b.roads || []) { const s = net.segs.get(id); if (s) s.gate = b.gates && b.gates.length ? b.id : null; }
     net.rebuild();
   }
   parkRoadSet() { const set = new Set(); for (const b of this.buildings) if (b.roads) for (const id of b.roads) set.add(id); return set; }
@@ -233,12 +247,33 @@ export class City {
       const c0 = b.corners[0];
       const list = lotArt(b).slots.map(it => {
         const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv;
-        return { x: c0.x + b.tx * cu + b.nx * cv, y: c0.y + b.ty * cu + b.ny * cv, ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny };
+        return { x: c0.x + b.tx * cu + b.nx * cv, y: c0.y + b.ty * cu + b.ny * cv, ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny, indoor: !!it.indoor, c: it.c };
       });
       b._slots = { key, list };
-      b.parked = Math.min(b.parked || 0, list.length);
+      // 每個車位停的車（顏色）與預約（正在開過來）
+      const occ = b.slotOcc || [];
+      b.slotOcc = list.map((_, i) => occ[i] || null);
+      b.slotRes = list.map(() => false);
     }
     return b._slots.list;
+  }
+  parkedCount(b) { this.slotsOf(b); return b.slotOcc.reduce((a, c) => a + (c ? 1 : 0), 0); }
+  // 預約一個空車位（沒有就回傳 null）
+  reserveSlot(b) {
+    const list = this.slotsOf(b), free = [];
+    for (let i = 0; i < list.length; i++) if (!b.slotOcc[i] && !b.slotRes[i]) free.push(i);
+    if (!free.length) return null;
+    const i = free[Math.floor(this.game.rng.next() * free.length)];
+    b.slotRes[i] = true;
+    return i;
+  }
+  // 隨機挑一輛停著的車開走
+  pickParked(b) {
+    const list = this.slotsOf(b), used = [];
+    for (let i = 0; i < list.length; i++) if (b.slotOcc[i]) used.push(i);
+    if (!used.length) return null;
+    const i = used[Math.floor(this.game.rng.next() * used.length)];
+    return { idx: i, slot: list[i], color: b.slotOcc[i] };
   }
 
   addBuilding(zt, seg, u, side, cols, rows, level = 1, kind = null, geo = null) {
@@ -257,8 +292,8 @@ export class City {
     this.buildings.push(b);
     this.byId.set(b.id, b);
     // 住宅一開始大部分的車停在家
-    b.parked = 0;
-    if (zone === 'R') b.parked = Math.round(this.slotsOf(b).length * 0.7);
+    const sl = this.slotsOf(b);
+    if (zone === 'R') sl.forEach((s, i) => { if (this.game.rng.next() < 0.7) b.slotOcc[i] = s.c; });
     this.game.terrain.clearTreesCircle(geo.x, geo.y, geo.rad * 0.8);
     return b;
   }
@@ -363,7 +398,11 @@ export class City {
     return list[list.length - 1];
   }
   near(a, b, scale) { return 1 / (1 + Math.hypot(a.x - b.x, a.y - b.y) / scale); }
-  liveOutside() { return this.outside.filter(o => o.seg !== null); }
+  // 已接到城市路網（與建築最多的連通區相連）的外部連線
+  liveOutside() {
+    const comp = this.mainComponent();
+    return this.outside.filter(o => o.seg !== null && comp.has(o.node));
+  }
   pickJob(b) {
     return this.roulette(this.buildings.filter(x => (x.zone === 'C' || x.zone === 'I') && !x.abandoned),
       x => this.cap(x) * this.near(b, x, 700) * (x.present < this.cap(x) * 0.5 ? 1.5 : 0.4));
@@ -417,12 +456,12 @@ export class City {
     switch (trip.kind) {
       case 'work': {
         if (from.zone === 'R') { from.workOK = ema(from.workOK, 1, 0.15); from.timeScore = ema(from.timeScore, clamp(1 - (age - 150) / 600, 0, 1), 0.15); }
-        if (!to.dead && to.zone) {
-          to.present++;
+        if (!to.dead && (to.zone || to.outside)) {
+          if (to.zone) to.present++;
           const day = Math.floor(g.time / 1440) * 1440;
           let dep = day + 17 * 60 + 20 + g.rng.gauss() * 80;
           if (dep < g.time + 120) dep = g.time + 240 + g.rng.next() * 120;
-          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: true });
+          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: !!to.zone });
         }
         break;
       }
@@ -445,7 +484,7 @@ export class City {
         toll = 2;
         break;
       case 'goods':
-        if (!to.dead) to.stock = Math.min(40, to.stock + 6);
+        if (!to.dead && to.zone) to.stock = Math.min(40, to.stock + 6);
         toll = 3;
         break;
       case 'mat':
@@ -480,7 +519,8 @@ export class City {
         b.acc.shop += cap * 0.12 * pShop * k;
         while (b.acc.work >= 1) {
           b.acc.work -= 1;
-          const d = this.pickJob(b);
+          // 約兩成居民到外地上班（早上出城、傍晚回來）
+          const d = rng.chance(0.2) && this.liveOutside().length ? this.pickOutside(b) : this.pickJob(b);
           if (d) this.pushTrip(b, { kind: 'work', from: b, to: d, truck: false });
           else b.workOK = ema(b.workOK, 0.2, 0.1);
         }
@@ -491,6 +531,15 @@ export class City {
           else b.shopOK = ema(b.shopOK, 0.2, 0.1);
         }
       } else {
+        // 大型商場吸引外地顧客
+        if (b.kind === 'bigbox' || b.kind === 'mall' || b.kind === 'market') {
+          b.acc.ext = (b.acc.ext || 0) + cap * 0.08 * pShop * k;
+          while (b.acc.ext >= 1) {
+            b.acc.ext -= 1;
+            const o = this.pickOutside(b);
+            if (o) this.pushTrip(o, { kind: 'shop', from: o, to: b, truck: false });
+          }
+        }
         // 飯店：外地旅客整天陸續入住
         if (b.kind === 'hotel') {
           b.acc.visit = (b.acc.visit || 0) + cap * 0.18 * (gauss(hour, 16, 4) + 0.02) * k;
@@ -513,7 +562,8 @@ export class City {
         while (b.acc.goods >= 1) {
           b.acc.goods -= 1;
           if (b.stock < 1) continue;
-          const d = this.pickGoodsDest(b);
+          // 約三成商品外銷（貨車開往外部連線）
+          const d = rng.chance(0.3) && this.liveOutside().length ? this.pickOutside(b) : this.pickGoodsDest(b);
           if (d) { b.stock -= 1; this.pushTrip(b, { kind: 'goods', from: b, to: d, truck: true }); }
         }
         if (b.stock < 12) {
@@ -777,7 +827,7 @@ export class City {
     return {
       nextId: this.nextId,
       buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, zt: b.zt, kind: b.kind, cols: b.cols, rows: b.rows, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned,
-        roads: b.roads || undefined, front: b.front || undefined, gate: b.gate || undefined, parked: b.parked, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
+        roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
       demand: this.demand, stats: this.stats, history: this.history,
@@ -795,9 +845,12 @@ export class City {
       const geo = s.c0 ? this.geomFrom(...s.c0, s.cols, s.rows) : null;
       const b = this.addBuilding(zt, seg, s.u, s.side, s.cols || old[0], s.rows || old[1], s.level, s.kind, geo);
       if (s.roads) { b.roads = s.roads; b.front = s.front || null; }
-      if (s.gate) { b.gate = s.gate; this.applyGate(b); }
+      const gs = s.gates || (s.gate ? [s.gate] : null);
+      if (gs) { b.gates = gs; this.applyGate(b); }
       b.happy = s.happy; b.stock = s.stock; b.abandoned = s.abandoned;
-      if (s.parked !== undefined) b.parked = Math.min(s.parked, this.slotsOf(b).length);
+      this.slotsOf(b);
+      if (s.slotOcc) b.slotOcc = b.slotOcc.map((_, i) => s.slotOcc[i] || null);
+      else if (s.parked !== undefined) b.slotOcc = b.slotOcc.map((_, i) => (i < s.parked ? this.slotsOf(b)[i].c : null));
     }
     for (const l of d.lots || []) {
       const seg = net.segs.get(l.seg);

@@ -65,6 +65,8 @@ export const ZONE_UNLOCK = {
   C:  [[0, 12], [2500, 18], [5000, 30]],
   I:  [[0, 12], [3000, 32]],
   T:  [[750, 12], [2500, 16]],
+  TX: [[750, 10]],
+  TS: [[750, 4]],
 };
 export const HITECH_POP = 3000;   // 高科技工廠（半導體、電池）出現的人口
 // 人口 pop 時分區 zt 的最大地塊格數（0 = 尚未解鎖）
@@ -111,7 +113,7 @@ export const ZONES = {
 };
 
 // 分區圖與工具列用的顏色：住宅依密度由淺到深
-export function zoneColor(zt) { const Z = ZONE_TYPES[zt]; return ZONES[Z.zone].color[zt === 'R1' ? 0 : zt === 'R3' ? 2 : 1]; }
+export function zoneColor(zt) { const Z = ZONE_TYPES[zt]; return Z.color || ZONES[Z.zone].color[zt === 'R1' ? 0 : zt === 'R3' ? 2 : 1]; }
 
 // 分區格子：每格 6 m × 6 m，沿道路排列；玩家一次拖曳的範圍會依各分區的最大地塊切成數塊
 export const CELL = 6;
@@ -126,9 +128,13 @@ export const ZONE_TYPES = {
   C:  { zone: 'C', name: '商業區', short: '商業', max: 30, per: [0.22, 0.38, 0.55] },
   I:  { zone: 'I', name: '工業區', short: '工業', max: 32, per: [0.16, 0.26, 0.38] },
   // 大眾運輸：公車總站（最大 16×16 格），公車路線由系統依住宅與工作地點自動規劃
-  T:  { zone: 'T', name: '公車總站', short: '大眾運輸', max: 16, per: [0.1, 0.12, 0.15] },
+  T:  { zone: 'T', name: '公車總站', short: '公車總站', max: 16, per: [0.1, 0.12, 0.15] },
+  // 計程車：車行（總站，停很多台）與招呼站（小站，路邊幾個車位）；居民叫車時從最近有車的站派車
+  TX: { zone: 'T', name: '計程車行', short: '計程車行', max: 10, per: [0.1, 0.12, 0.15], color: '#d9a400' },
+  TS: { zone: 'T', name: '計程車招呼站', short: '招呼站', max: 4, per: [0.05, 0.06, 0.08], color: '#f2c230' },
 };
-export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T'];
+export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T', 'TX', 'TS'];
+export const TAXI_COLOR = '#f2c230';
 // 商業：15×15 格以上才有機會出現大型量販店 / 購物中心；工業的功能隨機
 export const SHOP_KINDS = {
   shops:  { name: '商店街', jobs: 1, shop: 1 },

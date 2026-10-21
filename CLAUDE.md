@@ -84,6 +84,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 - **工業污染**：`POLLUTION = false`（目前忽略，住宅不扣分、面板不顯示）。
 - **分區圖**：`g.zonemap`（`M` 鍵 / 「分區圖」按鈕），`render.drawZoneMap` 塗地塊顏色（`zoneColor(zt)`），開啟時不畫建物立體部分；圖例在 `#zonemap`（ui.refreshTop）。
 - **單向場內道路**（`ROAD_TYPES.service1`）：大型停車場（`lotart.oneWayLot`：量販店 / 購物中心 / 超市）與停車樓前的車道（`lotart.garageDrive`：高密度住宅、`mallp` 立體停車場購物中心）。`city.buildParkRoads` 依 `plan.lot.oneway` 依序建造：入口 → 前方分配車道 → 各停車車道 → 後方集散車道 → 出口；入口一律在臨路車道上游端（`-ty·nx + tx·ny > 0` 時在 u 小的那端），`network.genConnections` 讓 service1 與一般道路的左轉進出加上 240 秒的尋路成本（`conn.pen`），平常都右進右出（避免排隊回堵出口造成整個停車場卡死），只有沒有別的路時才左轉（例如停車場在通往地圖邊緣的路上）。室內車位（`indoor`）有 `out`（出口車道位置），`slotRoad(b, i, truck, out)`、`trySpawn` 開出時用 out；`slotBusy` 對室內車位只擋同一條車道。
+- **計程車**：分區 `TX`（計程車行）、`TS`（招呼站），zone 都是 `T`；車位是小客車車位（`slotOcc` 停著黃色計程車 `TAXI_COLOR`）。`transit.callTaxi(trip)` 從 1.6 km 內最近有車的站 `trySpawn({ kind: 'taxi', taxi: 乘客行程 }, 接客點)`；車輛 `v.taxi = { pax, stage }`、目的地沿用 `v.busDest`，到點停 3 秒後 `traffic.nextTaxiStage`：stage 0 接客 → stage 1 下客（乘客 `onTripEnd`）→ 改成 `taxiret` 行程開回 `transit.taxiHome` 找到的空車位。叫車時機：`spawnFrom` 中 `TAXI_SHARE`（有車也叫）、以及沒車可開時公車不行才叫車，再不行才走路。
 - **需求門檻**：`DEMAND_BUILD = 0.2`（空地塊發展）、`DEMAND_ZONE = 0.35`（自動劃設分區），需求條上有虛線。`SEP_RI = 250` m：工業與住宅的最小距離（開局與自動劃設都遵守）。
 - **開局選項**：`newGame({ start: 'town' | 'blank' })`；`blank` 只有外部連線、`autoGrow = false`。小鎮為 3 條大道（`worldgen.js` 的 `avX` / `avY`）的大棋盤，街廓夠深可劃 24×24。
 - **鋪路吸附**：`tools.js` 的 `snap()` 在接到另一條路時讓接點沿該路滑動成垂直 / 45° / 與起點道路平行；`planRoad` 會修掉超出路口不到 12 m 的多餘路段。只有 3 條以上道路的節點才會被選成「路口」（連續鋪路的轉折點不算）。

@@ -320,6 +320,22 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert(gs.city.maxCells('C') === 30 && gs.city.maxCells('R3') === 24 && gs.city.maxCells('R2') === 18 && gs.city.maxCells('I') === 32 && gs.city.maxCells('T') === 16, '沙盒模式一開始就全部解鎖');
 }
 
+// 計程車：叫車後從車行開去接客、送到目的地，再開回車行停好
+{
+  const gx = makeGame(12345, 'temperate', 'easy', true);
+  connectOutside(gx);
+  const C = gx.city, net = gx.net, c0 = gx.terrain.size / 2;
+  const segs = [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.len > 100).sort((a, b) => Math.hypot(a.pts[0].x - c0, a.pts[0].y - c0) - Math.hypot(b.pts[0].x - c0, b.pts[0].y - c0));
+  let tx = null;
+  for (const s of segs) { for (const side of [1, -1]) { const g0 = C.gridStart(s); const p = C.planStroke('TX', s, side, g0, g0 + 48, 7).find(p => p.ok && p.cols >= 8 && p.rows >= 6); if (p) { tx = C.develop(C.addLot('TX', s, p.u, side, p.cols, p.rows)); break; } } if (tx) break; }
+  const home = C.buildings.find(b => b.zone === 'R'), shop = C.buildings.find(b => b.kind === 'shops'), trip = { kind: 'shop', from: home, to: shop, truck: false };
+  const parked0 = C.parkedCount(tx), called = gx.transit.callTaxi(trip);
+  let done = false; const end = C.onTripEnd.bind(C); C.onTripEnd = (t, ok, a) => { if (t === trip) done = ok; return end(t, ok, a); };
+  for (let i = 0; i < 4000 && !(done && !gx.traffic.vehicles.some(v => v.trip && v.trip.kind === 'taxiret')); i++) step(gx, 1);
+  step(gx, 60);
+  assert(tx && parked0 > 0 && called && done && gx.transit.stats.taxi >= 1, `計程車接送乘客（車位 ${tx ? C.slotsOf(tx).length : 0}、停著 ${parked0}）`);
+}
+
 // 空白地圖開局：只有外部連線，沒有分區與建築
 {
   const gb = makeGame(4321, 'temperate', 'sandbox', false);

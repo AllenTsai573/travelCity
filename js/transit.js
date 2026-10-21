@@ -9,6 +9,9 @@ import { pointAt, clamp } from './util.js';
 import { routeFromPoint } from './routing.js';
 import { CLOCK } from './config.js';
 
+// 計程車：叫車的居民在 TAXI_RANGE 公尺內有停著計程車的車行 / 招呼站才叫得到
+const TAXI_RANGE = 1600;
+
 const LINE_COLORS = ['#d23c2c', '#1f6fb5', '#2a9d3f', '#e08a1e', '#7d3c98', '#0f8b8d'];
 // 時間膨脹：公車繞一圈要好幾個遊戲小時，候車上限以模擬秒計（MAX_WAIT_S）；每條路線最多 MAX_STOPS 站
 const STOP_GAP = 240, WALK = 450, RANGE = 1500, PLAN_EVERY = 1440, MAX_WAIT_S = 240, MAX_STOPS = 9, CAPACITY = 60, HEADWAY = 50;
@@ -26,7 +29,33 @@ export class Transit {
   }
   get city() { return this.game.city; }
   get net() { return this.game.net; }
-  depots() { return this.city.buildings.filter(b => b.zone === 'T' && !b.dead && !b.abandoned && this.city.truckSlotsOf(b).length); }
+  depots() { return this.city.buildings.filter(b => b.zt === 'T' && !b.dead && !b.abandoned && this.city.truckSlotsOf(b).length); }
+  // 計程車行與招呼站
+  taxiStands() { return this.city.buildings.filter(b => (b.zt === 'TX' || b.zt === 'TS') && !b.dead && !b.abandoned); }
+
+  // 叫計程車：從最近、有停著計程車的車行 / 招呼站派車去接乘客（起訖都要是城市裡的建築）。成功回傳 true
+  callTaxi(trip) {
+    const a = trip.from, b = trip.to, C = this.city;
+    if (!a || !b || a.outside || b.outside || a.dead || b.dead) return false;
+    const st = this.taxiStands().filter(s => C.parkedCount(s) > 0).map(s => [s, Math.hypot(s.x - a.x, s.y - a.y)]).filter(e => e[1] < TAXI_RANGE).sort((p, q) => p[1] - q[1]);
+    for (const [s] of st.slice(0, 3)) {
+      const r = this.game.traffic.trySpawn({ kind: 'taxi', from: s, to: a, truck: false, taxi: trip }, { seg: a.seg, u: a.u, id: s.id });
+      if (r === 'ok') { this.stats.taxiCalls = (this.stats.taxiCalls || 0) + 1; return true; }
+    }
+    return false;
+  }
+  // 計程車開完一趟：找最近、有空車位的車行 / 招呼站停回去
+  taxiHome(from) {
+    const C = this.city;
+    let best = null, bd = Infinity;
+    for (const s of this.taxiStands()) {
+      const { occ, res } = C.slotSet(s, false);
+      if (!occ.some((o, i) => !o && !res[i])) continue;
+      const d = Math.hypot(s.x - from.x, s.y - from.y);
+      if (d < bd) { bd = d; best = s; }
+    }
+    return best;
+  }
   stop(id) { return this.stops.find(t => t.id === id); }
   line(id) { return this.lines.find(l => l.id === id); }
   stopPoint(t) { return { seg: t.seg, u: t.u }; }

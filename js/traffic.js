@@ -2,7 +2,7 @@
 // - IDM 跟車模型、MOBIL 式變換車道
 // - 路口依號誌 / 讓路 / 全向停車與衝突點判斷能否進入
 // - 依即時壅塞重新規劃路線
-import { LANE_W, VEHICLE_COLORS } from './config.js';
+import { LANE_W, VEHICLE_COLORS, CLOCK } from './config.js';
 import { findRoute, routeFromPoint } from './routing.js';
 import { clamp, pointAt } from './util.js';
 import { laneOffset } from './network.js';
@@ -112,7 +112,7 @@ export class Traffic {
   // ---------- 生成 / 結束 ----------
   // 這輛車實際要停的位置：預約的車位在道路上的對應點（沒有預約就用建築的出入口）
   destOf(v) {
-    if (v.bus) return v.busDest;   // 公車：下一個站牌
+    if (v.bus || v.taxi) return v.busDest;   // 公車：下一個站牌；計程車：接客 / 下客的地點
     const to = v.trip.to;
     if (!v.slotPt || to.outside) return to;
     const city = this.game.city, ver = this.net.version, list = city.slotSet(to, v.truck).list;
@@ -177,6 +177,8 @@ export class Traffic {
           const v = this.createVehicle(truck);
           v.route = r.path; v.ri = 0; v.trip = trip;
           if (trip.bus) Object.assign(v, { bus: trip.bus, color: trip.color, len: BUS_LEN, w: BUS_W, a: 1, b: 2, T: 1.6, v0f: 0.85, stopIdx: 0, pax: [], busDest, dwell: 0 });
+          // 計程車：先開到乘客出發的建築前接客（stage 0），再開到目的地（stage 1）
+          if (trip.taxi) Object.assign(v, { taxi: { pax: trip.taxi, stage: 0, t0: this.game.time }, busDest, dwell: 0 });
           v.v = from.outside ? Math.min(lane.speed * 0.7, 14) : 0;
           v.fadeIn = from.outside ? 1 : 0;   // 沒有停車位的建築：車由路邊慢慢出現
           if (rd) { v.slotIdx = slotIdx; v.slotPt = slotPt; city.slotSet(to, truck).res[slotIdx] = true; }
@@ -247,11 +249,41 @@ export class Traffic {
       this.removeFromTrack(v); v.dead = true; v.track = null; v.leaving = 0;
       return;
     }
+    // 計程車被移除：乘客改走路，計程車回到出發的車行 / 招呼站（不會就此少一台）
+    if (v.taxi) {
+      this.game.transit.walk(v.taxi.pax);
+      const d = v.trip.from, st = this.game.city.slotSet(d, false), i = d.zone ? st.list.findIndex((_, k) => !st.occ[k] && !st.res[k]) : -1;
+      if (!d.dead && i >= 0) st.occ[i] = v.color;
+      this.removeFromTrack(v); v.dead = true; v.track = null; v.leaving = 0;
+      return;
+    }
     this.removeFromTrack(v);
     v.dead = true;
     v.track = null;
     v.leaving = 0;
     if (this.game.city) this.game.city.onTripEnd(v.trip, ok, v.age);
+  }
+
+  // 計程車：接到客人後開往目的地；送到後乘客的行程完成，計程車開回最近有空位的車行 / 招呼站停好
+  nextTaxiStage(v) {
+    const t = v.taxi, p = t.pax, city = this.game.city;
+    v.dwell = 0; v.waitT = 0;
+    if (t.stage === 0 && !p.to.dead) {
+      t.stage = 1;
+      v.trip = { ...v.trip, from: p.from, to: p.to };
+      v.busDest = { seg: p.to.seg, u: p.to.u, id: p.to.id };
+      this.reroute(v);
+      return;
+    }
+    // 下客：乘客的行程完成（行程時間從叫車開始算）
+    if (t.stage === 1) { this.game.transit.stats.taxi = (this.game.transit.stats.taxi || 0) + 1; city.onTripEnd(p, true, Math.max(60, (this.game.time - t.t0) / CLOCK)); }
+    else this.game.transit.walk(p);
+    v.taxi = null; v.busDest = null; v._dest = null;
+    const home = this.game.transit.taxiHome(p.to.dead ? p.from : p.to);
+    v.trip = { kind: 'taxiret', from: p.to, to: home || p.to, truck: false };
+    v.slotPt = null; v.slotIdx = null;
+    if (home) { const st = city.slotSet(home, false), i = st.list.findIndex((_, k) => !st.occ[k] && !st.res[k]); if (i >= 0) { v.slotIdx = i; v.slotPt = st.list[i]; st.res[i] = true; } }
+    this.reroute(v);
   }
 
   // 從公車總站派一輛停著的公車，開往路線的第一站
@@ -835,6 +867,13 @@ export class Traffic {
         if (!v.dwell) { const st = this.game.transit.stop(v.busDest.stop); v.dwell = st ? this.game.transit.exchange(v, st) : 1; }
         v.s = this.destS(v); v.v = 0; v.dwell -= dt;
         if (v.dwell <= 0) this.nextBusStop(v);
+        continue;
+      }
+      if (v.taxi && tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === v.busDest.seg && v.s >= this.destS(v)) {
+        // 計程車接客 / 下客：在建築前停 3 秒
+        if (!v.dwell) v.dwell = 3;
+        v.s = this.destS(v); v.v = 0; v.dwell -= dt;
+        if (v.dwell <= 0) this.nextTaxiStage(v);
         continue;
       }
       if (tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === this.destOf(v).seg && v.s >= this.destS(v)) {

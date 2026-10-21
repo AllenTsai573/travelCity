@@ -1,6 +1,7 @@
 // 玩家工具與輸入處理
 import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, CELL, levelMul, zoneNext } from './config.js';
 import { halfWidth } from './network.js';
+import { lotArt } from './lotart.js';
 import { pointAt, closestOnPoly, clamp, fmtMoney, convexOverlap, pointInPoly } from './util.js';
 const convexOverlapSafe = (a, b) => { try { return convexOverlap(a, b); } catch { return false; } };
 import { TEMPLATES, findCrossing, frameFromCrossing, previewTemplate, placeInterchange } from './interchange.js';
@@ -377,7 +378,9 @@ export class Tools {
           const want = Math.min(Math.max(2, st.rows), Z.max), short = ok.find(p => p.rows < want);
           if (short) why.push('往內' + (this.g.city.canPlaceLot(st.seg, short.u, short.side, short.cols, short.rows + 1) || '受限'));
           if (st.past) why.push('這段路到路口為止，跨過路口要另外畫');
-          this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : '') + (why.length ? `（${why.join('；')}）` : ''), !ok.length);
+          // 公車總站：說明會有幾個公車停車位（＝最多能派出幾台公車）
+          const busInfo = this.zone === 'T' && ok.length ? '｜公車停車位 ' + ok.map(p => lotArt({ id: 0, zt: 'T', zone: 'T', kind: null, cols: p.cols, rows: p.rows, level: 1 }).tslots.length).join(' + ') + ' 個（最多派出同樣台數的公車）' : '';
+          this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + busInfo + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : '') + (why.length ? `（${why.join('；')}）` : ''), !ok.length);
           break;
         }
         const a = this.zoneAnchor(m.x, m.y);

@@ -347,6 +347,21 @@ export function lotArt(b) {
       }
       rect(2, Math.min(d - 6, bd + 1.5), w - 2, d - 1.5, '#d9d3c4', 6, { wall: '#efe9dc', win: true, units: 1 });
     }
+  } else if (b.zt === 'TX' || b.zt === 'TS') {
+    // 計程車：招呼站是臨路一排計程車位＋候車亭；車行夠大時中央場內車道兩側是計程車位，後方是車行辦公室
+    base = '#c4c2bb';
+    const lane = b.zt === 'TX' && b.cols >= 6 && b.rows >= 5;
+    if (lane) {
+      if (!b.roads) road([{ u: w / 2, v: 0 }, { u: w / 2, v: d - 6 }], 5);
+      laneBays(w / 2, 2, d - 7.5);
+      rect(2, d - 6, w - 2, d - 1, '#d9d3c4', 6, { wall: '#efe9dc', win: true, shop: '#f2c230', units: 1 });
+    } else {
+      frontBays(0.5, w - 0.5);
+      if (d >= 10) rect(1.5, 7, Math.min(w - 1.5, 9), Math.min(d - 1, 11), '#e9e7e2', 3.4, { wall: '#f6f3ea', win: true, shop: '#f2c230' });
+      if (d >= 12 && w >= 18) for (let u = 11; u + 9 <= w - 1; u += 10) rect(u, 7.4, u + 8, Math.min(d - 1, 11), '#d9d3c4', 3, { wall: '#efe9dc', win: true });
+    }
+    items.push({ t: 'sign', u: w - 1.6, v: lane ? 1.2 : Math.min(d - 1, 7.6), text: '計', c: '#f2c230', h: 5 });
+    tree(1.2, d - 1.2, 0.6);
   } else if (b.zone === 'C') {
     base = '#c7c3b8';
     const real = !!b.roads, k = b.kind;

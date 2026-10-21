@@ -1,12 +1,12 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
-import { zoneMax, HITECH_POP, POLLUTION, TRIP_SCALE, TRIP_REF, SEP_RI, DEMAND_BUILD, DEMAND_ZONE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
+import { zoneMax, HITECH_POP, POLLUTION, TAXI_COLOR, TRIP_SCALE, TRIP_REF, SEP_RI, DEMAND_BUILD, DEMAND_ZONE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap, closestOnPoly } from './util.js';
 import { halfWidth } from './network.js';
 import { lotArt, lotAisles, lotParkArea, oneWayLot, garageDrive } from './lotart.js';
 
 const ema = (a, x, k) => a + (x - a) * k;
 // 有公車可搭時（起訖附近都有同一條路線的站牌），就算有車也改搭公車的居民比例
-const BUS_SHARE = 0.5;
+const BUS_SHARE = 0.5, TAXI_SHARE = 0.06;
 
 // 需要場內道路的建築：工業園區（主幹道＋大園區的橫向道路）與附停車場的商業（從臨路開進停車場的車道）
 // 回傳車道終點與橫向道路離路邊的距離（公尺），與 lotart.js 的配置一致
@@ -204,7 +204,8 @@ export class City {
   // 新建築一開始停著的車：住宅大部分的車停在家；工業區卸貨區停著幾輛貨車（之後送貨出去就從這裡開出）
   seedParked(b) {
     const sl = this.slotsOf(b), rng = this.game.rng;
-    b.slotOcc = sl.map(s => (b.zone === 'R' && rng.next() < 0.7 ? s.c : null));
+    // 計程車行 / 招呼站：車位上停著計程車
+    b.slotOcc = sl.map(s => (b.zone === 'R' && rng.next() < 0.7 ? s.c : (b.zt === 'TX' || b.zt === 'TS') && rng.next() < 0.85 ? TAXI_COLOR : null));
     b.tOcc = this.truckSlotsOf(b).map(() => (b.zone === 'I' && rng.next() < 0.4 ? '#d8d0c0' : b.zone === 'T' ? '#d23c2c' : null));
   }
 
@@ -615,6 +616,7 @@ export class City {
   onTripEnd(trip, ok, age) {
     const g = this.game;
     if (!trip) return;
+    if (trip.kind === 'taxiret') return;   // 計程車開回車行，不算行程
     if (!ok) { this.recordFail(trip); return; }
     this.stats.trips++; this.stats.hourTrips++;
     this.stats.tripTimeSum += age;
@@ -799,15 +801,20 @@ export class City {
       if (trip.to.dead || (trip.to.outside && trip.to.seg === null) || o.seg === null) { o.queue.shift(); this.recordFail(trip); continue; }
       // 搭公車：起訖附近都有同一條路線的站牌時，部分居民（BUS_SHARE）就算有車也改搭公車，回程也搭公車
       if (!trip.truck && !trip.transit && !trip.mode && o.zone === 'R' && (trip.kind === 'work' || trip.kind === 'shop') && this.game.transit) {
-        trip.mode = this.game.rng.chance(BUS_SHARE) ? 'bus' : 'car';
+        const x = this.game.rng.next();
+        trip.mode = x < BUS_SHARE ? 'bus' : x < BUS_SHARE + TAXI_SHARE ? 'taxi' : 'car';
         if (trip.mode === 'bus' && this.game.transit.board(trip)) { o.queue.shift(); trip.transit = true; continue; }
+        // 叫計程車（回程也搭計程車 / 大眾運輸）
+        if (trip.mode === 'taxi' && this.game.transit.callTaxi(trip)) { o.queue.shift(); trip.transit = true; continue; }
       }
       const r = tr.trySpawn(trip);
       if (r === 'ok') { o.queue.shift(); o.spawnCD = cd; }
       else if (r === 'transit') {
         // 家裡的車都開走了：起訖附近有同一條公車路線的站牌就去等公車，否則走路（不產生車；回程也不開車）
+        // 沒有公車可搭時叫計程車，都沒有才走路
         o.queue.shift(); trip.transit = true;
-        if (!(this.game.transit && this.game.transit.board(trip))) { if (this.game.transit) this.game.transit.stats.walked++; this.onTripEnd(trip, true, 300); }
+        const T = this.game.transit;
+        if (!(T && (T.board(trip) || T.callTaxi(trip)))) { if (T) T.stats.walked++; this.onTripEnd(trip, true, 300); }
       }
       else if (r === 'noroute') {
         // 外部連線尚未接通時，外地來的行程直接取消，不算失敗

@@ -123,7 +123,7 @@ export class UI {
         html += `<div class="hint">左鍵連續鋪路 · 右鍵/Esc 結束 · 接近平行 / 45° / 垂直會自動對齊起點道路 · Shift 每 15° 吸附 · Alt 不吸附 · [ ] 切換高度</div>`;
       } else html += `<div class="hint">點擊道路以變更類型（同類單行道則反轉方向）</div>`;
     } else if (t.tool === 'zone') {
-      const zdesc = { R1: '透天、獨棟', R2: 'アパート、低層公寓大樓', R3: '板狀大樓、塔式住宅', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車' };
+      const zdesc = { R1: '透天、獨棟', R2: 'アパート、低層公寓大樓', R3: '板狀大樓、塔式住宅', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車', TX: '計程車行：停很多台計程車，6×5 格以上有場內車道', TS: '計程車招呼站：路邊幾個計程車位' };
       // 依人口解鎖：未解鎖的顯示需要的人口；已解鎖的顯示目前最大尺寸與下一次放大的人口
       const peak = g.city.unlockPop();
       html += `<div class="grp">` + ZONE_ORDER.map(k => {
@@ -246,7 +246,7 @@ export class UI {
     const g = this.g;
     const name = o => o.outside ? `外部連線：${o.name}` : `${ZONES[o.zone].name}建築 #${o.id}`;
     return {
-      head: `<h3>${v.bus ? '🚌 公車' : v.truck ? '🚚 貨車' : '🚗 汽車'} #${v.id}</h3>`,
+      head: `<h3>${v.bus ? '🚌 公車' : v.taxi || (v.trip && v.trip.kind === 'taxiret') ? '🚕 計程車' : v.truck ? '🚚 貨車' : '🚗 汽車'} #${v.id}</h3>`,
       dyn: () => v.bus ? (() => { const ln = g.transit.line(v.bus), st = v.busDest && g.transit.stop(v.busDest.stop); return `
         <dl>
           <dt>路線</dt><dd><span style="color:${ln ? ln.color : '#fff'}">■</span> ${ln ? ln.name : '—'}（${ln ? ln.stops.length : 0} 站）</dd>
@@ -277,6 +277,12 @@ export class UI {
       dyn: () => {
         let rows = `<dt>等級</dt><dd>${'★'.repeat(b.level)}${'☆'.repeat(3 - b.level)}${b.abandoned ? '（已廢棄）' : ''}</dd>
           <dt>滿意度</dt><dd>${bar(b.happy)} ${pct(b.happy)}</dd>`;
+        if (b.zt === 'TX' || b.zt === 'TS') {
+          const tr = g.transit, sl = g.city.slotsOf(b).length, out = g.traffic.vehicles.filter(v => v.taxi && v.trip && (v.trip.from === b || v.taxi.stage === 0 && v.trip.from === b)).length;
+          return `<dl><dt>計程車</dt><dd>停著 ${g.city.parkedCount(b)} 台 / ${sl} 個車位</dd><dt>全市行駛中</dt><dd>${g.traffic.vehicles.filter(v => v.taxi).length} 台載客 / 接客中</dd>
+            <dt>累計載客</dt><dd>${tr.stats.taxi || 0} 趟（叫車 ${tr.stats.taxiCalls || 0} 次）</dd></dl>
+            <p class="note">家裡沒車可開、附近又沒有公車可搭的居民（以及少數有車的居民）會叫計程車：從 1.6 km 內最近、有停著計程車的車行 / 招呼站派車，接到客人後送到目的地，再開回最近有空位的站停好。</p>`;
+        }
         if (b.zone === 'T') {
           const tr = g.transit, lines = tr.lines.filter(l => l.depot === b.id), run = g.traffic.vehicles.filter(v => v.bus && lines.some(l => l.id === v.bus));
           const stops = new Set(lines.flatMap(l => l.stops)), waiting = [...stops].reduce((a, id) => a + (tr.stop(id)?.queue.length || 0), 0);

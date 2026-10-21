@@ -77,7 +77,7 @@ export class UI {
         t.level = Number(v);
       } else if (k === 'curve') { t.curve = !t.curve; t.pts = t.pts.slice(0, 1); }
       else if (k === 'zone') {
-        if (v !== 'X' && !g.city.maxCells(v)) { g.notify(`${ZONE_TYPES[v].name}需要人口達到 ${zoneNext(v, g.city.peakPop)[0]} 才能解鎖`, 'warn'); return; }
+        if (v !== 'X' && !g.city.maxCells(v)) { g.notify(`${ZONE_TYPES[v].name}需要人口達到 ${zoneNext(v, g.city.unlockPop())[0]} 才能解鎖`, 'warn'); return; }
         t.zone = v;
       }
       else if (k === 'rb') t.rbR = Number(v);
@@ -123,7 +123,7 @@ export class UI {
     } else if (t.tool === 'zone') {
       const zdesc = { R1: '透天、獨棟', R2: 'アパート、低層公寓大樓', R3: '板狀大樓、塔式住宅', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車' };
       // 依人口解鎖：未解鎖的顯示需要的人口；已解鎖的顯示目前最大尺寸與下一次放大的人口
-      const peak = g.city.peakPop;
+      const peak = g.city.unlockPop();
       html += `<div class="grp">` + ZONE_ORDER.map(k => {
         const Z = ZONE_TYPES[k], m = zoneMax(k, peak), nx = zoneNext(k, peak);
         const sub = m ? `最大 ${m}×${m}` + (nx ? `（${nx[0]} 人 → ${nx[1]}×${nx[1]}）` : '') : `🔒 人口 ${nx[0]}`;
@@ -457,7 +457,7 @@ export class UI {
       <h4>生態系</h4>
       <div class="cards" data-group="biome">${Object.entries(BIOMES).map(([k, b], i) => `<label class="cardopt"><input type="radio" name="biome" value="${k}" ${i === 0 ? 'checked' : ''}><span class="sw" style="background:linear-gradient(135deg, ${b.land[0]}, ${b.land[2]} 60%, ${b.waterC[0]})"></span>${b.name}</label>`).join('')}</div>
       <h4>難度</h4>
-      <div class="cards">${Object.entries(DIFFICULTY).map(([k, d]) => `<label class="cardopt"><input type="radio" name="diff" value="${k}" ${k === 'normal' ? 'checked' : ''}><b>${d.name}</b><small>${d.unlockAll ? '無限資金' : fmtMoney(d.money)}</small></label>`).join('')}</div>
+      <div class="cards">${Object.entries(DIFFICULTY).map(([k, d]) => `<label class="cardopt"><input type="radio" name="diff" value="${k}" ${k === 'normal' ? 'checked' : ''}><b>${d.name}</b><small>${d.unlockAll ? '無限資金、全部解鎖' : fmtMoney(d.money)}</small></label>`).join('')}</div>
       <h4>起始</h4>
       <div class="cards"><label class="cardopt"><input type="radio" name="start" value="town" checked><b>預設小鎮</b><small>道路與分區已規劃，稍後自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="blank"><b>空白地圖</b><small>只有外部連線，自己從零規劃（不自動發展）</small></label></div>
       <h4>地圖種子</h4>

@@ -371,7 +371,7 @@ export class Tools {
           const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1, Z = { name: ZONE_TYPES[this.zone].name, max: this.g.city.maxCells(this.zone) };
           // 說明是什麼限制了大小：分區最深格數、後方的道路 / 分區 / 建築 / 水域、這段路到路口為止
           const why = [];
-          if (st.rows > Z.max) { const nx = zoneNext(this.zone, this.g.city.peakPop); why.push(`${Z.name}目前最深 ${Z.max} 格` + (nx ? `，人口 ${nx[0]} 時放大到 ${nx[1]} 格` : '')); }
+          if (st.rows > Z.max) { const nx = zoneNext(this.zone, this.g.city.unlockPop()); why.push(`${Z.name}目前最深 ${Z.max} 格` + (nx ? `，人口 ${nx[0]} 時放大到 ${nx[1]} 格` : '')); }
           const want = Math.min(Math.max(2, st.rows), Z.max), short = ok.find(p => p.rows < want);
           if (short) why.push('往內' + (this.g.city.canPlaceLot(st.seg, short.u, short.side, short.cols, short.rows + 1) || '受限'));
           if (st.past) why.push('這段路到路口為止，跨過路口要另外畫');

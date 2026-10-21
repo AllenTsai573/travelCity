@@ -135,7 +135,9 @@ export class City {
 
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
   // 目前人口下分區 zt 的最大地塊格數（0 = 尚未解鎖）
-  maxCells(zt) { return zoneMax(zt, this.peakPop); }
+  maxCells(zt) { return zoneMax(zt, this.unlockPop()); }
+  // 解鎖用的人口：沙盒模式一開始就全部解鎖，其他難度依曾達到的最高人口
+  unlockPop() { const d = this.game.diff; return d && d.unlockAll ? Infinity : this.peakPop; }
 
   planStroke(zt, seg, side, u0, u1, rows) {
     const Z = { max: this.maxCells(zt) };
@@ -345,7 +347,7 @@ export class City {
       return m >= 4 && x < 0.41 ? 'parking' : 'shops';
     }
     // 高科技工廠（半導體、電池）要城市夠大才會出現
-    if (zone === 'I') return rng.pick(Object.keys(INDUSTRY_KINDS).filter(k => !INDUSTRY_KINDS[k].hitech || this.peakPop >= HITECH_POP));
+    if (zone === 'I') return rng.pick(Object.keys(INDUSTRY_KINDS).filter(k => !INDUSTRY_KINDS[k].hitech || this.unlockPop() >= HITECH_POP));
     return null;
   }
 

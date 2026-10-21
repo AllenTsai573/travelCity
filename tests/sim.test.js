@@ -305,6 +305,10 @@ for (const b of ['desert', 'snow', 'tropical']) {
   C.peakPop = 3100;
   const kinds2 = new Set(); for (let i = 0; i < 400; i++) kinds2.add(C.pickKind('I', 10, 10));
   assert(!kinds.has('semi') && !kinds.has('battery') && kinds2.has('semi') && kinds2.has('battery'), `高科技工廠人口 3000 才出現（${[...kinds2].join('、')}）`);
+  // 沙盒：一開始就全部解鎖
+  const gs = makeGame(4321, 'temperate', 'sandbox', false);
+  gs.city.peakPop = 0;
+  assert(gs.city.maxCells('C') === 30 && gs.city.maxCells('R3') === 24 && gs.city.maxCells('R2') === 18 && gs.city.maxCells('I') === 32 && gs.city.maxCells('T') === 16, '沙盒模式一開始就全部解鎖');
 }
 
 // 空白地圖開局：只有外部連線，沒有分區與建築

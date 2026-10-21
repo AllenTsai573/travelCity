@@ -75,12 +75,16 @@ export function generateWorld(g) {
   }
   const town = best.map(id => net.nodes.get(id)).filter(n => n.level === 0 && !n.outside);
 
-  // 接上一條外部高速公路：連到小鎮最大連通區裡最近的路口；直線過不去就試著繞（兩段都可行才鋪）
+  // 接上一條外部高速公路：接到小鎮的大道（優先接大道的端點，高速公路車流直接延續到大道上，不會灌進小街造成塞車）；
+  // 直線過不去就試著繞（兩段都可行才鋪）
+  const aveCount = n => n.segs.filter(id => net.segs.get(id).type === 'avenue').length;
   for (const o of g.city.outside) {
     const on = net.nodes.get(o.node), s0 = on && net.segs.get(on.segs[0]);
     if (!s0 || s0.type !== 'highway') continue;
     const inner = net.nodes.get(s0.a === on.id ? s0.b : s0.a);
-    const cands = [...town].sort((p, q) => Math.hypot(p.x - inner.x, p.y - inner.y) - Math.hypot(q.x - inner.x, q.y - inner.y)).slice(0, 4);
+    const near = list => list.sort((p, q) => Math.hypot(p.x - inner.x, p.y - inner.y) - Math.hypot(q.x - inner.x, q.y - inner.y));
+    const ends = near(town.filter(n => aveCount(n) === 1)), mids = near(town.filter(n => aveCount(n) >= 2));
+    const cands = [...ends.slice(0, 3), ...mids.slice(0, 3), ...near(town.filter(n => !aveCount(n))).slice(0, 2)];
     let ok = false;
     for (const e of cands) {
       const to = { x: e.x, y: e.y, node: e.id }, from = { x: inner.x, y: inner.y, node: inner.id };

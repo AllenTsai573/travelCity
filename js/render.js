@@ -352,15 +352,18 @@ export class Renderer {
   // 節點銜接圓：死路為圓頭，兩路相接取較窄寬度，路口取最寬
   nodeJoint(n) {
     const net = this.game.net;
-    let max = 0, min = Infinity, col = ASPHALT;
+    let max = 0, min = Infinity, col = ASPHALT, ringW = 0;
     for (const sid of n.segs) {
       const s = net.segs.get(sid);
       if (!s) continue;
       const w = halfWidth(s.T);
       if (w > max) { max = w; col = roadColor(s.T); }
       min = Math.min(min, w);
+      if (s.ring) ringW = Math.max(ringW, w);
     }
     if (!max) return null;
+    // 圓環上的節點只補環道寬度，避免較寬的進入道路在中央島上鼓出一塊
+    if (ringW) return { r: ringW, col };
     return { r: n.segs.length === 2 ? min : max, col };
   }
 
@@ -439,19 +442,27 @@ export class Renderer {
         }
         ctx.setLineDash([]);
         ctx.lineCap = 'round';
-        // 停止線
+        // 停止線（號誌 / 全向停車：實線）與讓路線（自動路權下需讓路的方向：虛線）
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 0.4;
         for (const n of nodes) {
           if (n.control === 'auto' && n.segs.length < 3) continue;
-          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-          ctx.lineWidth = 0.4;
-          for (const Lk of net.inLinks(n)) for (const lane of Lk.lanes) {
-            const p = pointAt(lane.pts, lane.cum, lane.len - 0.3);
-            ctx.beginPath();
-            ctx.moveTo(p.x + p.dy * 1.6, p.y - p.dx * 1.6);
-            ctx.lineTo(p.x - p.dy * 1.6, p.y + p.dx * 1.6);
-            ctx.stroke();
+          const ins = net.inLinks(n);
+          let maxRank = -Infinity;
+          if (n.control === 'auto') for (const Lk of ins) maxRank = Math.max(maxRank, net.approachRank(n, Lk));
+          for (const Lk of ins) {
+            if (n.control === 'auto' && net.approachRank(n, Lk) >= maxRank) continue;
+            ctx.setLineDash(n.control === 'auto' ? [0.9, 0.7] : []);
+            for (const lane of Lk.lanes) {
+              const p = pointAt(lane.pts, lane.cum, lane.len - 0.3);
+              ctx.beginPath();
+              ctx.moveTo(p.x + p.dy * 1.6, p.y - p.dx * 1.6);
+              ctx.lineTo(p.x - p.dy * 1.6, p.y + p.dx * 1.6);
+              ctx.stroke();
+            }
           }
         }
+        ctx.setLineDash([]);
       }
       if (tunnel) {
         ctx.globalAlpha = 0.8;

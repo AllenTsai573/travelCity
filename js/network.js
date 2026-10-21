@@ -342,7 +342,9 @@ export class Network {
         const dOut = startTangent(outL.lanes[0]);
         const ang = Math.atan2(dIn.x * dOut.y - dIn.y * dOut.x, dIn.x * dOut.x + dIn.y * dOut.y);
         if (Math.abs(ang) > 2.45) continue; // 超過 140° 的急轉不允許（會畫成打結的迴圈）
-        cands.push({ outL, ang, cls: Math.abs(ang) < 0.55 ? 'S' : ang > 0 ? 'R' : 'L' });
+        // 環道接環道視為直行（沿圓環行駛），所有環道車道都可繼續繞行
+        const ringCont = inL.seg.ring && outL.seg.ring;
+        cands.push({ outL, ang, cls: ringCont || Math.abs(ang) < 0.55 ? 'S' : ang > 0 ? 'R' : 'L' });
       }
       per.set(inL, cands);
     }
@@ -374,7 +376,10 @@ export class Network {
         if (cands.length === 1 || c.cls === 'S' || c.cls === 'U') { inIdx = range(0, n); outIdx = range(0, m); }
         else if (c.cls === 'MR') { inIdx = range(0, n); outIdx = range(Math.max(0, m - n), m); }
         else if (c.cls === 'ML') { inIdx = range(0, n); outIdx = range(0, Math.min(n, m)); }
-        else if (c.cls === 'R') {
+        else if (c.cls === 'R' && inL.seg.ring && !c.outL.seg.ring) {
+          // 圓環出口：內外環車道都可駛出
+          inIdx = range(0, n); outIdx = range(0, m);
+        } else if (c.cls === 'R') {
           inIdx = hasS ? [n - 1] : hasL ? (n >= 2 ? range(Math.floor(n / 2), n) : [0]) : range(0, n);
           outIdx = inIdx.length > 1 ? range(0, m) : [m - 1];
         } else {

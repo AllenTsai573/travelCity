@@ -161,7 +161,9 @@ export class Traffic {
         const to = this.resolveLane(c.to);
         if (!to) continue;
         const tl = to.link;
-        starts.push({ link: tl, cost: c.len / c.speed + tl.len / tl.eff });
+        // 目前沒有空間可進入的方向加重成本（例如圓環出口塞住時改為繼續繞行）
+        const blockedPenalty = this.hasSpace(c, v) ? 0 : 60;
+        starts.push({ link: tl, cost: c.len / c.speed + tl.len / tl.eff + blockedPenalty });
         if (tl.seg.id === dest.seg) {
           const along = tl.dir > 0 ? dest.u : tl.seg.len - dest.u;
           const cost = c.len / c.speed + along / tl.eff;
@@ -253,11 +255,24 @@ export class Traffic {
   hasSpace(c, v) {
     const to = this.resolveLane(c.to);
     if (!to) return false;
+    // 進入圓環：保持環道淨空，需留約兩車的空間，且環道上游車流停滯時不進入，避免整圈卡死
+    const enterRing = to.seg.ring && !c.from.seg.ring;
+    if (enterRing) {
+      for (const sib of c.siblings) {
+        const w = sib.from.vehs[0];
+        if (w && sib.from.seg.ring && w.v < 2 && sib.from.len - w.s < 15) return false;
+      }
+    }
     let free = to.len;
     if (to.vehs.length) {
       const last = to.vehs[to.vehs.length - 1];
-      if (last.v > 4) return true;
+      if (last.v > 4 && !enterRing) return true;
       free = last.s - last.len;
+    }
+    if (enterRing) {
+      for (const w of c.vehs) if (w !== v) free -= w.len + 2;
+      for (const sib of c.siblings) for (const w of sib.vehs) free -= w.len + 2;
+      return free > Math.min(v.len * 2 + 8, to.len * 0.85);
     }
     for (const w of c.vehs) if (w !== v) free -= w.len + 2;
     for (const sib of c.siblings) {
@@ -495,9 +510,10 @@ export class Traffic {
       v.rerouteT -= dt;
       if (tr.kind === 'lane') {
         if (v.needRoute) this.reroute(v);
-        else if ((v.rerouteT <= 0 || (v.waitT > 12 && !v.triedReroute)) && this.rerouteBudget > 0) {
+        else if ((v.rerouteT <= 0 || (v.waitT > 12 && !v.triedReroute) || (tr.seg.ring && v.waitT > 2.5 && !v.triedReroute)) && this.rerouteBudget > 0) {
+          // 在圓環上出口塞住時，不停在環道上，改為繼續繞行
           this.rerouteBudget--;
-          if (v.waitT > 12) v.triedReroute = true;
+          if (v.waitT > 2.5) v.triedReroute = true;
           v.rerouteT = 20 + (v.id % 23);
           this.reroute(v);
         }

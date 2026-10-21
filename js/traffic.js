@@ -501,6 +501,27 @@ export class Traffic {
     return free > Math.min(v.len + 2.5, to.len * 0.6);
   }
 
+  // 從目前車速以最大加速度加速到 vmax，開 D 公尺要幾秒
+  tReach(w, D, vmax) {
+    if (D <= 0) return 0;
+    const a = w.a || 1.5, v0 = Math.min(w.v, vmax), t1 = (vmax - v0) / a, d1 = (v0 + vmax) / 2 * t1;
+    return D <= d1 ? (-v0 + Math.sqrt(v0 * v0 + 2 * a * D)) / a : t1 + (D - d1) / vmax;
+  }
+  // 路口內交叉連接線上的車 w 會不會和我（在連接線起點前 dist 公尺）在交叉點相撞
+  crossBlocks(v, c, dist, cf, w) {
+    const Z = 2.5;
+    const wIn = cf.other - Z - w.s, wOut = cf.other + Z + w.len - w.s;
+    if (wOut <= 0) return false;                       // 已經開過交叉點
+    const vmW = Math.max(cf.c.speed, 3);
+    const tWOut = w.v < 0.5 && wIn <= 0 ? Infinity : this.tReach(w, wOut, vmW);
+    const tMeIn = this.tReach(v, dist + cf.at - Z, Math.max(c.speed, 3));
+    if (tWOut + 1.5 < tMeIn) return false;            // 對方會先開過去
+    // 對方停在交叉點前方夠遠處（被前車擋住），我能在它起步開到交叉點之前開過去
+    if (wIn <= 6 || w.v >= 0.5) return true;
+    const tMeOut = this.tReach(v, dist + cf.at + Z + v.len, Math.max(c.speed, 3));
+    return !(tMeOut + 2.5 < this.tReach(w, wIn, vmW));
+  }
+
   canEnter(v, c, dist) {
     const node = c.node;
     if (node.control === 'signal' && node.signal) {
@@ -526,8 +547,9 @@ export class Traffic {
     const gapT = c.from.seg.T.internal ? 3.2 - 1.6 * clamp(v.waitT / 15, 0, 1) : 4.5 - 2.3 * clamp(v.waitT / 30, 0, 1);
     for (const cf of c.conflicts) {
       const oc = cf.c;
-      // 交叉方向的連接線上還有車沒完全開過交叉點（車尾離交叉點不到 2.5 m）才要等；已經開過去的不擋
-      if (cf.type === 'cross' && oc.vehs.some(w => w.s - w.len < cf.other + 2.5)) return false;
+      // 交叉方向的連接線上還有車沒完全開過交叉點：依時間窗判斷，對方開過去之後我才到、
+      // 或我開過去之後對方才到（各留安全間隔）就可以走，不必等對方整台車開過交叉點
+      if (cf.type === 'cross' && oc.vehs.some(w => this.crossBlocks(v, c, dist, cf, w))) return false;
       const w = oc.from.vehs[0];
       if (!w || w === v || w.nextConn !== oc) continue;
       const wd = oc.from.len - w.s;
@@ -633,7 +655,16 @@ export class Traffic {
     v0 = Math.max(v0, 1);
     v.v0eff = v0;
     const ld = this.leader(v);
-    return clamp(this.idm(v, v0, ld.gap, v.v - ld.lv), -9, v.a);
+    let acc = this.idm(v, v0, ld.gap, v.v - ld.lv);
+    // 禮讓：旁邊車道要切進來的車（必須換車道才能轉彎、卡在排隊車流旁）就在前方時，留一個車位給它
+    const w = v.yieldTo;
+    if (w) {
+      const ok = v.yieldT > 0 && !w.dead && tr.kind === 'lane' && w.track.kind === 'lane' && w.track.link === tr.link && Math.abs(w.track.idx - tr.idx) === 1;
+      const s2 = ok ? w.s / w.track.len * tr.len : 0;
+      if (ok && s2 > v.s && s2 - v.s < 30) acc = Math.min(acc, this.idm(v, v0, s2 - w.len - 1 - v.s, v.v - w.v));
+      else v.yieldTo = null;
+    }
+    return clamp(acc, -9, v.a);
   }
 
   // ---------- 變換車道 ----------
@@ -683,10 +714,12 @@ export class Traffic {
       const gapB = follow ? s2 - v.len - follow.s : Infinity;
       const urg = mand ? clamp(1 - distEff / 180, 0, 1) : 0;
       const minGap = mand ? 1 + (1 - urg) * 2 : 2.5;
-      if (gapF < minGap || gapB < minGap) continue;
+      // 必須換車道而且快到路口：請目標車道的後車禮讓（computeAccel 的 yieldTo），下一次再試就有空隙
+      const ask = () => { if (mand && urg > 0.3 && follow && !follow.committed && (!follow.yieldTo || follow.yieldTo === v)) { follow.yieldTo = v; follow.yieldT = 8; } };
+      if (gapF < minGap || gapB < minGap) { if (gapB < minGap) ask(); continue; }
       if (follow) {
         const fAcc = this.idm(follow, follow.v0eff, gapB, follow.v - v.v);
-        if (fAcc < -(mand ? 3 + urg * 4 : 2.5)) continue;
+        if (fAcc < -(mand ? 3 + urg * 4 : 2.5)) { ask(); continue; }
       }
       if (!mand) {
         const accNew = this.idm(v, v.v0eff, gapF, lead ? v.v - lead.v : 0);
@@ -700,6 +733,7 @@ export class Traffic {
       v.lat = -d * LANE_W;
       v.nextConn = null;
       v.lcCool = mand ? 1.2 : 4;
+      if (follow && follow.yieldTo === v) follow.yieldTo = null;
       return;
     }
   }
@@ -786,6 +820,7 @@ export class Traffic {
       v.braking = v.acc < -1.2;
       if (v.lat) { v.lat *= Math.exp(-dt * 2.2); if (Math.abs(v.lat) < 0.02) v.lat = 0; }
       v.lcCool -= dt;
+      if (v.yieldTo) v.yieldT -= dt;
       v.age += dt;
       if (v.v < 0.5) v.waitT += dt; else { v.waitT = 0; v.triedReroute = false; }
       this.advance(v);
@@ -807,7 +842,7 @@ export class Traffic {
       v.rerouteT -= dt;
       if (tr.kind === 'lane') {
         if (v.needRoute) this.reroute(v);
-        else if ((v.rerouteT <= 0 || (v.waitT > 12 && !v.triedReroute) || (tr.seg.ring && v.waitT > 2.5 && !v.triedReroute)) && this.rerouteBudget > 0) {
+        else if ((v.rerouteT <= 0 || (v.waitT > 12 && !v.triedReroute) || (v.waitT > 5 && !v.triedReroute && tr.len - v.s < 25 && !this.chooseConn(v)) || (tr.seg.ring && v.waitT > 2.5 && !v.triedReroute)) && this.rerouteBudget > 0) {
           // 在圓環上出口塞住時，不停在環道上，改為繼續繞行
           this.rerouteBudget--;
           if (v.waitT > 2.5) v.triedReroute = true;
@@ -840,6 +875,8 @@ export class Traffic {
       let sum = 0, k = 0;
       for (const lane of L.lanes) for (const w of lane.vehs) { sum += w.v; k++; if (w.v < 1) waiting++; }
       L.count = k;
+      // 每秒經過的車數（約為 Σ車速 / 路段長），加油站的過路客用（city.hourly 讀取後歸零）
+      L.passAcc = (L.passAcc || 0) + sum / Math.max(10, L.len);
       const target = k ? Math.min(L.limit, sum / k) : L.limit;
       L.flow += (target - L.flow) * (k ? 0.2 : 0.05);
       const density = k * 7 / Math.max(10, L.len * L.lanes.length);

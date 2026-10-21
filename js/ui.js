@@ -255,8 +255,8 @@ export class UI {
           return `<dl><dt>公車</dt><dd>${run.length} 輛行駛中 / ${g.city.truckSlotsOf(b).length} 個車位</dd>
             <dt>路線</dt><dd>${lines.map(l => `<span style="color:${l.color}">■</span> ${l.name}（${l.stops.length} 站）`).join('<br>') || '—（附近還沒有住宅或工作地點）'}</dd>
             <dt>候車人數</dt><dd>${waiting}</dd><dt>車上乘客</dt><dd>${run.reduce((a, v) => a + v.pax.length, 0)}</dd>
-            <dt>累計載客</dt><dd>${tr.stats.riders} 人次（無公車可搭改走路 ${tr.stats.walked} 次）</dd></dl>
-            <p class="note">路線由系統依附近住宅與工作地點自動規劃（每 6 個遊戲小時更新）。家裡車子都開走的居民會走到 350 m 內的站牌搭車。</p>`;
+            <dt>累計載客</dt><dd>${tr.stats.riders} 人次（轉乘 ${tr.stats.transfers || 0} 次；無公車可搭改走路 ${tr.stats.walked} 次）</dd></dl>
+            <p class="note">路線由系統依附近住宅與工作地點自動規劃（每個遊戲日更新，站牌盡量不動）；每條路線都經過離總站最近的轉乘站，可以換一次車。家裡沒車可開、或選擇搭公車的居民，會走到 450 m 內的站牌搭車。</p>`;
         }
         if (b.zone === 'R') {
           rows += `<dt>居民</dt><dd>${cap}</dd>

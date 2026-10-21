@@ -45,7 +45,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 | `terrain.js` | 程序化地形（8 m 格點）、河流、水域、樹；`getCanvas()` 以每像素 2 m 雙線性內插畫地表。3.6 km 地圖保證市中心 700 m 內為陸地（2.4 km 舊存檔維持舊地形） |
 | `network.js` | 路網核心：節點、路段（`seg.go` 為分區格線位移，切開 / 反向時沿用）、車道、路口車道連接（`genConnections`、`alignLanes` 處理車道增減）、衝突點、號誌時相、`planRoad` / `executeRoad`、圓環、`splitSegment`、`replaceSegment`、存讀檔 |
 | `routing.js` | 以有向路段為節點的 Dijkstra，成本為即時壅塞下的行駛時間。`findRoute(net, starts, dest, allow)`：設有閘門（`seg.gate = 建築 id`）的場內道路只讓 `allow` 名單內（起訖建築）的車通過 |
-| `traffic.js` | 車輛代理人：IDM 跟車、MOBIL 式換道、路口通行判斷、重新選路；停車（見下方「停車系統」）；`fx` 為停車 / 出車動畫清單 |
+| `traffic.js` | 車輛代理人：IDM 跟車、MOBIL 式換道（必須換道時請目標車道後車禮讓：`v.yieldTo`）、路口通行判斷（交叉車輛用時間窗 `crossBlocks` / `tReach`）、重新選路；停車（見下方「停車系統」）；`fx` 為停車 / 出車動畫清單 |
 | `city.js` | 地塊與建築、行程產生、滿意度、需求、成長（`developLots`、`autoGrow`）、財務、場內道路（`driveway`、`buildParkRoads`、`connectPark`、閘門）、停車位（`slotsOf`、`slotOcc`、`slotRes`）、存讀檔 |
 | `lotart.js` | 地塊上的建築圖形（歐洲風格；純函式 `lotArt(b)` → `{ base, items, slots }`，以地塊區域座標 u/v 產生），city 與 render 都會用；停車位順序（`it.rank`）兩邊一致。rect 的 `roof`（gable / hip / mansard / saw，沒有就是平屋頂）、`ridge`、`wall`、`win`、`shop`、`chimney`、`solar`、`sky` 由 `render.js` 的 `pitchedRoof` / `sawRoof` / `wallWindows` 畫出；`deco`（樹籬、陽傘）不算建物 |
 | `render.js` | Canvas 2D：可旋轉視角（`cam.rot`；`worldTf` / `localTf`、`toWorld` / `toScreen` / `screenDelta` 都含旋轉；高度一律用 `lift(p, h)` 沿畫面上方抬高、`depth(p)` 決定前後順序、`so()` 沿畫面方向位移，不要再寫 `p.y - H`）。繪製順序：`drawBuildings(v, 'ground')` 地塊鋪面與停著的車 → 地面 / 地下道路與車 → `drawBuildings(v, 'tall')` 建物立體部分 → 高架道路（道路不會蓋到建物）。建築（斜投影立體：牆面、斜屋頂、陰影從底部投射、樹）、多層道路（路面切成高度段、路肩漸層、標線、路口幾何 `jointGeom`）、車輛（`carBody`）、停車動畫 `drawArrivals`、閘門、號誌、熱圖、路口編輯器 |
@@ -75,7 +75,8 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 - **時間**：參考 Cities: Skylines，時鐘走得比車子快很多（時間膨脹）：`CLOCK = 4` 遊戲分鐘 / 模擬秒，一般速度（1.5 倍模擬速度）一天約 4 分鐘、▶▶ 約 2 分鐘、▶▶▶ 約 45 秒。行程產生率乘上 `TRIP_SCALE`，路上車量不隨時鐘改變；「每小時到了幾個人」的滿意度門檻（`workSat`、`custSat`、`pickJob`）乘上 `TRIP_REF`。購物停留 40～130 分鐘、貨車卸貨 30～60 分鐘。
 - **開局**：`generateWorld(g, { empty: true })` 只鋪路與劃分區、不蓋建築，`city.growStart` 之後（開局 6 個遊戲小時）才開始發展；新建築有 1 天緩衝才會被判定衰退。測試用的 `makeGame` 沿用直接蓋好的小鎮。
 - **自動發展**：每 30 遊戲分鐘一次（交通壅塞 ≥ 0.35 時暫停）；需求依人口 / 工作比例、滿意度、壅塞與行程失敗計算；開啟「自動發展」時，需求 > 0.1 且空地塊 < 3 塊就自動在主路網旁劃設分區。
-- **大眾運輸**：分區 `T`（公車總站，最大 16×16），`developLots` 不看需求直接蓋；公車停車位用貨車車位（`tslots`、`b.tOcc`）。公車是 `v.bus = 路線 id` 的車輛（長 12 m），`v.busDest` 為下一站，到站停靠（`v.dwell`）後 `traffic.nextBusStop(v)`；路線取消時 `retireBus` 開回總站。居民沒車可開或以 `BUS_SHARE`（city.js）機率選擇公車時呼叫 `transit.board`；候車上限以模擬秒計（`MAX_WAIT_S`），因為時間膨脹下公車繞一圈要好幾個遊戲小時。
+- **大眾運輸**：分區 `T`（公車總站，最大 16×16），`developLots` 不看需求直接蓋；公車停車位用貨車車位（`tslots`、`b.tOcc`）。公車是 `v.bus = 路線 id` 的車輛（長 12 m），`v.busDest` 為下一站，到站停靠（`v.dwell`）後 `traffic.nextBusStop(v)`；路線取消時 `retireBus` 開回總站。居民沒車可開或以 `BUS_SHARE`（city.js）機率選擇公車時呼叫 `transit.board`（直達或在轉乘站 `line.hub` 換一次車，乘客 `p.next`）；站牌編號跨規劃沿用（`transit.nextId`），重新規劃後公車接著開往路線上的站；候車上限以模擬秒計（`MAX_WAIT_S`），因為時間膨脹下公車繞一圈要好幾個遊戲小時。
+- **商業顧客**（`city.hourly`）：`custLevel` 累積來客、每小時乘 0.9；全市來客 `stats.custTot` 依 `cap × SHOP_KINDS.shop` 分份額，達到份額六成即滿意。另有走路顧客（每戶住宅分給 450 m 內商店，不產生車）；加油站看路過車輛（`L.passAcc`，traffic.updateFlow 累積）；辦公大樓只看員工、不收貨。
 - **需求門檻**：`DEMAND_BUILD = 0.2`（空地塊發展）、`DEMAND_ZONE = 0.35`（自動劃設分區），需求條上有虛線。`SEP_RI = 250` m：工業與住宅的最小距離（開局與自動劃設都遵守）。
 - **開局選項**：`newGame({ start: 'town' | 'blank' })`；`blank` 只有外部連線、`autoGrow = false`。小鎮為 3 條大道（`worldgen.js` 的 `avX` / `avY`）的大棋盤，街廓夠深可劃 24×24。
 - **鋪路吸附**：`tools.js` 的 `snap()` 在接到另一條路時讓接點沿該路滑動成垂直 / 45° / 與起點道路平行；`planRoad` 會修掉超出路口不到 12 m 的多餘路段。只有 3 條以上道路的節點才會被選成「路口」（連續鋪路的轉折點不算）。
@@ -102,7 +103,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 
 ## 已知問題 / 可以繼續的方向
 
-- 無號誌的大路口（尤其 5 岔以上）在車流大時可能塞死；可考慮自動建議號誌或改善讓路邏輯。高密度住宅附近塞車主要是無號誌路口容量不足（佇列車頭約七成停在路口），曾試過在大道路口自動設號誌，反而更慢（號誌時相太死板），已撤回。
+- 無號誌的大路口（尤其 5 岔以上）在車流大時可能塞死；可考慮自動建議號誌或改善讓路邏輯。高密度住宅附近塞車主要是無號誌路口容量不足；改用時間窗判斷交叉車輛、換道禮讓後，壓力測試城市（市中心 17 棟高密度住宅）的慢速時間從 8.7% 降到約 5%。在大道路口自動設號誌（各方向輪流或對向同時通行都試過）都更慢，沒有採用。
 - 公車載客量還不高：只有沒車可開或少數（`BUS_SHARE`）居民會搭，而且起訖兩端都要在站牌 350 m 內。
 - 只接一條外部連線時沒有過境車流（設計如此）；若要更多聯外車流可在開局接兩條。
 - 工業園區道路之外的「內部道路依周邊道路調整」目前只做後方與兩側打通，沒有更複雜的內部路網重規劃。

@@ -1,15 +1,17 @@
 // 大眾運輸：公車總站（大眾運輸分區）、自動規劃的公車路線與站牌、乘客
 // - 站牌：住宅 / 商業 / 工業建築臨路的位置依人口、工作數加權，由大到小挑，彼此至少相距 STOP_GAP
-// - 路線：每個總站依公車數開 1～3 條；站牌依相對總站的方位分組，每組從離總站最近的站開始以最近鄰排成環狀路線
+// - 路線：每個總站開 1～4 條；離總站最近的站是轉乘站（每條路線都經過），其餘站牌依相對總站的方位分組，
+//   每組從轉乘站開始以最近鄰排成環狀路線
 // - 公車：從總站的公車停車格開出，依序繞行各站，每站停靠時上下客；路線取消時開回總站停好
-// - 乘客：家裡車子都開走的居民，若起點與目的地附近（WALK 公尺內）都有同一條路線的站牌，就走到站牌等車；否則走路
+// - 乘客：家裡車子都開走（或選擇搭公車）的居民，若起點與目的地附近（WALK 公尺內）都有站牌、搭同一條路線或在轉乘站換一次車到得了，
+//   就走到站牌等車；否則走路
 import { pointAt, clamp } from './util.js';
 import { routeFromPoint } from './routing.js';
 import { CLOCK } from './config.js';
 
 const LINE_COLORS = ['#d23c2c', '#1f6fb5', '#2a9d3f', '#e08a1e', '#7d3c98', '#0f8b8d'];
 // 時間膨脹：公車繞一圈要好幾個遊戲小時，候車上限以模擬秒計（MAX_WAIT_S）；每條路線最多 MAX_STOPS 站
-const STOP_GAP = 280, WALK = 350, RANGE = 1500, PLAN_EVERY = 360, MAX_WAIT_S = 240, MAX_STOPS = 7, CAPACITY = 60, HEADWAY = 50;
+const STOP_GAP = 240, WALK = 450, RANGE = 1500, PLAN_EVERY = 1440, MAX_WAIT_S = 240, MAX_STOPS = 9, CAPACITY = 60, HEADWAY = 50;
 export const BUS_LEN = 12, BUS_W = 2.6;
 
 export class Transit {
@@ -18,6 +20,7 @@ export class Transit {
     this.lines = [];
     this.stops = [];
     this.planT = 0;
+    this.nextId = 1;   // 站牌編號一直往上加：重新規劃時位置沒變的站牌沿用原編號（車上乘客記的是站牌編號）
     this._key = '';
     this.stats = { riders: 0, walked: 0 };
   }
@@ -56,12 +59,15 @@ export class Transit {
         cands.push({ seg: s.id, u: clamp(ref.u, s.ra + 10, s.len - s.rb - 10), w: C.cap(b) * (b.zone === 'R' ? 1 : 0.8) });
       }
       cands.sort((a, b) => b.w - a.w);
-      let id = 0;
       for (const c of cands) {
         const s = net.segs.get(c.seg), p = pointAt(s.pts, s.cum, c.u);
         if (!depots.some(d => Math.hypot(d.x - p.x, d.y - p.y) < RANGE)) continue;
-        if (this.stops.some(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP)) continue;
-        this.stops.push({ id: ++id, seg: c.seg, u: c.u, x: p.x, y: p.y, dx: p.dx, dy: p.dy, lines: [], queue: [] });
+        // 附近原本就有站牌（同方向）：沿用原來的站牌，站位不動
+        const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t));
+        const q = o ? { x: o.x, y: o.y } : p;
+        if (this.stops.some(t => Math.hypot(t.x - q.x, t.y - q.y) < STOP_GAP)) continue;
+        if (o) { o.lines = []; this.stops.push(o); }
+        else this.stops.push({ id: this.nextId++, seg: c.seg, u: c.u, x: p.x, y: p.y, dx: p.dx, dy: p.dy, lines: [], queue: [] });
         if (this.stops.length >= 80) break;
       }
       let li = 0;
@@ -70,15 +76,18 @@ export class Transit {
         // 總站到得了的站牌（同一個路網連通區）
         const from = { seg: d.seg, u: d.u, id: d.id };
         const mine = this.stops.filter(t => !t.lines.length && Math.hypot(t.x - d.x, t.y - d.y) < RANGE && routeFromPoint(net, from, { seg: t.seg, u: t.u, id: d.id }));
-        if (mine.length < 2) continue;
-        const nLines = clamp(Math.ceil(mine.length / MAX_STOPS), 1, Math.min(4, Math.floor(mine.length / 2)));
+        if (mine.length < 3) continue;
+        // 轉乘站：離總站最近的站，每條路線都從這裡出發
+        mine.sort((a, b) => Math.hypot(a.x - d.x, a.y - d.y) - Math.hypot(b.x - d.x, b.y - d.y));
+        const hub = mine.shift();
+        const nLines = clamp(Math.ceil(mine.length / (MAX_STOPS - 1)), 1, Math.min(4, Math.floor(mine.length / 2)));
         mine.sort((a, b) => Math.atan2(a.y - d.y, a.x - d.x) - Math.atan2(b.y - d.y, b.x - d.x));
         const per = Math.ceil(mine.length / nLines);
         for (let k = 0; k < nLines; k++) {
-          const group = mine.slice(k * per, (k + 1) * per).slice(0, MAX_STOPS);
+          const group = mine.slice(k * per, (k + 1) * per).slice(0, MAX_STOPS - 1);
           if (group.length < 2) continue;
-          const order = [], left = [...group];
-          let cur = { x: d.x, y: d.y };
+          const order = [hub], left = [...group];
+          let cur = hub;
           while (left.length) { left.sort((a, b) => Math.hypot(a.x - cur.x, a.y - cur.y) - Math.hypot(b.x - cur.x, b.y - cur.y)); cur = left.shift(); order.push(cur); }
           li++;
           // 繞一圈的估計時間（模擬秒）：站間直線距離 × 1.3，平均 9 m/s，每站停 6 秒；發車間隔 = 一圈時間 / 公車數
@@ -86,7 +95,7 @@ export class Transit {
           let loop = 0;
           order.forEach((t, i) => { const n2 = order[(i + 1) % order.length]; loop += Math.hypot(n2.x - t.x, n2.y - t.y) * 1.3 / 9 + 6; });
           const nb = clamp(Math.round(loop / HEADWAY), 1, Math.max(1, Math.floor(buses / nLines)));
-          const line = { id: li, name: `${li} 路`, color: LINE_COLORS[(li - 1) % LINE_COLORS.length], depot: d.id, stops: order.map(t => t.id), buses: nb, headway: loop / nb * CLOCK, nextT: 0 };
+          const line = { id: li, name: `${li} 路`, color: LINE_COLORS[(li - 1) % LINE_COLORS.length], depot: d.id, hub: hub.id, stops: order.map(t => t.id), buses: nb, headway: loop / nb * CLOCK, nextT: 0 };
           // 實際行駛路徑（畫路線圖用）：總站 → 各站 → 回到第一站
           const keys = new Set();
           [from, ...order, order[0]].forEach((p, i, arr) => {
@@ -101,10 +110,23 @@ export class Transit {
       }
       this.stops = this.stops.filter(t => t.lines.length);
     }
-    // 舊站牌上等車的乘客：新站牌在附近而且同一條路線到得了目的地就移過去，否則改走路
-    for (const t of old) for (const p of t.queue) if (!this.board(p.trip, p.t)) this.walk(p.trip);
-    // 路線不存在的公車開回總站
-    for (const v of this.game.traffic.vehicles) if (v.bus && !this.line(v.bus)) this.game.traffic.retireBus(v);
+    // 等車的乘客：站牌取消、或原本的路線到不了目的地的，重新找站牌（找不到就走路）
+    const again = [];
+    for (const t of old) {
+      const keep = this.stops.includes(t);
+      t.queue = t.queue.filter(p => { const L = keep && this.line(p.line); if (L && L.stops.includes(t.id) && L.stops.includes(p.to)) return true; again.push(p); return false; });
+    }
+    for (const p of again) if (!this.board(p.trip, p.t)) this.walk(p.trip);
+    // 公車：路線不存在的開回總站；還在的接著開往路線上的下一站
+    const tr = this.game.traffic;
+    for (const v of tr.vehicles) {
+      if (!v.bus) continue;
+      const L = this.line(v.bus);
+      if (!L) { tr.retireBus(v); continue; }
+      const i = v.busDest ? L.stops.indexOf(v.busDest.stop) : -1;
+      if (i >= 0) { v.stopIdx = i; const t = this.stop(L.stops[i]); if (v.busDest.seg !== t.seg) { v.busDest = { ...v.busDest, seg: t.seg, u: t.u }; tr.reroute(v); } }
+      else if (!v.dwell) { v.stopIdx = -1; tr.nextBusStop(v); }
+    }
   }
 
   // 依路線缺少的公車數，從總站派車
@@ -121,24 +143,28 @@ export class Transit {
     }
   }
 
-  // 居民改搭公車：起點與目的地附近都有同一條路線的站牌（走路距離最短的一組）。成功回傳 true
+  // 居民改搭公車：起點與目的地附近都有站牌，搭同一條路線直達，或在轉乘站換一次車（換車多算 300 m 的不便）。
+  // 選走路距離最短的一組；成功回傳 true
   board(trip, t0 = this.game.time) {
     const a = trip.from, b = trip.to;
     if (!a || !b || a.outside || b.outside || !this.stops.length) return false;
+    const s1s = this.stops.map(t => [t, Math.hypot(t.x - a.x, t.y - a.y)]).filter(e => e[1] <= WALK);
+    const s2s = this.stops.map(t => [t, Math.hypot(t.x - b.x, t.y - b.y)]).filter(e => e[1] <= WALK);
     let best = null;
-    for (const s1 of this.stops) {
-      const d1 = Math.hypot(s1.x - a.x, s1.y - a.y);
-      if (d1 > WALK) continue;
-      for (const s2 of this.stops) {
-        if (s2 === s1) continue;
-        const d2 = Math.hypot(s2.x - b.x, s2.y - b.y);
-        if (d2 > WALK) continue;
-        const ln = s1.lines.find(l => s2.lines.includes(l));
-        if (ln && (!best || d1 + d2 < best.d)) best = { s1, s2, ln, d: d1 + d2 };
+    for (const [s1, d1] of s1s) for (const [s2, d2] of s2s) {
+      if (s2 === s1) continue;
+      const ln = s1.lines.find(l => s2.lines.includes(l));
+      if (ln) { if (!best || d1 + d2 < best.d) best = { s1, s2, ln, d: d1 + d2 }; continue; }
+      // 轉乘：兩條路線屬於同一個總站，在轉乘站換車
+      for (const l1 of s1.lines) for (const l2 of s2.lines) {
+        const L1 = this.line(l1), L2 = this.line(l2);
+        if (!L1 || !L2 || L1.hub !== L2.hub || s1.id === L1.hub || s2.id === L2.hub) continue;
+        const d = d1 + d2 + 300;
+        if (!best || d < best.d) best = { s1, s2: this.stop(L1.hub), ln: l1, d, next: { line: l2, to: s2.id } };
       }
     }
     if (!best) return false;
-    best.s1.queue.push({ trip, to: best.s2.id, line: best.ln, t: t0 });
+    best.s1.queue.push({ trip, to: best.s2.id, line: best.ln, t: t0, next: best.next });
     return true;
   }
   // 沒有公車可搭：走路（行程照樣完成）
@@ -147,12 +173,20 @@ export class Transit {
   // 公車到站：下車的乘客完成行程，等車的乘客上車；回傳停靠秒數
   exchange(v, stop) {
     let n = 0;
-    const off = v.pax.filter(p => p.to === stop.id);
-    v.pax = v.pax.filter(p => p.to !== stop.id);
-    for (const p of off) { n++; this.stats.riders++; this.city.onTripEnd(p.trip, true, Math.max(60, (this.game.time - p.t) / CLOCK)); }
+    // 下車：到站的乘客，以及重新規劃後這條路線不再經過目的地的乘客（從這裡走過去）
+    const L = this.line(v.bus), gone = p => p.to === stop.id || !L || !L.stops.includes(p.to);
+    const off = v.pax.filter(gone);
+    v.pax = v.pax.filter(p => !gone(p));
+    for (const p of off) {
+      n++;
+      // 轉乘：在這站排下一條路線
+      if (p.next) { stop.queue.push({ trip: p.trip, to: p.next.to, line: p.next.line, t: p.t }); this.stats.transfers = (this.stats.transfers || 0) + 1; continue; }
+      this.stats.riders++; this.city.onTripEnd(p.trip, true, Math.max(60, (this.game.time - p.t) / CLOCK));
+    }
     const keep = [];
     for (const p of stop.queue) {
-      if (p.line === v.bus && v.pax.length < CAPACITY) { v.pax.push(p); n++; } else keep.push(p);
+      // 剛在這站下車要轉乘的乘客不會又上同一輛車（路線不同）
+      if (p.line === v.bus && p.to !== stop.id && v.pax.length < CAPACITY) { v.pax.push(p); n++; } else keep.push(p);
     }
     stop.queue = keep;
     return clamp(4 + n * 0.25, 4, 10);

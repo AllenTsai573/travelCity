@@ -6,7 +6,7 @@ import { lotArt, lotAisles, lotParkArea } from './lotart.js';
 
 const ema = (a, x, k) => a + (x - a) * k;
 // 有公車可搭時（起訖附近都有同一條路線的站牌），就算有車也改搭公車的居民比例
-const BUS_SHARE = 0.35;
+const BUS_SHARE = 0.5;
 
 // 需要場內道路的建築：工業園區（主幹道＋大園區的橫向道路）與附停車場的商業（從臨路開進停車場的車道）
 // 回傳車道終點與橫向道路離路邊的距離（公尺），與 lotart.js 的配置一致
@@ -537,7 +537,7 @@ export class City {
     return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * (SHOP_KINDS[x.kind]?.shop || 1) * this.near(b, x, x.kind === 'bigbox' || x.kind === 'mall' ? 900 : 450));
   }
   pickGoodsDest(b) {
-    return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * (x.stock < 10 ? 2 : 0.4) * this.near(b, x, 1000));
+    return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned && x.kind !== 'office'), x => this.cap(x) * (x.stock < 10 ? 2 : 0.4) * this.near(b, x, 1000));
   }
   pickOutside(b) {
     const os = this.liveOutside();
@@ -595,7 +595,7 @@ export class City {
       case 'shop':
         if (from.zone === 'R') from.shopOK = ema(from.shopOK, 1, 0.15);
         if (!to.dead) {
-          to.custLevel += 1;
+          to.custLevel += 1; this.stats.custHour = (this.stats.custHour || 0) + 1;
           to.stock = Math.max(0, to.stock - 0.4);
           this.schedule(g.time + 40 + g.rng.next() * 90, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit });
         }
@@ -604,7 +604,7 @@ export class City {
       case 'visit':
         // 住一晚，隔天上午離開
         if (!to.dead) {
-          to.custLevel += 1;
+          to.custLevel += 1; this.stats.custHour = (this.stats.custHour || 0) + 1;
           const day = Math.floor(g.time / 1440) * 1440;
           this.schedule(day + 1440 + 9 * 60 + g.rng.next() * 180, { kind: 'home', from: to, to: from, truck: false });
         }
@@ -786,6 +786,38 @@ export class City {
     const workHours = hour >= 9 && hour <= 16;
     const noisy = [...net.segs.values()].filter(s => s.T.rank >= 3 && s.drawLevel >= 0);
     const inds = this.buildings.filter(b => b.zone === 'I' && !b.abandoned);
+    // 顧客：全市最近約 10 小時的來客數（每小時衰減 0.9），各商店依吸引力（容量 × 購物權重）分到應有的份額；
+    // 來客達到份額的六成就算滿意。購物行程集中在下午，以小時計會讓商店每晚都掉到零
+    const st = this.stats, shopW = b => this.cap(b) * (SHOP_KINDS[b.kind]?.shop || 1);
+    // 走路來的顧客（不產生車輛）：附近 450 m 內住宅的居民，下午最多；加油站則是路過的車進來加油
+    const homes = this.buildings.filter(b => b.zone === 'R' && !b.abandoned), pWalk = gauss(hour + 0.5, 14.5, 3.2) + 0.01;
+    for (const b of this.buildings) {
+      if (b.zone !== 'C' || b.abandoned || b.kind === 'office') continue;
+      if (b.kind === 'gas') {
+        const s = net.segs.get(b.seg);
+        if (s) b.custLevel += ((s.links[1].passAcc || 0) + (s.links[-1].passAcc || 0)) * 0.25;
+        continue;
+      }
+    }
+    // 每戶走路購物的人分給 450 m 內的商店（依吸引力與距離），大型店主要靠開車來的顧客
+    const shopsC = this.buildings.filter(b => b.zone === 'C' && !b.abandoned && b.kind !== 'office' && b.kind !== 'gas');
+    for (const h of homes) {
+      const near = [];
+      let tw = 0;
+      for (const b of shopsC) {
+        const d = Math.hypot(h.x - b.x, h.y - b.y);
+        if (d >= 450) continue;
+        const w = shopW(b) * (1 - d / 450) * (b.kind === 'mall' || b.kind === 'bigbox' ? 0.3 : 1);
+        near.push([b, w]); tw += w;
+      }
+      if (!tw) continue;
+      const n = this.cap(h) * 0.02 * pWalk;
+      for (const [b, w] of near) b.custLevel += n * w / tw;
+      st.custHour = (st.custHour || 0) + n;
+    }
+    for (const L of net.links.values()) L.passAcc = 0;
+    st.custTot = (st.custTot || 0) * 0.9 + (st.custHour || 0); st.custHour = 0;
+    const custW = this.buildings.reduce((a, b) => a + (b.zone === 'C' && !b.abandoned && b.kind !== 'office' && b.kind !== 'gas' ? shopW(b) : 0), 0);
     let income = 0;
     for (const b of this.buildings) {
       if (b.zone === 'T') { b.happy = 1; b.workSat = 1; continue; }
@@ -812,9 +844,15 @@ export class City {
         if (workHours) b.workSat = ema(b.workSat, clamp(b.present / Math.max(1, cap / 3 * 0.6 * TRIP_REF), 0, 1), 0.25);
         if (b.zone === 'C') {
           b.goodsSat = ema(b.goodsSat, b.stock > 0.5 ? 1 : 0, 0.2);
-          b.custSat = ema(b.custSat, clamp(b.custLevel / Math.max(1, cap * 0.2 * TRIP_REF), 0, 1), 0.2);
-          b.custLevel *= 0.75;
-          b.happy = 0.35 * b.workSat + 0.3 * b.goodsSat + 0.35 * b.custSat;
+          if (b.kind === 'office') {
+            // 辦公大樓不靠顧客與商品，只看員工
+            b.custSat = 1; b.goodsSat = 1; b.happy = b.workSat;
+          } else {
+            const need = b.kind === 'gas' ? Math.max(0.6, cap * 0.4) : Math.max(0.4, 0.6 * st.custTot * shopW(b) / Math.max(1, custW));
+            b.custSat = ema(b.custSat, clamp(b.custLevel / need, 0, 1), 0.2);
+            b.happy = 0.35 * b.workSat + 0.3 * b.goodsSat + 0.35 * b.custSat;
+          }
+          b.custLevel *= 0.9;
           income += cap * 1.4 * b.happy;
         } else {
           b.matSat = ema(b.matSat, b.stock > 0.5 ? 1 : 0, 0.2);
@@ -852,7 +890,6 @@ export class City {
     maint *= g.diff.maint;
     g.earn(income);
     g.spend(maint, true);
-    const st = this.stats;
     st.lastIncome = st.hourIncome + income; st.lastExpense = maint;
     st.lastTrips = st.hourTrips; st.lastFails = st.hourFails;
     st.hourIncome = 0; st.hourTrips = 0; st.hourFails = 0;

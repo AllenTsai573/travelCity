@@ -14,7 +14,7 @@ const TOWER = ['#9fb4c7', '#b7c3cc', '#8fa3b5', '#c4cdd4', '#a9b8a8'];
 export function lotArt(b) {
   const r = rng(b.id * 97 + b.cols * 13 + b.rows), w = b.cols * CELL, d = b.rows * CELL, lv = b.level, items = [];
   const rect = (u0, v0, u1, v1, c, h = 0, extra = {}) => items.push({ t: 'rect', u0, v0, u1, v1, c, h, ...extra });
-  const tree = (u, v, s = 1) => items.push({ t: 'circle', u, v, r: (2 + r() * 1.4) * s, c: pick(r, ['#4f8a3c', '#5d9a47', '#467d36']), h: 1.2 });
+  const tree = (u, v, s = 1) => items.push({ t: 'circle', u, v, r: (2 + r() * 1.4) * s, c: pick(r, ['#4f8a3c', '#5d9a47', '#467d36', '#3f7a35']), h: 4 + r() * 3, tree: true });
   const road = (pts, wd = 5) => items.push({ t: 'line', pts, c: '#5b5f64', w: wd });
   const line = (pts, c, wd, dash) => items.push({ t: 'line', pts, c, w: wd, dash });
   // 停車場：沿車道兩側畫停車格（每格 2.6 m × 5 m），車道間距 17 m；real 表示主車道由路網畫出
@@ -42,6 +42,13 @@ export function lotArt(b) {
     // 底部橫向通道把各車道連起來
     if (aisles.length > 1) rect(u0 + 1, v1 - 6.5, u1 - 1, v1 - 0.5, '#878a8f');
   };
+  // 地下停車場入口坡道（臨路、靠地塊右側），以及看不見的室內車位
+  const garageRamp = (n, uc = w - 6.25) => {
+    const u0 = uc - 2.75, u1 = uc + 2.75;
+    rect(u0, 0, u1, 9, '#5b5f64');
+    rect(u0 + 0.6, 5.5, u1 - 0.6, 9, '#2b2e33');
+    for (let i = 0; i < n; i++) items.push({ t: 'rect', u0: u0 + 1.8, v0: 6, du: 1.8, dv: 3, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: 0.5 + r() * 0.5, indoor: true });
+  };
   let base = '#a6c98f';
   const fill = [0.55, 0.8, 1][lv - 1];
 
@@ -49,10 +56,12 @@ export function lotArt(b) {
     base = '#a3c98c';
     // 每戶一塊 12 m 寬的宅地：前院、車道接到路（或巷道）、車道旁的車庫、車道上一個停車位
     // home(o, t, n, W, D)：o 為宅地臨路邊的起點，t 沿臨路方向，n 往宅地內，W 寬、D 深（都在 u/v 座標，方向只會是 ±u / ±v）
+    let homes = 0;
     const home = (ou, ov, tu, tv, nu, nv, W, D) => {
       const P = (a, c) => ({ u: ou + tu * a + nu * c, v: ov + tv * a + nv * c });
       const R = (a0, c0, a1, c1, col, h, extra) => { const p = P(a0, c0), q = P(a1, c1); rect(Math.min(p.u, q.u), Math.min(p.v, q.v), Math.max(p.u, q.u), Math.max(p.v, q.v), col, h, extra); };
-      if (r() > fill + 0.1) { if (r() < 0.7) { const c = P(W / 2, D / 2); tree(c.u, c.v); } return; }
+      if (homes > 0 && r() > fill + 0.1) { if (r() < 0.7) { const c = P(W / 2, D / 2); tree(c.u, c.v); } return; }
+      homes++;
       const gw = 3.6, hw = Math.min(W - gw - 2.2, 6.5 + r() * 1.5), hd = Math.min(D - 7, 7 + r() * 2), setback = 5.6;
       const left = r() < 0.5, ha = left ? W - 1 - hw : 1, ga = left ? ha - gw : ha + hw;
       R(ha, setback, ha + hw, setback + hd, pick(r, ROOF_R), 4 + lv * 0.6 + r(), { ridge: tu ? 'u' : 'v', wall: pick(r, ['#efe6d6', '#e6dccb', '#f2efe8', '#e9d9c4', '#dfe3e6']) });
@@ -62,9 +71,11 @@ export function lotArt(b) {
       if (garage) R(ga, setback, ga + gw, setback + 5.6, '#d9d3c7', 3, {});
       const cs = garage ? setback + 0.7 : setback + 0.5, c0 = P(ga + 0.9, cs), c1 = P(ga + gw - 0.9, cs + 4.3);
       items.push({ t: 'rect', u0: Math.min(c0.u, c1.u), v0: Math.min(c0.v, c1.v), du: Math.abs(c1.u - c0.u), dv: Math.abs(c1.v - c0.v), c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r(), indoor: garage });
+      // 第二個車位：車道上（車庫前 / 室外停車位前方）
+      if (setback >= 5.2) { const e0 = P(ga + 0.9, 0.5), e1 = P(ga + gw - 0.9, 4.8); items.push({ t: 'rect', u0: Math.min(e0.u, e1.u), v0: Math.min(e0.v, e1.v), du: Math.abs(e1.u - e0.u), dv: Math.abs(e1.v - e0.v), c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r() }); }
       if (r() < 0.7) { const c = P(ha + hw / 2, setback + hd + 2.5); tree(c.u, c.v, 0.8); }
     };
-    const lane = b.rows >= 6 && b.cols >= 4;
+    const lane = b.rows >= 6 && b.cols >= 6;
     if (!lane) {
       // 一排面向道路的宅地
       const D = Math.min(d, 24);
@@ -85,27 +96,39 @@ export function lotArt(b) {
     }
   } else if (b.zt === 'R2') {
     base = '#b7c4a6';
+    if (b.rows >= 5) garageRamp(Math.round(b.cols * b.rows * 0.3));
     // 臨路一排垂直停車格（直接從道路進出），後面是連棟公寓，排與排之間留中庭
-    rect(1, 0.4, w - 1, 6, '#878a8f');
-    for (let u = 1.6; u + 2.6 <= w - 1.4; u += 2.7) {
-      line([{ u, v: 0.6 }, { u, v: 5.6 }], 'rgba(255,255,255,0.85)', 0.2);
-      items.push({ t: 'rect', u0: u + 0.45, v0: 0.9, du: 1.8, dv: 4.3, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r() });
+    // 夠深（≥ 17 m）才在臨路設停車格，否則建物直接臨路
+    const front = d >= 17;
+    if (front) {
+      rect(1, 0.4, w - 1, 6, '#878a8f');
+      for (let u = 1.6; u + 2.6 <= w - (b.rows >= 5 ? 10 : 1.4); u += 2.7) {
+        line([{ u, v: 0.6 }, { u, v: 5.6 }], 'rgba(255,255,255,0.85)', 0.2);
+        items.push({ t: 'rect', u0: u + 0.45, v0: 0.9, du: 1.8, dv: 4.3, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r() });
+      }
     }
-    for (let v = 7.5; v + 9 <= d; v += 18) {
+    let nb = 0;
+    for (let v = front ? 7.5 : 1.5; v + 6 <= d; v += 18) {
+      const v1 = Math.min(v + 9, d - 1.5);
       for (let i = 0; i < b.cols; i += 4) {
-        if (r() > fill + 0.15) { tree(i * CELL + 8, v + 4.5); continue; }
+        if (nb > 0 && r() > fill + 0.15) { tree(i * CELL + 8, v + 4.5); continue; }
+        nb++;
         const u1 = Math.min(b.cols, i + 4) * CELL - 1.5;
-        rect(i * CELL + 1.5, v, u1, v + 9, pick(r, WALL_R2), 7 + lv * 2.5, { grid: 'u' });
+        rect(i * CELL + 1.5, v, u1, v1, pick(r, WALL_R2), 7 + lv * 2.5, { grid: 'u' });
       }
       if (v + 18 <= d) for (let i = 0; i < b.cols; i += 2) if (r() < 0.5) tree(i * CELL + 6, v + 13.5, 0.8);
     }
   } else if (b.zt === 'R3') {
     base = '#c4c6c0';
+    // 地下停車場：臨路的坡道入口（車開進去就看不到），容量約每格 0.6 輛
+    garageRamp(Math.round(b.cols * b.rows * 0.6), b.cols >= 8 && b.rows >= 4 ? 24 * Math.floor(b.cols / 8) : w - 6.25);
     // 大樓：每 4×4 格一棟，周圍是廣場與樹
     const bs = b.cols >= 4 && b.rows >= 4 ? 4 : Math.min(b.cols, b.rows);
+    let nt = 0;
     for (let i = 0; i + bs <= b.cols; i += bs) for (let j = 0; j + bs <= b.rows; j += bs) {
       const cu = (i + bs / 2) * CELL, cv = (j + bs / 2) * CELL, s = bs * CELL * (0.3 + r() * 0.08);
-      if (r() > fill + 0.1) { rect(cu - s, cv - s, cu + s, cv + s, '#9aa58f'); tree(cu, cv, 1.3); continue; }
+      if (nt > 0 && r() > fill + 0.1) { rect(cu - s, cv - s, cu + s, cv + s, '#9aa58f'); tree(cu, cv, 1.3); continue; }
+      nt++;
       rect(cu - s, cv - s, cu + s, cv + s, pick(r, TOWER), 6 + lv * 5 + r() * 6, { grid: 'both' });
       tree(cu - s - 2.5, cv + s + 2, 0.8); tree(cu + s + 2.5, cv - s - 2, 0.8);
     }
@@ -159,12 +182,12 @@ export function lotArt(b) {
       rect(w * 0.25, d * 0.66, w * 0.75, d - 2, '#e8e2d4', 3.5, { awning: true });
     } else {
       // 商店街：臨路排一排店面；夠深的地塊在後方設停車場，中間留車道進去
-      const deep = Math.min(b.rows, 2) * CELL, gap = real || b.rows >= 6;
-      let u = 1;
+      const deep = Math.min(b.rows, 2) * CELL, gap = real || (b.rows >= 6 && w >= 30);
+      let u = 1, nShop = 0;
       while (u < w - 4) {
         let sw = Math.min(w - 1 - u, 7 + r() * 9);
         if (gap && u < w / 2 + 4 && u + sw > w / 2 - 4) { if (u < w / 2 - 6) sw = w / 2 - 4 - u; else { u = w / 2 + 4; continue; } }
-        if (r() < fill + 0.15) rect(u, 1.5, u + sw - 1, deep - 1, pick(r, ['#93b9df', '#bcd6ee', '#e4c9a8', '#c9d8b6', '#e8b9b0']), 4.5 + lv * 1.8, { awning: true, units: 1 });
+        if (nShop++ === 0 || r() < fill + 0.15) rect(u, 1.5, u + sw - 1, deep - 1, pick(r, ['#93b9df', '#bcd6ee', '#e4c9a8', '#c9d8b6', '#e8b9b0']), 4.5 + lv * 1.8, { awning: true, units: 1 });
         u += sw;
       }
       if (d - deep > 12) parking(2, deep + 1, w - 2, d - 2, w / 2, real, 0.3 + lv * 0.12, true);
@@ -172,9 +195,13 @@ export function lotArt(b) {
   } else {
     base = '#bab4a7';
     // 工業區：從路邊進入的主幹道，大地塊再加一條橫向道路，建築依功能不同
-    const spine = w / 2, cross = b.rows >= 10 ? d * 0.55 : null;
+    // 窄的工業地塊（不到 8 格、沒有場內道路）：前院貨車位＋後方一棟廠房
+    const compact = !b.roads && b.cols < 8;
+    const spine = w / 2, cross = !compact && b.rows >= 10 ? d * 0.55 : null;
     // 主幹道兩側 3 m 寬的裝卸區（建物從主幹道 8.5 m 外開始），貨車停在畫好的車位上
-    for (const sd of [-1, 1]) {
+    // 每側要有 17 m 以上才放裝卸區；窄的園區建物直接靠著主幹道
+    const strip = !compact && spine - 3 >= 17, gapS = strip ? 8.5 : 5;
+    for (const sd of strip ? [-1, 1] : []) {
       const u0 = sd < 0 ? spine - 7.9 : spine + 5.5;
       if (u0 < 1 || u0 + 2.4 > w - 1) continue;
       rect(u0 - 0.2, 4, u0 + 2.6, d - 5, '#9c978b');
@@ -185,19 +212,27 @@ export function lotArt(b) {
       }
     }
     // 有實際的廠區道路時由路網繪製，這裡只畫裝飾用的
-    if (!b.roads) {
+    if (!b.roads && !compact) {
       road([{ u: spine, v: 0 }, { u: spine, v: d - 4 }], 7);
       if (cross) road([{ u: 4, v: cross }, { u: w - 4, v: cross }], 7);
     }
     const blocks = [];
-    for (const [u0, u1] of [[3, spine - 8.5], [spine + 8.5, w - 3]]) {
-      if (u1 - u0 < 8) continue;
+    if (compact) {
+      const fy = Math.min(9, Math.max(5, d * 0.3));
+      rect(2, 0.5, w - 2, fy, '#9c978b');
+      for (let u = 3; u + 2.6 <= w - 3 && u < 3 + 3 * 3.2; u += 3.2) items.push({ t: 'rect', u0: u, v0: 1, du: 2.4, dv: Math.min(7.2, fy - 1.4), c: pick(r, ['#d8d8d8', '#e0b24f', '#2e6fb7', '#c0392b']), h: 0.8, car: true, truck: true, slot: r() });
+      blocks.push([2.5, fy + 1, w - 2.5, d - 2]);
+    }
+    for (const [u0, u1] of compact ? [] : [[3, spine - gapS], [spine + gapS, w - 3]]) {
+      if (u1 - u0 < 4) continue;
       if (cross) { blocks.push([u0, 3, u1, cross - 5.5], [u0, cross + 5.5, u1, d - 3]); } else blocks.push([u0, 3, u1, d - 3]);
     }
     const k = b.kind;
+    let built = 0;
     for (const [u0, v0, u1, v1] of blocks) {
-      if (v1 - v0 < 6) continue;
-      if (r() > fill + 0.2) { items.push({ t: 'rect', u0, v0, u1, v1, c: '#a7a191', h: 0 }); continue; }
+      if (v1 - v0 < 4) continue;
+      // 至少蓋一棟，其餘依等級隨機留空地
+      if (built++ > 0 && r() > fill + 0.2) { items.push({ t: 'rect', u0, v0, u1, v1, c: '#a7a191', h: 0 }); continue; }
       if (k === 'chemical') {
         const n = Math.max(1, Math.floor(Math.min(u1 - u0, v1 - v0) / 12));
         const rr = Math.min(u1 - u0, v1 - v0) / (2 * n) * 0.8;

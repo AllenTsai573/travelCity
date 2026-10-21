@@ -148,6 +148,13 @@ export class Traffic {
           const f = this.parkPath(p, leave.slot, v, false);
           this.fx.push(f);
           v.hold = f.dur;
+        } else if (from.zone && !from.dead && this.fx.length < 300) {
+          // 沒有停著的車（停在建物裡 / 地下室）：從建物入口開出來
+          const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
+          const gx = from.x - p.x, gy = from.y - p.y, L = Math.hypot(gx, gy) || 1, k = Math.min(10, L * 0.5);
+          const f = this.parkPath(p, { x: p.x + gx / L * k, y: p.y + gy / L * k, ax: gx / L, ay: gy / L, indoor: true }, v, false);
+          this.fx.push(f);
+          v.hold = f.dur;
         }
         return 'ok';
       }
@@ -579,7 +586,8 @@ export class Traffic {
     const pts = arrive
       ? [{ x: p.x, y: p.y }, { x: p.x + p.dx * k0, y: p.y + p.dy * k0 }, { x: sl.x - ax * k1, y: sl.y - ay * k1 }, { x: sl.x, y: sl.y }]
       : [{ x: sl.x, y: sl.y }, { x: sl.x + ax * k1, y: sl.y + ay * k1 }, { x: p.x - p.dx * k0, y: p.y - p.dy * k0 }, { x: p.x, y: p.y }];
-    const dur = clamp(dist * 1.25 / 4.5, 1.4, 12);
+    // 開出時車子已在車道上等，限制在 5 秒內以免擋到後面的車
+    const dur = clamp(dist * 1.25 / 3, 2.5, arrive ? 15 : 5);
     return { pts, dur, t: 0, color: v.color, len: v.len, w: v.w, truck: v.truck, arrive, b, idx, indoor: !!sl.indoor };
   }
 

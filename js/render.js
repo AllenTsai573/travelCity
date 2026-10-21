@@ -264,7 +264,7 @@ export class Renderer {
         ctx.lineCap = 'round';
       }
       for (const it of items) {
-        if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2))) continue;
+        if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2 && !it.tree))) continue;
         if (it.rank !== undefined ? it.indoor || !(b.slotOcc && b.slotOcc[it.rank]) : it.slot !== undefined && it.slot > occ) continue;
         if (it.car && detail) {
           // 停著的車與路上的車同樣畫法（顏色是實際停進來的那輛車）
@@ -301,6 +301,19 @@ export class Renderer {
           ctx.strokeStyle = '#6b6f75'; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - H); ctx.stroke();
           ctx.fillStyle = it.c; ctx.fillRect(p.x - 1.3, p.y - H - 2.4, 2.6, 2.6);
           if (z > 1.2) { ctx.fillStyle = '#fff'; ctx.font = 'bold 2.2px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(it.text, p.x, p.y - H - 1.05); ctx.textBaseline = 'alphabetic'; }
+          continue;
+        }
+        if (it.t === 'circle' && it.tree) {
+          // 樹：樹冠離地（往上抬），下緣較暗、左上方受光
+          const p = P(it.u, it.v), H = detail ? it.h * 0.35 : 0, rr = it.r;
+          if (detail) {
+            ctx.fillStyle = '#5a4632'; ctx.fillRect(p.x - 0.25, p.y - H * 0.8, 0.5, H * 0.8);
+            ctx.fillStyle = shade(it.c, 0.72); ctx.beginPath(); ctx.arc(p.x + rr * 0.08, p.y - H + rr * 0.1, rr, 0, Math.PI * 2); ctx.fill();
+          }
+          ctx.fillStyle = it.c; ctx.beginPath(); ctx.arc(p.x - rr * 0.06, p.y - H - rr * 0.06, rr * 0.9, 0, Math.PI * 2); ctx.fill();
+          if (detail) {
+            ctx.fillStyle = shade(it.c, 1.25); ctx.beginPath(); ctx.arc(p.x - rr * 0.32, p.y - H - rr * 0.34, rr * 0.45, 0, Math.PI * 2); ctx.fill();
+          }
           continue;
         }
         if (it.t === 'circle') {
@@ -553,7 +566,9 @@ export class Renderer {
     if (n._jg && n._jg.ver === net.version) return n._jg.j;
     const segs = n.segs.map(id => net.segs.get(id)).filter(Boolean);
     let j = null;
-    const widest = segs.reduce((a, s) => (!a || halfWidth(s.T) > halfWidth(a.T) ? s : a), null);
+    // 路口顏色取最寬的一般道路（場內道路接上一般道路時，路口用一般道路的柏油色）
+    const pub = segs.filter(s => !s.T.internal);
+    const widest = (pub.length ? pub : segs).reduce((a, s) => (!a || halfWidth(s.T) > halfWidth(a.T) ? s : a), null);
     if (segs.length === 1) {
       j = { kind: 'cap', r: halfWidth(segs[0].T), col: roadColor(segs[0].T), internal: !!segs[0].T.internal };
     } else if (segs.length >= 2) {

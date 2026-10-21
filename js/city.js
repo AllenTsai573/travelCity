@@ -11,14 +11,15 @@ const ema = (a, x, k) => a + (x - a) * k;
 export function driveway(zone, kind, geo) {
   const d = geo.d;
   if (geo.rows < 5 || geo.cols < 3) return null;
-  if (zone === 'I') return { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null, through: true };
+  // 工業：至少 8 格寬才開場內道路（太窄的直接臨路進出）
+  if (zone === 'I') return geo.cols >= 8 ? { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null, through: true } : null;
   // 低密度住宅的巷道（盡頭迴車，不打通）
-  if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 4 && geo.zt === 'R1') return { end: d - 7 };
+  if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R1') return { end: d - 7 };
   if (zone !== 'C') return null;
   if (kind === 'bigbox') return { end: d * 0.45 - 4 };
   if (kind === 'mall' || kind === 'market') return { end: d * 0.32 - 4 };
   if (kind === 'parking') return { end: d - 6, through: true };
-  if (kind === 'shops' && geo.rows >= 6) return { end: d - 6, through: true };
+  if (kind === 'shops' && geo.rows >= 6 && geo.cols >= 5) return { end: d - 6, through: true };
   return null;
 }
 const gauss = (h, mu, sd) => Math.exp(-0.5 * ((h - mu) / sd) ** 2) / (sd * 2.5066);
@@ -159,7 +160,8 @@ export class City {
       const fr = net.segNear(m.x - geo.nx * (halfWidth(seg.T) - 0.5), m.y - geo.ny * (halfWidth(seg.T) - 0.5), 6, 0);
       b.front = fr ? { seg: fr.seg.id, u: fr.u } : null;
       b.roads = roads.segs; b.seg = roads.access.seg; b.u = roads.access.u;
-      if (roads.gates.length) { b.gates = roads.gates; this.applyGate(b); }
+      b.parkPlan = plan;
+      this.connectPark(b);
     }
     return b;
   }
@@ -178,39 +180,63 @@ export class City {
       return true;
     };
     const before = new Set(net.segs.keys());
-    const gates = [];
     try {
       const fp = pointAt(seg.pts, seg.cum, u);
       if (!build({ x: fp.x, y: fp.y, seg: seg.id, u }, P(geo.w / 2, plan.end))) return null;
       if (plan.cross) build(P(6, plan.cross), P(geo.w - 6, plan.cross));
       net.rebuild();
-      // 地塊後方緊鄰另一條道路：打通，但在後方出口設閘門（只有進出這裡的車可以走，避免被當捷徑）
-      const back = P(geo.w / 2, geo.d + 2), sn = plan.through ? net.segNear(back.x, back.y, 14, 0) : null;
-      if (sn && !sn.seg.T.internal && sn.seg.id !== seg.id && sn.seg.a !== seg.a && sn.seg.b !== seg.b && sn.seg.a !== seg.b && sn.seg.b !== seg.a &&
-          Math.hypot(sn.x - back.x, sn.y - back.y) < halfWidth(sn.seg.T) + 6) {
-        if (build(P(geo.w / 2, plan.end), { x: sn.x, y: sn.y, seg: sn.seg.id, u: sn.u })) {
-          net.rebuild();
-          const gp = P(geo.w / 2, geo.d - 1.5);
-          gates.push({ x: gp.x, y: gp.y, dx: geo.nx, dy: geo.ny });
-        }
-      }
-      // 橫向道路的兩端若緊鄰側邊道路，也打通（同樣設閘門）
-      if (plan.cross && plan.through) for (const [ue, uo, sg] of [[-2, 6, -1], [geo.w + 2, geo.w - 6, 1]]) {
-        const q = P(ue, plan.cross), sd = net.segNear(q.x, q.y, 14, 0);
-        if (!sd || sd.seg.T.internal || Math.hypot(sd.x - q.x, sd.y - q.y) > halfWidth(sd.seg.T) + 6) continue;
-        if (build(P(uo, plan.cross), { x: sd.x, y: sd.y, seg: sd.seg.id, u: sd.u })) {
-          net.rebuild();
-          const gp = P(sg < 0 ? 1.5 : geo.w - 1.5, plan.cross);
-          gates.push({ x: gp.x, y: gp.y, dx: geo.tx * sg, dy: geo.ty * sg });
-        }
-      }
-      // 有打通到其他道路時，正門也設閘門（每個對外出入口都有閘門）
-      if (gates.length) { const gp = P(geo.w / 2, 1.5); gates.push({ x: gp.x, y: gp.y, dx: -geo.nx, dy: -geo.ny }); }
     } finally { g.spend = spend; g.canAfford = can; }
     const segs = [...net.segs.values()].filter(s => s.type === 'service' && !before.has(s.id)).map(s => s.id);
     const q = P(geo.w / 2, Math.max(8, plan.end - 6)), acc = net.segNear(q.x, q.y, 4, 0);
     if (!segs.length || !acc) return null;
-    return { segs, access: { seg: acc.seg.id, u: acc.u }, gates };
+    return { segs, access: { seg: acc.seg.id, u: acc.u } };
+  }
+
+  // 把園區 / 停車場的場內道路接到旁邊的道路（後方、側邊）；開局或之後新增的道路都會檢查
+  // 每個對外出入口（含正門）都設閘門：只有進出這裡的車能走，不會被當捷徑
+  connectPark(b) {
+    const plan = b.parkPlan;
+    if (!plan || !plan.through || !b.roads || b.dead) return false;
+    const g = this.game, net = g.net, link = b.links || (b.links = {});
+    const P = (a, v) => ({ x: b.corners[0].x + b.tx * a + b.nx * v, y: b.corners[0].y + b.ty * a + b.ny * v });
+    const node = q => { const n = net.nodeNear(q.x, q.y, 3, 0); return n ? { x: n.x, y: n.y, node: n.id } : q; };
+    const near = q => {
+      const sn = net.segNear(q.x, q.y, 14, 0);
+      if (!sn || sn.seg.T.internal || b.roads.includes(sn.seg.id) || (b.front && sn.seg.id === b.front.seg)) return null;
+      return Math.hypot(sn.x - q.x, sn.y - q.y) < halfWidth(sn.seg.T) + 6 ? sn : null;
+    };
+    const spend = g.spend, can = g.canAfford;
+    g.spend = () => {}; g.canAfford = () => true;
+    const before = new Set(net.segs.keys()), gates = [];
+    const build = (a, c) => { const pl = net.planRoad(a, c, null, 'service', 0); if (!pl.ok) return false; pl.demolish = []; net.executeRoad(pl); net.rebuild(); return true; };
+    try {
+      if (!link.back) {
+        const sn = near(P(b.w / 2, b.d + 2));
+        if (sn && build(node(P(b.w / 2, plan.end)), { x: sn.x, y: sn.y, seg: sn.seg.id, u: sn.u })) {
+          link.back = true;
+          const gp = P(b.w / 2, b.d - 1.5); gates.push({ x: gp.x, y: gp.y, dx: b.nx, dy: b.ny });
+        }
+      }
+      if (plan.cross) for (const [key, ue, uo, sg] of [['left', -2, 6, -1], ['right', b.w + 2, b.w - 6, 1]]) {
+        if (link[key]) continue;
+        const sd = near(P(ue, plan.cross));
+        if (sd && build(node(P(uo, plan.cross)), { x: sd.x, y: sd.y, seg: sd.seg.id, u: sd.u })) {
+          link[key] = true;
+          const gp = P(sg < 0 ? 1.5 : b.w - 1.5, plan.cross); gates.push({ x: gp.x, y: gp.y, dx: b.tx * sg, dy: b.ty * sg });
+        }
+      }
+    } finally { g.spend = spend; g.canAfford = can; }
+    if (!gates.length) return false;
+    const fresh = [...net.segs.values()].filter(s2 => s2.type === 'service' && !before.has(s2.id)).map(s2 => s2.id);
+    b.roads = [...b.roads.filter(id => net.segs.has(id)), ...fresh];
+    b.gates = b.gates || [];
+    if (!b.gates.some(gt => gt.front)) { const gp = P(b.w / 2, 1.5); b.gates.push({ x: gp.x, y: gp.y, dx: -b.nx, dy: -b.ny, front: true }); }
+    b.gates.push(...gates);
+    // 存取點可能被切開，重新找
+    const q = P(b.w / 2, Math.max(8, plan.end - 6)), acc = net.segNear(q.x, q.y, 4, 0);
+    if (acc) { b.seg = acc.seg.id; b.u = acc.u; }
+    this.applyGate(b);
+    return true;
   }
   applyGate(b) {
     const net = this.game.net;
@@ -311,10 +337,12 @@ export class City {
     }
   }
 
-  // 新道路經過的空地塊直接取消分區
+  // 新道路經過的空地塊直接取消分區；旁邊有園區 / 停車場的話，下一步把它們的場內道路接過去
   onRoadBuilt(segs) {
+    const net = this.game.net;
+    for (const s of segs) if (!s.T.internal && net.nodes.get(s.a)?.level === 0 && net.nodes.get(s.b)?.level === 0) (this._newRoads || (this._newRoads = [])).push(s);
     for (const s of segs) {
-      if (s.drawLevel !== 0) continue;
+      if (net.nodes.get(s.a)?.level !== 0 || net.nodes.get(s.b)?.level !== 0) continue;
       const hw = halfWidth(s.T) + 0.5;
       for (const l of [...this.lots]) {
         if (!bboxOverlap(polyBBox(l.corners, hw), s.bbox)) continue;
@@ -502,6 +530,18 @@ export class City {
   // ---------- 每步更新 ----------
   update(dt) {
     const g = this.game;
+    if (this._reconnectAll) {
+      this._reconnectAll = false;
+      for (const b of [...this.buildings]) if (b.roads) { b.parkPlan = b.parkPlan || driveway(b.zone, b.kind, b); this.connectPark(b); }
+    }
+    if (this._newRoads && this._newRoads.length) {
+      const segs = this._newRoads; this._newRoads = [];
+      for (const b of [...this.buildings]) {
+        if (b.roads && !b.parkPlan) b.parkPlan = driveway(b.zone, b.kind, b);
+        if (!b.parkPlan || !b.parkPlan.through) continue;
+        if (segs.some(s => !(s.bbox.x1 < b.x - b.rad - 20 || s.bbox.x0 > b.x + b.rad + 20 || s.bbox.y1 < b.y - b.rad - 20 || s.bbox.y0 > b.y + b.rad + 20))) this.connectPark(b);
+      }
+    }
     const hour = (g.time % 1440) / 60;
     const pWork = gauss(hour, 7.6, 1.5) + 0.04;
     const pShop = gauss(hour, 14.5, 3.2) + 0.02;
@@ -827,7 +867,7 @@ export class City {
     return {
       nextId: this.nextId,
       buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, zt: b.zt, kind: b.kind, cols: b.cols, rows: b.rows, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned,
-        roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
+        roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, parkPlan: b.parkPlan || undefined, links: b.links || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
       demand: this.demand, stats: this.stats, history: this.history,
@@ -845,6 +885,7 @@ export class City {
       const geo = s.c0 ? this.geomFrom(...s.c0, s.cols, s.rows) : null;
       const b = this.addBuilding(zt, seg, s.u, s.side, s.cols || old[0], s.rows || old[1], s.level, s.kind, geo);
       if (s.roads) { b.roads = s.roads; b.front = s.front || null; }
+      if (s.parkPlan) { b.parkPlan = s.parkPlan; b.links = s.links || {}; }
       const gs = s.gates || (s.gate ? [s.gate] : null);
       if (gs) { b.gates = gs; this.applyGate(b); }
       b.happy = s.happy; b.stock = s.stock; b.abandoned = s.abandoned;
@@ -857,6 +898,8 @@ export class City {
       if (seg) this.addLot(l.zt, seg, l.u, l.side, l.cols, l.rows);
     }
     this.nextId = Math.max(this.nextId, d.nextId);
+    // 讀檔後檢查一次：園區 / 停車場旁邊若已有道路就接上（舊存檔沒有這個資料）
+    this._reconnectAll = true;
     Object.assign(this.demand, d.demand);
     Object.assign(this.stats, d.stats);
     this.history = d.history || [];

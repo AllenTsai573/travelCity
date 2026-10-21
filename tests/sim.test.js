@@ -207,6 +207,19 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   assert(pb.gates && pb.gates.length >= 2, `停車場打通到後方道路，前後都設閘門（${pb.gates ? pb.gates.length : 0} 個）`);
   assert(!routeFromPoint(net, A, B).path.some(k => net.links.get(k).seg.T.internal), '一般車流不會穿過有閘門的停車場');
   assert(routeFromPoint(net, pb, B).path.some(k => net.links.get(k).seg.T.internal), '停車場的車可以從後方閘門出去');
+  // 停車場蓋好之後才在後方開路：下一步會自動打通並加上閘門
+  {
+    const s2 = net.segNear(S - 250, y, 3, 0).seg, u2 = S - 250 - s2.pts[0].x;
+    const pl2 = c.planStroke('C', s2, -1, u2 - 30, u2 + 30, 10).find(l => l.ok);
+    const pb2 = c.develop(c.addLot('C', pl2.seg, pl2.u, pl2.side, pl2.cols, pl2.rows));
+    const before = (pb2.gates || []).length;
+    const back = pl2.rows * 6 + 4.3 + 1.5 + 1.5 + 4.3;
+    const yb = y - back;
+    const pr = net.planRoad({ x: S - 330, y: yb }, { x: S - 170, y: yb }, null, 'street', 0);
+    if (pr.ok) { net.executeRoad(pr); net.rebuild(); c.update(0.1); }
+    assert(pr.ok && before === 0 && pb2.gates && pb2.gates.length >= 2, `之後新增的後方道路會接上停車場並設閘門（${pr.ok ? (pb2.gates || []).length + ' 個閘門' : pr.reason}）`);
+  }
+  c.pickKind = () => 'parking';
   const segGo = net.segs.get(pl.seg.id) ? null : [...net.segs.values()].find(s => s.type === 'street' && Math.abs(s.pts[0].y - y) < 1 && s.go);
   assert(segGo && Math.abs(((c.gridStart(segGo) + segGo.go) / 6) - Math.round((c.gridStart(segGo) + segGo.go) / 6)) < 1e-6, '路段被切開後分區格線仍然對齊');
 }

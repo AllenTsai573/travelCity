@@ -59,13 +59,13 @@ class Game {
   toggleHeatmap() { this.heatmap = !this.heatmap; this.ui.refreshTop(); }
 
   // ---------- 世界 ----------
-  setup(seed, biome, difficulty) {
+  setup(seed, biome, difficulty, size = MAP_SIZE) {
     this.seed = seed;
     this.biomeKey = biome;
     this.diffKey = difficulty;
     this.diff = DIFFICULTY[difficulty];
     this.rng = new RNG(seed * 7 + 13);
-    this.terrain = new Terrain(seed, biome, MAP_SIZE);
+    this.terrain = new Terrain(seed, biome, size);
     this.time = 7 * 60;
     this.money = this.diff.money;
     this.milestone = 0;
@@ -92,14 +92,14 @@ class Game {
 
   serialize() {
     return {
-      v: 1, seed: this.seed, biome: this.biomeKey, diff: this.diffKey, time: this.time, money: this.money,
+      v: 1, mapSize: this.terrain.size, seed: this.seed, biome: this.biomeKey, diff: this.diffKey, time: this.time, money: this.money,
       milestone: this.milestone, autoGrow: this.autoGrow, cam: { ...this.renderer.cam },
       net: this.net.serialize(), city: this.city.serialize(),
     };
   }
 
   loadData(d) {
-    this.setup(d.seed, d.biome, d.diff);
+    this.setup(d.seed, d.biome, d.diff, d.mapSize || 2400);
     this.time = d.time;
     this.money = d.money;
     this.milestone = d.milestone;

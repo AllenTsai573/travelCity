@@ -2,7 +2,7 @@
 // 所有幾何皆以「主線沿 +x、橫交道路沿 y」的區域座標設計（靠右行駛）：
 //   東行（+x）在 +y 側、西行在 -y 側；北行（-y）在 +x 側、南行（+y）在 -x 側
 // 匝道由直線、圓弧與平滑銜接段組成，切線連續（不會出現折角）
-import { arcCurve, polyCum, cutPoly, pointAt, polyIntersections } from './util.js';
+import { arcCurve, polyCum, cutPoly, pointAt, polyIntersections, pointInPoly } from './util.js';
 import { Network, halfWidth } from './network.js';
 import { ROAD_TYPES, levelMul } from './config.js';
 
@@ -34,6 +34,8 @@ export class Path {
     this.h = { x: this.h.x * c - this.h.y * s, y: this.h.x * s + this.h.y * c };
     return this;
   }
+  // 沿目前方向前進 d
+  fwd(d) { return d > 0.01 ? this.line(this.p.x + this.h.x * d, this.p.y + this.h.y * d) : this; }
   // 以近似圓弧的平滑曲線接到指定點與方向
   to(x, y, hx, hy) {
     const h3 = norm(hx, hy);
@@ -50,13 +52,51 @@ const rotPts = (pts, k) => pts.map(p => (k === 0 ? { x: p.x, y: p.y } : k === 1 
 // 高度代號：'M' 主線、'C' 橫交道路，其餘（A、B、R…）由各模板的 levels() 決定
 
 // ---- 共用元件（全部以「東行 → …」的方向設計，再旋轉到其他象限）----
-// 星形右轉匝道：與兩條道路相切的大圓弧（往中心內凹），東行 → 南行
+// 星形右轉匝道：與兩條道路相切的大圓弧（往中心內凹），東行 → 南行（T 字型用）
 const starPts = Ls => new Path(-Ls, 0, 1, 0).to(0, Ls, 0, 1).pts;
-function starRamps(out, Ls, label = '右轉匝道') {
-  for (let k = 0; k < 4; k++) out.push({ label, type: 'ramp', pts: rotPts(starPts(Ls), k), prof: k % 2 ? [[0, 'C'], [1, 'M']] : [[0, 'M'], [1, 'C']] });
+// 苜蓿葉環道（270°），東行 → 北行，位於東南象限：與兩條道路中心線都相切的正圓
+const LOOP_R = 62;
+export const cloverLoopPts = (R = LOOP_R) => new Path(R, 0, 1, 0).turn(R, 270).pts;
+
+// 外側右轉匝道（東行 → 南行，西南象限），形狀像真實交流道的外側匝道：
+// 以半徑 rho 右彎 beta 離開主線 → 直線 → 半徑 r 的急彎 → 直線 → 右彎 beta 併入
+export function cornerShape(t, rho, beta, r) {
+  const pts = new Path(0, 0, 1, 0).turn(rho, beta).fwd(t).turn(r, 90 - 2 * beta).fwd(t).turn(rho, beta).pts;
+  const D = pts[pts.length - 1].x;
+  return pts.map(p => ({ x: p.x - D, y: p.y }));
 }
-// 苜蓿葉環道（270°），東行 → 北行，位於東南象限
-const cloverLoopPts = () => new Path(14, 0, 1, 0).to(70, 22, 1, 0).turn(48, 270).to(0, 14, 0, -1).pts;
+// 找出最小的外側匝道：離其他匝道至少 gap（道路以外的部分），且分岔點在其他匝道的分岔 / 匯入點之外
+export function fitCornerRamp(inner, { gap = 24, rho = 140, beta = 32, r = 160, lead = 70 } = {}) {
+  const off = 16, near = p => Math.abs(p.x) < off || Math.abs(p.y) < off;
+  const pts = [];
+  let axisMax = 0;
+  for (const e of inner) {
+    for (const q of [e.pts[0], e.pts[e.pts.length - 1]]) if (Math.abs(q.y) < 3 || Math.abs(q.x) < 3) axisMax = Math.max(axisMax, Math.abs(q.x) + Math.abs(q.y));
+    for (const q of e.pts) if (!near(q) && q.x < 0 && q.y > 0) pts.push(q);
+  }
+  for (let t = 0; t < 800; t += 4) {
+    const c = cornerShape(t, rho, beta, r);
+    if (-c[0].x < axisMax + lead) continue;
+    // 其他匝道都要在外側匝道與中心之間
+    const poly = [...c, { x: 0, y: 0 }];
+    let ok = pts.every(q => pointInPoly(q, poly));
+    for (const p of ok ? c : []) {
+      if (near(p)) continue;
+      for (const q of pts) if (Math.abs(p.x - q.x) < gap && Math.abs(p.y - q.y) < gap && Math.hypot(p.x - q.x, p.y - q.y) < gap) { ok = false; break; }
+      if (!ok) break;
+    }
+    if (ok) return c;
+  }
+  return cornerShape(800, rho, beta, r);
+}
+// 每個象限分別配合（不對稱的模板如喇叭型也適用）；k 為旋轉次數（0 = 東行 → 南行）
+function cornerRamps(out, opts, ks = [0, 1, 2, 3], label = '右轉匝道') {
+  const inner = [...out];
+  for (const k of ks) {
+    const c = fitCornerRamp(inner.map(e => ({ pts: rotPts(e.pts, (4 - k) % 4) })), opts);
+    out.push({ label, type: 'ramp', pts: rotPts(c, k), prof: k % 2 ? [[0, 'C'], [1, 'M']] : [[0, 'M'], [1, 'C']] });
+  }
+}
 // 渦輪左轉匝道：右側駛出後以大半徑左彎繞過中心，東行 → 北行
 const turbineLeftPts = (P = 190, w = 30, r = 220, S = 300) => new Path(-S, 0, 1, 0).to(-P, w, 1, 0).turn(r, -90).to(0, -S, 0, -1).pts;
 // 由 M（或 C）出發的匝道在 k 為奇數時起訖互換
@@ -182,10 +222,10 @@ export const TEMPLATES = {
     group: '系統型', name: '苜蓿葉', desc: '左轉走 270° 環道、右轉走外側星形匝道，完全不需號誌（環道間有交織）', L: 430, Lc: 430,
     main: 'highway', cross: 'highway', M: 1, C: 0,
     build() {
-      // 環道最遠約距中心 147 m；星形匝道最接近中心處為 0.414 × 400 ≈ 166 m，兩者不會相交
+      // 四個正圓環道；外側右轉匝道緊貼環道外緣繞過
       const out = [];
       for (let k = 0; k < 4; k++) out.push({ label: '左轉環道', type: 'ramp', pts: rotPts(cloverLoopPts(), k), prof: k % 2 ? [[0, 'C'], [1, 'M']] : [[0, 'M'], [1, 'C']] });
-      starRamps(out, 400);
+      cornerRamps(out);
       return { elems: out, signals: [] };
     },
   },
@@ -195,8 +235,8 @@ export const TEMPLATES = {
     build() {
       const out = [];
       for (const k of [0, 2]) out.push({ label: '左轉環道', type: 'ramp', pts: rotPts(cloverLoopPts(), k), prof: [[0, 'M'], [1, 'C']] });
-      for (const k of [1, 3]) out.push({ label: '左轉高架匝道', type: 'ramp', pts: rotPts(turbineLeftPts(190, 30, 220, 330), k), prof: [[0, 'C'], [0.32, 'B'], [0.7, 'B'], [1, 'M']] });
-      starRamps(out, 400);
+      for (const k of [1, 3]) out.push({ label: '左轉高架匝道', type: 'ramp', pts: rotPts(turbineLeftPts(150, 28, 170, 260), k), prof: [[0, 'C'], [0.32, 'B'], [0.7, 'B'], [1, 'M']] });
+      cornerRamps(out);
       return { elems: out, signals: [] };
     },
   },
@@ -209,7 +249,7 @@ export const TEMPLATES = {
         const ab = k % 2 ? 'B' : 'A';
         out.push({ label: '左轉匝道', type: 'ramp', pts: rotPts(left, k), prof: k % 2 ? [[0, 'C'], [0.3, ab], [0.72, ab], [1, 'M']] : [[0, 'M'], [0.3, ab], [0.72, ab], [1, 'C']] });
       }
-      starRamps(out, 460);
+      cornerRamps(out);
       return { elems: out, signals: [] };
     },
   },
@@ -229,7 +269,7 @@ export const TEMPLATES = {
       const stack = new Path(-330, 0, 1, 0).to(-90, 26, 1, 0).to(26, -90, 0, -1).to(0, -330, 0, -1).pts;
       for (const k of [0, 2]) out.push({ label: '左轉堆疊匝道', type: 'ramp', pts: rotPts(stack, k), prof: [[0, 'M'], [0.3, 'B'], [0.7, 'B'], [1, 'C']] });
       for (const k of [1, 3]) out.push({ label: '左轉渦輪匝道', type: 'ramp', pts: rotPts(turbineLeftPts(), k), prof: [[0, 'C'], [0.3, 'A'], [0.72, 'A'], [1, 'M']] });
-      starRamps(out, 460);
+      cornerRamps(out);
       return { elems: out, signals: [] };
     },
   },
@@ -242,7 +282,7 @@ export const TEMPLATES = {
         const ab = k % 2 ? 'B' : 'A';
         out.push({ label: '左轉匝道', type: 'ramp', pts: rotPts(left, k), prof: k % 2 ? [[0, 'C'], [0.3, ab], [0.72, ab], [1, 'M']] : [[0, 'M'], [0.3, ab], [0.72, ab], [1, 'C']] });
       }
-      starRamps(out, 380);
+      cornerRamps(out);
       return { elems: out, signals: [] };
     },
   },
@@ -329,13 +369,13 @@ export const TEMPLATES = {
     main: 'highway', cross: 'highway', M: 1, C: 0,
     build() {
       const out = [];
-      // 右轉：星形匝道（東行 → 支線、支線 → 東行）
-      out.push({ label: '右轉匝道', type: 'ramp', pts: starPts(300), prof: [[0, 'M'], [1, 'C']] });
-      out.push({ label: '右轉匝道', type: 'ramp', pts: rotPts(starPts(300), 3), prof: [[0, 'C'], [1, 'M']] });
       // 支線 → 西行：從主線下方穿過後左彎
       out.push({ label: '左轉匝道', type: 'ramp', pts: new Path(0, 90, 0, -1).to(12, 45, 0, -1).line(12, -40).turn(130, -90).to(-380, 0, -1, 0).pts, prof: [[0, 'C'], [0.45, 'C'], [1, 'M']] });
       // 西行 → 支線：右出後 270° 環道，再從主線下方穿到支線
       out.push({ label: '左轉環道', type: 'ramp', pts: new Path(110, 0, -1, 0).to(-55, -24, -1, 0).turn(45, 270).line(-12, 40).to(0, 90, 0, 1).pts, prof: [[0, 'M'], [0.35, 'M'], [0.68, 'C'], [1, 'C']] });
+      // 右轉：星形匝道（東行 → 支線、支線 → 東行）
+      out.push({ label: '右轉匝道', type: 'ramp', pts: starPts(300), prof: [[0, 'M'], [1, 'C']] });
+      out.push({ label: '右轉匝道', type: 'ramp', pts: rotPts(starPts(300), 3), prof: [[0, 'C'], [1, 'M']] });
       return { elems: out, signals: [] };
     },
   },
@@ -344,14 +384,15 @@ export const TEMPLATES = {
     main: 'highway', cross: 'highway', M: 0, C: 0, levels: () => ({ A: 1, B: 2 }),
     build() {
       const out = [];
-      out.push({ label: '右轉匝道', type: 'ramp', pts: starPts(330), prof: [[0, 'M'], [1, 'C']] });
-      out.push({ label: '右轉匝道', type: 'ramp', pts: rotPts(starPts(330), 3), prof: [[0, 'C'], [1, 'M']] });
       // 支線 → 西行：沿支線東側北上跨越主線，再左彎併入西行
       out.push({ label: '左轉高架匝道', type: 'ramp', pts: new Path(0, 260, 0, -1).to(14, 170, 0, -1).line(14, -20).turn(170, -90).to(-440, 0, -1, 0).pts,
         prof: [[0, 'C'], [0.24, 'A'], [0.62, 'A'], [1, 'M']] });
       // 西行 → 支線：右出後左彎，斜向跨越主線與右轉匝道，併入支線西側
       out.push({ label: '左轉高架匝道', type: 'ramp', pts: new Path(440, 0, -1, 0).to(160, -36, -1, 0).turn(185, -90).to(0, 260, 0, 1).pts,
         prof: [[0, 'M'], [0.3, 'B'], [0.78, 'B'], [1, 'C']] });
+      // 右轉：星形匝道（左轉高架匝道從上方跨越）
+      out.push({ label: '右轉匝道', type: 'ramp', pts: starPts(330), prof: [[0, 'M'], [1, 'C']] });
+      out.push({ label: '右轉匝道', type: 'ramp', pts: rotPts(starPts(330), 3), prof: [[0, 'C'], [1, 'M']] });
       return { elems: out, signals: [] };
     },
   },
@@ -371,10 +412,19 @@ function twoLevelTurbine(gm) {
     out.push({ label: '左轉匝道', type: 'ramp', pts: rotPts(left, k),
       prof: [[0, a], [fm - d, b], [fm + d, b], [fc - d, a], [fc + d, a], [1, b]] });
   }
-  starRamps(out, 470);
+  cornerRamps(out);
   return { elems: out, signals: [] };
 }
 export { twoLevelTurbine, crossFrac, turbineLeftPts };
+
+// 主線與橫交道路的長度依匝道實際範圍決定（最外側匝道再往外延伸約 70 m）
+for (const t of Object.values(TEMPLATES)) {
+  if (t.customRoads) continue;
+  let ex = 0, ey = 0;
+  for (const e of t.build().elems) for (const q of e.pts) { ex = Math.max(ex, Math.abs(q.x)); ey = Math.max(ey, t.tee ? q.y : Math.abs(q.y)); }
+  t.L = Math.max(300, Math.ceil((ex + 70) / 10) * 10);
+  t.Lc = Math.max(300, Math.ceil((ey + 70) / 10) * 10);
+}
 
 export const TEMPLATE_ORDER = ['diamond', 'parcloA', 'parcloB', 'ddi', 'spui', 'cloverleaf', 'cloverstack', 'turbine', 'turbine2', 'turbineStack', 'windmill', 'braided', 'roundabout2', 'roundabout3', 'trumpet', 'semiT'];
 

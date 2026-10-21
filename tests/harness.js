@@ -7,7 +7,7 @@ import { Traffic } from '../js/traffic.js';
 import { City } from '../js/city.js';
 import { generateWorld, snapAt } from '../js/worldgen.js';
 
-export function makeGame(seed, biome, diff, gen = true) {
+export function makeGame(seed, biome, diff, gen = true, size = MAP_SIZE) {
   const g = {
     seed, biomeKey: biome, diffKey: diff, diff: DIFFICULTY[diff], rng: new RNG(seed * 7 + 13),
     time: 360, money: DIFFICULTY[diff].money, milestone: 0, autoGrow: true, msgs: [],
@@ -17,7 +17,7 @@ export function makeGame(seed, biome, diff, gen = true) {
     notify(m) { this.msgs.push(m); },
     checkMilestone() {},
   };
-  g.terrain = new Terrain(seed, biome, MAP_SIZE);
+  g.terrain = new Terrain(seed, biome, size);
   g.net = new Network(g);
   g.city = new City(g);
   g.traffic = new Traffic(g);
@@ -35,7 +35,7 @@ export function step(g, n) {
 
 // 以大道把每個外部連線接到市中心
 export function connectOutside(g, type = 'avenue') {
-  const c = MAP_SIZE / 2, res = [];
+  const c = g.terrain.size / 2, res = [];
   for (const o of g.city.outside) {
     const n = g.net.nodes.get(o.node);
     const s0 = g.net.segs.get(n.segs[0]);

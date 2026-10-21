@@ -3,7 +3,7 @@
 export const LANE_W = 3.5;          // 車道寬（公尺）
 export const SIM_DT = 0.1;          // 模擬步長（秒）
 export const CLOCK = 0.5;           // 每 1 模擬秒推進的遊戲分鐘數（一天 = 48 分鐘 @1x）
-export const MAP_SIZE = 2400;       // 地圖邊長（公尺）
+export const MAP_SIZE = 3600;       // 地圖邊長（公尺）；舊存檔沿用 2400
 
 // 13 種道路類型。rank 越高越有路權；access=false 表示沿線不可建築（封閉式道路）
 export const ROAD_TYPES = {

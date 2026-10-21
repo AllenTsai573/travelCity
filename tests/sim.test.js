@@ -7,7 +7,7 @@ import { makeGame, step, connectOutside } from './harness.js';
 let failed = 0;
 function assert(c, m) { if (!c) { console.error('FAIL -', m); failed++; } else console.log('ok   -', m); }
 
-const g = makeGame(12345, 'temperate', 'easy');
+const g = makeGame(12345, 'temperate', 'easy', true, 2400);
 assert(g.net.segs.size > 5, `初始道路 (${g.net.segs.size})`);
 assert(g.city.buildings.length >= 8, `初始建築 (${g.city.buildings.length})`);
 assert(g.city.outside.length >= 2, `外部連線 (${g.city.outside.length})`);

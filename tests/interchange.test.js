@@ -3,15 +3,16 @@
 import { makeGame } from './harness.js';
 import { TEMPLATES, TEMPLATE_ORDER, placeInterchange } from '../js/interchange.js';
 import { Terrain } from '../js/terrain.js';
+import { MAP_SIZE } from '../js/config.js';
 
 let failed = 0;
 function assert(c, m) { if (!c) { console.error('FAIL -', m); failed++; } else console.log('ok   -', m); }
 
 // 找一塊夠大的乾地（遠離市中心）
 function findSite(half) {
-  const fixed = [{ x: 640, y: 640 }, { x: 1760, y: 640 }, { x: 640, y: 1760 }, { x: 1760, y: 1760 }];
+  const fixed = [0.2, 0.8].flatMap(a => [0.2, 0.8].map(b => ({ x: MAP_SIZE * a, y: MAP_SIZE * b })));
   for (let seed = 1; seed < 200; seed++) {
-    const t = new Terrain(seed, 'desert', 2400);
+    const t = new Terrain(seed, 'desert', MAP_SIZE);
     const dry = c => {
       for (let dx = -half; dx <= half; dx += 20) for (let dy = -half; dy <= half; dy += 20) if (t.isWater(c.x + dx, c.y + dy)) return false;
       return true;
@@ -21,7 +22,7 @@ function findSite(half) {
     if (half > 600) {
       const nodes = [...makeGame(seed, 'desert', 'sandbox').net.nodes.values()];
       const clear = c => nodes.every(n => Math.abs(n.x - c.x) > half + 40 || Math.abs(n.y - c.y) > half + 40);
-      for (let x = half; x <= 2400 - half; x += 80) for (let y = half; y <= 2400 - half; y += 80) if (clear({ x, y }) && dry({ x, y })) return { seed, c: { x, y } };
+      for (let x = half; x <= MAP_SIZE - half; x += 80) for (let y = half; y <= MAP_SIZE - half; y += 80) if (clear({ x, y }) && dry({ x, y })) return { seed, c: { x, y } };
     }
   }
   return null;

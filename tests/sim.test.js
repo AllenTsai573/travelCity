@@ -4,6 +4,8 @@ import { Traffic } from '../js/traffic.js';
 import { City } from '../js/city.js';
 import { makeGame, step, connectOutside } from './harness.js';
 import { routeFromPoint } from '../js/routing.js';
+import { lotArt } from '../js/lotart.js';
+import { pointAt } from '../js/util.js';
 
 let failed = 0;
 function assert(c, m) { if (!c) { console.error('FAIL -', m); failed++; } else console.log('ok   -', m); }
@@ -21,10 +23,17 @@ big[1].control = 'stop';
 g.net.rebuild();
 assert(big[0].signal && big[0].signal.phases.length >= 2, '號誌時相建立');
 
-let maxVeh = 0;
+let maxVeh = 0, intruders = 0;
 const t0 = Date.now();
 for (let h = 0; h < 20; h++) {
-  step(g, 1200);
+  for (let k = 0; k < 12; k++) {
+    step(g, 100);
+    // 場內道路（巷道、停車場車道）只有起訖是該建築的車能走，不會被當成迴轉道或捷徑
+    for (const v of g.traffic.vehicles) {
+      const gt = v.track.kind === 'lane' ? v.track.seg.gate : null;
+      if (gt !== null && gt !== undefined && gt !== v.trip.from.id && gt !== v.trip.to.id) intruders++;
+    }
+  }
   maxVeh = Math.max(maxVeh, g.traffic.vehicles.length);
   for (const v of g.traffic.vehicles) {
     if (v.dead) throw new Error('dead vehicle in list');
@@ -32,6 +41,33 @@ for (let h = 0; h < 20; h++) {
     if (v.s < -1 || v.s > v.track.len + 1) throw new Error(`bad s ${v.s} / ${v.track.len}`);
     if (Number.isNaN(v.v) || Number.isNaN(v.s)) throw new Error('NaN');
   }
+}
+assert(intruders === 0, `沒有車開進別人的場內道路（${intruders} 次）`);
+// 停車位：每個室外車位都接到一條道路，從車位直直開到路上不會穿過建物；
+// 一般地塊也不會穿過其他車位（大型停車場有多條車道，不檢查車位）
+{
+  const cross = (a, b, c, d) => { const o = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)); return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0; };
+  const hits = (a, b, poly) => poly.some((p, i) => cross(a, b, p, poly[(i + 1) % poly.length]));
+  let n = 0, noRoad = 0, thruB = 0, thruC = 0;
+  const bad = [];
+  for (const b of g.city.buildings) {
+    const art = lotArt(b), c0 = b.corners[0];
+    const P = (u, v) => ({ x: c0.x + b.tx * u + b.nx * v, y: c0.y + b.ty * u + b.ny * v });
+    const box = it => (it.du !== undefined ? [P(it.u0, it.v0), P(it.u0 + it.du, it.v0), P(it.u0 + it.du, it.v0 + it.dv), P(it.u0, it.v0 + it.dv)] : [P(it.u0, it.v0), P(it.u1, it.v0), P(it.u1, it.v1), P(it.u0, it.v1)]);
+    const walls = art.items.filter(it => it.t === 'rect' && it.h >= 1 && !it.car && !it.deco && !it.canopy).map(box);
+    const bigLot = ['market', 'mall', 'bigbox', 'parking'].includes(b.kind);
+    g.city.slotsOf(b).forEach((sl, i) => {
+      if (sl.indoor) return;
+      n++;
+      const rd = g.city.slotRoad(b, i);
+      if (!rd) { noRoad++; return; }
+      const s = g.net.segs.get(rd.seg), p = pointAt(s.pts, s.cum, rd.u);
+      if (walls.some(w => hits(sl, p, w))) { thruB++; bad.push(`${b.zt}${b.kind ? ':' + b.kind : ''}`); }
+      if (!bigLot && art.slots.some((it, j) => j !== i && !it.indoor && hits(sl, p, box(it)))) { thruC++; bad.push(`${b.zt}${b.kind ? ':' + b.kind : ''}（車位）`); }
+    });
+  }
+  assert(n > 100 && noRoad === 0, `每個室外車位都接到道路（${n} 個，${noRoad} 個沒有）`);
+  assert(thruB === 0 && thruC === 0, `從車位開到路上不穿過建物 / 其他車位（穿過建物 ${thruB}、車位 ${thruC}）${[...new Set(bad)].slice(0, 6).join('、')}`);
 }
 // 停車：住宅一開始有車停在家，車輛出發後停車數減少、回來後增加
 {

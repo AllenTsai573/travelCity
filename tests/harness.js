@@ -52,7 +52,9 @@ export function connectOutside(g, type = 'avenue') {
       if (!p1.ok) continue;
       const m = g.net.executeRoad(p1);
       // 接到市中心；不行就接到最近的、已與市中心相連的路口
-      const targets = [snapAt(g.net, { x: c, y: c }), ...[...reach].map(id => g.net.nodes.get(id)).filter(n => n && n.level === 0)
+      // 只接一般道路的路口：場內道路（巷道、停車場車道）只給進出該建築的車使用，接上去也無法通行
+      const pub = n => n && n.level === 0 && n.segs.some(id => !g.net.segs.get(id).T.internal);
+      const targets = [snapAt(g.net, { x: c, y: c }), ...[...reach].map(id => g.net.nodes.get(id)).filter(pub)
         .sort((p, q) => Math.hypot(p.x - m.x, p.y - m.y) - Math.hypot(q.x - m.x, q.y - m.y)).slice(0, 6).map(n => ({ x: n.x, y: n.y, node: n.id }))];
       const p2 = targets.map(t => g.net.planRoad({ x: m.x, y: m.y, node: m.id }, t, null, type, lv)).find(p => p.ok);
       if (!p2) continue;

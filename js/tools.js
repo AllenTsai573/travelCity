@@ -59,6 +59,8 @@ export class Tools {
 
   bind() {
     const cv = this.canvas;
+    // 中鍵拖曳用來旋轉視角，不要觸發瀏覽器的自動捲動
+    cv.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
     cv.addEventListener('contextmenu', e => { e.preventDefault(); if (this.zStroke) { this.zStroke = null; this.zoneCancelled = true; this.dirty = true; } });
     cv.addEventListener('pointerdown', e => {
       cv.setPointerCapture(e.pointerId);
@@ -72,7 +74,8 @@ export class Tools {
       this.updateMouse(e);
       // 劃分區途中按右鍵：取消這次劃設
       if (e.button === 2 && this.zStroke) { this.zStroke = null; this.zoneCancelled = true; this.dirty = true; this.down = null; return; }
-      this.down = { btn: e.button, sx: e.offsetX, sy: e.offsetY, cx: this.cam.x, cy: this.cam.y, moved: false, touch: e.pointerType === 'touch' };
+      this.down = { btn: e.button, sx: e.offsetX, sy: e.offsetY, cx: this.cam.x, cy: this.cam.y, rot: this.cam.rot || 0, moved: false, touch: e.pointerType === 'touch' };
+      if (e.button === 1) e.preventDefault();
       if (e.button === 0 && this.tool === 'zone') this.zoneStart();
       // 路口車道連接：從進入車道（橘點）按住拖曳到離開車道（綠點）
       if (e.button === 0 && this.tool === 'junction') {
@@ -95,9 +98,14 @@ export class Tools {
         if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 6) d.moved = true;
         if (this.zStroke && (e.buttons & 2)) { this.zStroke = null; this.zoneCancelled = true; this.dirty = true; return; }
         if (this.zStroke) { this.zoneMove(); return; }
-        if (d.moved) {
-          this.cam.x = d.cx - (e.offsetX - d.sx) / this.cam.z;
-          this.cam.y = d.cy - (e.offsetY - d.sy) / this.cam.z;
+        if (d.moved && d.btn === 1) {
+          // 滑鼠中鍵左右拖曳：自由旋轉視角（以畫面中心為軸）
+          this.g.renderer.rotTarget = null;
+          this.cam.rot = d.rot + (e.offsetX - d.sx) * 0.006;
+        } else if (d.moved) {
+          const w = this.g.renderer.screenDelta((e.offsetX - d.sx) / this.cam.z, (e.offsetY - d.sy) / this.cam.z);
+          this.cam.x = d.cx - w.x;
+          this.cam.y = d.cy - w.y;
           this.clampCam();
         }
       }
@@ -165,6 +173,8 @@ export class Tools {
     this.mouse.shift = e.shiftKey; this.mouse.alt = e.altKey; this.dirty = true;
     const map = { v: 'select', r: 'road', o: 'roundabout', u: 'upgrade', j: 'junction', z: 'zone', b: 'bulldoze', i: 'interchange' };
     if (this.tool === 'interchange' && (k === 'q' || k === 'e')) { this.ixAngle += (k === 'e' ? 1 : -1) * Math.PI / 12; this.dirty = true; return; }
+    // 其他工具：Q / E 把視角旋轉 90°
+    if ((k === 'q' || k === 'e') && !e.ctrlKey && !e.metaKey) { this.g.renderer.rotate((k === 'e' ? 1 : -1) * Math.PI / 2); return; }
     if (map[k] && !e.ctrlKey && !e.metaKey) { this.setTool(map[k]); return; }
     if (k === 'escape') this.cancel();
     else if (k === ' ') { e.preventDefault(); this.g.togglePause(); }
@@ -202,9 +212,13 @@ export class Tools {
     if (k.has('s') || k.has('arrowdown')) my += 1;
     if (k.has('a') || k.has('arrowleft')) mx -= 1;
     if (k.has('d') || k.has('arrowright')) mx += 1;
-    if (mx || my) {
-      this.cam.x += mx * sp; this.cam.y += my * sp; this.clampCam();
-      const w = this.g.renderer.toWorld(this.mouse.sx, this.mouse.sy);
+    const r = this.g.renderer, rotating = r.rotTarget !== null || (this.down && this.down.btn === 1);
+    r.stepRotation(dt);
+    if (mx || my || rotating) {
+      // WASD 依畫面方向移動（旋轉視角後一樣是往畫面上 / 下 / 左 / 右）
+      const w0 = r.screenDelta(mx * sp, my * sp);
+      this.cam.x += w0.x; this.cam.y += w0.y; this.clampCam();
+      const w = r.toWorld(this.mouse.sx, this.mouse.sy);
       this.mouse.x = w.x; this.mouse.y = w.y;
       this.dirty = true;
     }

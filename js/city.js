@@ -1,6 +1,6 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
 import { TRIP_SCALE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
-import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap } from './util.js';
+import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap, closestOnPoly } from './util.js';
 import { halfWidth } from './network.js';
 import { lotArt } from './lotart.js';
 
@@ -13,8 +13,10 @@ export function driveway(zone, kind, geo) {
   if (geo.rows < 5 || geo.cols < 3) return null;
   // 工業：至少 8 格寬才開場內道路（太窄的直接臨路進出）
   if (zone === 'I') return geo.cols >= 8 ? { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null, through: true } : null;
-  // 低密度住宅的巷道（盡頭迴車，不打通）
+  // 住宅區的巷道（盡頭迴車，不打通）：低密度兩側是宅地；中 / 高密度兩側是停車格，後面才是建物
   if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R1') return { end: d - 7 };
+  if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R2') return { end: d - 7 };
+  if (zone === 'R' && kind === null && geo.rows >= 7 && geo.cols >= 8 && geo.zt === 'R3') return { end: d - 7 };
   if (zone !== 'C') return null;
   if (kind === 'bigbox') return { end: d * 0.45 - 4 };
   if (kind === 'mall' || kind === 'market') return { end: d * 0.32 - 4 };
@@ -23,6 +25,15 @@ export function driveway(zone, kind, geo) {
   return null;
 }
 const gauss = (h, mu, sd) => Math.exp(-0.5 * ((h - mu) / sd) ** 2) / (sd * 2.5066);
+// 線段 a-b 是否穿過多邊形的邊
+function segHitsPoly(a, b, poly) {
+  const o = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  for (let i = 0; i < poly.length; i++) {
+    const c = poly[i], d = poly[(i + 1) % poly.length];
+    if (o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0) return true;
+  }
+  return false;
+}
 
 export class City {
   constructor(game) {
@@ -161,6 +172,8 @@ export class City {
       b.front = fr ? { seg: fr.seg.id, u: fr.u } : null;
       b.roads = roads.segs; b.seg = roads.access.seg; b.u = roads.access.u;
       b.parkPlan = plan;
+      // 場內道路只給進出這棟建築的車使用（巷道、停車場車道不會被當成迴轉道或捷徑）
+      this.markGate(b);
       this.connectPark(b);
     }
     return b;
@@ -238,10 +251,14 @@ export class City {
     this.applyGate(b);
     return true;
   }
-  applyGate(b) {
+  // 建築自己的場內道路一律限制通行（尋路時只有起訖是這棟建築的車能走）
+  markGate(b) {
     const net = this.game.net;
-    for (const id of b.roads || []) { const s = net.segs.get(id); if (s) s.gate = b.gates && b.gates.length ? b.id : null; }
-    net.rebuild();
+    for (const id of b.roads || []) { const s = net.segs.get(id); if (s) s.gate = b.id; }
+  }
+  applyGate(b) {
+    this.markGate(b);
+    this.game.net.rebuild();
   }
   parkRoadSet() { const set = new Set(); for (const b of this.buildings) if (b.roads) for (const id of b.roads) set.add(id); return set; }
   removeParkRoads(b) {
@@ -270,18 +287,51 @@ export class City {
   slotsOf(b) {
     const key = b.level + '|' + b.abandoned + '|' + !!b.roads;
     if (!b._slots || b._slots.key !== key) {
-      const c0 = b.corners[0];
-      const list = lotArt(b).slots.map(it => {
+      const c0 = b.corners[0], art = lotArt(b);
+      const P = (u, v) => ({ x: c0.x + b.tx * u + b.nx * v, y: c0.y + b.ty * u + b.ny * v });
+      const list = art.slots.map(it => {
         const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv;
-        return { x: c0.x + b.tx * cu + b.nx * cv, y: c0.y + b.ty * cu + b.ny * cv, ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny, indoor: !!it.indoor, c: it.c };
+        return { ...P(cu, cv), ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny, indoor: !!it.indoor, c: it.c };
       });
-      b._slots = { key, list };
+      // 建物的牆（車子開進 / 出車位時不能穿過；樹籬、頂棚不算）
+      const walls = art.items.filter(it => it.t === 'rect' && it.h >= 1 && !it.car && !it.deco && !it.canopy).map(it => [P(it.u0, it.v0), P(it.u1, it.v0), P(it.u1, it.v1), P(it.u0, it.v1)]);
+      b._slots = { key, list, walls };
       // 每個車位停的車（顏色）與預約（正在開過來）
       const occ = b.slotOcc || [];
       b.slotOcc = list.map((_, i) => occ[i] || null);
       b.slotRes = list.map(() => false);
     }
     return b._slots.list;
+  }
+  // 車位對應的道路位置：車頭方向上最近、而且直直開過去不會穿過建物的道路
+  // （臨路車位接前面的道路、巷道 / 停車場車道旁的車位接場內道路）；車子開到這個位置，再沿曲線開進車位
+  slotRoad(b, i) {
+    const net = this.game.net, sl = this.slotsOf(b)[i];
+    if (!sl) return null;
+    if (!b._slotRd || b._slotRd.ver !== net.version || b._slotRd.list !== b._slots.list) {
+      // 候選道路：建築自己的場內道路＋地塊附近的一般地面道路（臨路的路段可能被巷道口切成好幾段）
+      const ids = new Set([b.seg, b.front && b.front.seg, ...(b.roads || [])].filter(id => id !== null && id !== undefined));
+      const bb = { x0: b.x - b.rad - 30, y0: b.y - b.rad - 30, x1: b.x + b.rad + 30, y1: b.y + b.rad + 30 };
+      for (const s of net.segs.values()) if (!s.T.internal && s.T.access && s.drawLevel === 0 && bboxOverlap(bb, s.bbox)) ids.add(s.id);
+      b._slotRd = { ver: net.version, list: b._slots.list, map: new Map(), ids: [...ids] };
+    }
+    const m = b._slotRd.map;
+    if (m.has(i)) return m.get(i);
+    const walls = b._slots.walls;
+    let best = null;
+    for (const id of b._slotRd.ids) {
+      const s = net.segs.get(id);
+      if (!s || (s.gate !== undefined && s.gate !== null && s.gate !== b.id)) continue;
+      const c = closestOnPoly(s.pts, s.cum, sl);
+      if (c.d > 45) continue;
+      const L = Math.hypot(c.x - sl.x, c.y - sl.y) || 1, along = Math.abs((c.x - sl.x) * sl.ax + (c.y - sl.y) * sl.ay) / L;
+      const blocked = walls.some(w => segHitsPoly(sl, c, w));
+      const score = c.d * (along > 0.7 ? 1 : 4) + (blocked ? 1000 : 0);
+      if (!best || score < best.score) best = { seg: id, u: clamp(c.s, 1, s.len - 1), score };
+    }
+    const r = best && { seg: best.seg, u: best.u };
+    m.set(i, r);
+    return r;
   }
   parkedCount(b) { this.slotsOf(b); return b.slotOcc.reduce((a, c) => a + (c ? 1 : 0), 0); }
   // 預約一個空車位（沒有就回傳 null）
@@ -293,13 +343,15 @@ export class City {
     b.slotRes[i] = true;
     return i;
   }
-  // 隨機挑一輛停著的車開走
-  pickParked(b) {
-    const list = this.slotsOf(b), used = [];
+  // 隨機挑最多 n 輛停著的車（不重複），依序嘗試開走
+  pickParked(b, n = 1) {
+    const list = this.slotsOf(b), used = [], out = [];
     for (let i = 0; i < list.length; i++) if (b.slotOcc[i]) used.push(i);
-    if (!used.length) return null;
-    const i = used[Math.floor(this.game.rng.next() * used.length)];
-    return { idx: i, slot: list[i], color: b.slotOcc[i] };
+    while (used.length && out.length < n) {
+      const i = used.splice(Math.floor(this.game.rng.next() * used.length), 1)[0];
+      out.push({ idx: i, slot: list[i], color: b.slotOcc[i] });
+    }
+    return out;
   }
 
   addBuilding(zt, seg, u, side, cols, rows, level = 1, kind = null, geo = null) {
@@ -456,7 +508,8 @@ export class City {
   }
 
   pushTrip(origin, trip) {
-    if (origin.queue.length > 30) {
+    // 等待出發的行程上限：大型建築（大飯店、大樓）同時要出門的人多，可以排得比較長
+    if (origin.queue.length > (origin.zone ? Math.max(30, this.cap(origin) * 0.6) : 30)) {
       origin.queue.shift();
       this.recordFail(trip);
     }
@@ -884,10 +937,10 @@ export class City {
       const old = { R: [3, 3], C: [4, 4], I: [5, 5] }[s.zone];
       const geo = s.c0 ? this.geomFrom(...s.c0, s.cols, s.rows) : null;
       const b = this.addBuilding(zt, seg, s.u, s.side, s.cols || old[0], s.rows || old[1], s.level, s.kind, geo);
-      if (s.roads) { b.roads = s.roads; b.front = s.front || null; }
+      if (s.roads) { b.roads = s.roads; b.front = s.front || null; this.markGate(b); }
       if (s.parkPlan) { b.parkPlan = s.parkPlan; b.links = s.links || {}; }
       const gs = s.gates || (s.gate ? [s.gate] : null);
-      if (gs) { b.gates = gs; this.applyGate(b); }
+      if (gs) b.gates = gs;
       b.happy = s.happy; b.stock = s.stock; b.abandoned = s.abandoned;
       this.slotsOf(b);
       if (s.slotOcc) b.slotOcc = b.slotOcc.map((_, i) => s.slotOcc[i] || null);

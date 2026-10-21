@@ -51,6 +51,8 @@ export class UI {
       if (s === 0) g.togglePause(); else g.setSpeed(s);
     });
     document.getElementById('btn-heat').onclick = () => g.toggleHeatmap();
+    document.getElementById('btn-rotl').onclick = () => g.renderer.rotate(-Math.PI / 2);
+    document.getElementById('btn-rotr').onclick = () => g.renderer.rotate(Math.PI / 2);
     document.getElementById('btn-grow').onclick = () => { g.autoGrow = !g.autoGrow; this.refreshTop(); };
     document.getElementById('btn-stats').onclick = () => this.showStats();
     document.getElementById('btn-menu').onclick = () => this.showMenu();
@@ -449,6 +451,7 @@ export class UI {
         <li><b>升級（U）</b>：直接把既有道路改為其他類型，或反轉單行道方向。</li>
         <li><b>分區（Z）</b>：手動劃設住宅、商業、工業區（也可開啟「自動發展」讓城市自己長）。</li>
         <li><b>熱圖（H）</b>：以顏色顯示各路段壅塞程度。</li>
+        <li><b>旋轉視角</b>：<kbd>Q</kbd> / <kbd>E</kbd> 或右上角 ⟲ ⟳ 每次轉 90°；按住滑鼠中鍵左右拖曳可自由旋轉（交流道工具中 Q / E 是旋轉交流道）。</li>
         <li>空白鍵暫停，<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換速度；滑鼠右鍵或 Esc 取消。</li>
       </ul>
       <p><b>小技巧</b>：高速公路與快速道路沿線不能蓋房子，但適合連接外部連線；匝道路權低於主線，會自動讓路併入。</p>

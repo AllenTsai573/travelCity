@@ -2,6 +2,7 @@
 import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, levelMul } from './config.js';
 import { halfWidth } from './network.js';
 import { pointAt, closestOnPoly, clamp, fmtMoney } from './util.js';
+import { TEMPLATES, findCrossing, frameFromCrossing, previewTemplate, placeInterchange } from './interchange.js';
 
 export const ZONE_COST = { R: 300, C: 450, I: 600 };
 
@@ -15,6 +16,9 @@ export class Tools {
     this.curve = false;
     this.zone = 'R';
     this.rbR = 26;
+    this.ixType = 'diamond';
+    this.ixAngle = 0;
+    this.ix = null;
     this.pts = [];
     this.mouse = { sx: 0, sy: 0, x: 0, y: 0, inside: false, shift: false, alt: false };
     this.snapRes = null;
@@ -138,7 +142,8 @@ export class Tools {
     const k = e.key.toLowerCase();
     this.keys.add(k);
     this.mouse.shift = e.shiftKey; this.mouse.alt = e.altKey; this.dirty = true;
-    const map = { v: 'select', r: 'road', o: 'roundabout', u: 'upgrade', j: 'junction', z: 'zone', b: 'bulldoze' };
+    const map = { v: 'select', r: 'road', o: 'roundabout', u: 'upgrade', j: 'junction', z: 'zone', b: 'bulldoze', i: 'interchange' };
+    if (this.tool === 'interchange' && (k === 'q' || k === 'e')) { this.ixAngle += (k === 'e' ? 1 : -1) * Math.PI / 12; this.dirty = true; return; }
     if (map[k] && !e.ctrlKey && !e.metaKey) { this.setTool(map[k]); return; }
     if (k === 'escape') this.cancel();
     else if (k === ' ') { e.preventDefault(); this.g.togglePause(); }
@@ -269,6 +274,20 @@ export class Tools {
       case 'select': {
         const h = this.pick(m.x, m.y);
         this.hover = h;
+        break;
+      }
+      case 'interchange': {
+        const t = TEMPLATES[this.ixType];
+        const cr = findCrossing(net, m.x, m.y, 80);
+        const fr = cr ? frameFromCrossing(net, cr)
+          : { ok: true, x: m.x, y: m.y, ux: Math.cos(this.ixAngle), uy: Math.sin(this.ixAngle), M: t.M, C: t.C, snap: false };
+        const pv = fr.ok ? previewTemplate(this.ixType, fr) : null;
+        let bad = !fr.ok || (pv && pv.levelError);
+        if (pv && !bad) for (const l of pv.lines) for (const p of l.pts) if (!g.terrain.inBounds(p.x, p.y, 2)) { bad = '超出地圖範圍'; break; }
+        this.ix = { fr, pv, bad };
+        const head = `${t.name}${fr.snap ? '（套用在既有交叉）' : '（自由放置 · Q/E 旋轉）'}`;
+        if (bad) this.setTip(`${head}：${fr.ok ? (pv.levelError || bad) : fr.reason}`, true);
+        else this.setTip(`${head} · 約 ${fmtMoney(pv.cost)} · 點擊建造`);
         break;
       }
     }
@@ -404,6 +423,14 @@ export class Tools {
         break;
       }
       case 'zone': break;
+      case 'interchange': {
+        const ix = this.ix;
+        if (!ix || ix.bad) { g.notify(ix ? (ix.fr.ok ? (ix.pv.levelError || ix.bad) : ix.fr.reason) : '無法建造', 'warn'); return; }
+        const r = placeInterchange(g, this.ixType, ix.fr);
+        if (r.ok) g.notify(`已建造${TEMPLATES[this.ixType].name}交流道（${fmtMoney(r.cost)}）`, 'good');
+        else g.notify(`無法建造：${r.reason}`, 'warn');
+        break;
+      }
       case 'junction': this.junctionClick(); break;
     }
     this.dirty = true;
@@ -521,6 +548,21 @@ export class Tools {
       const h = this.hover, c = h.geo.corners;
       ctx.fillStyle = h.reason ? 'rgba(255,70,70,0.45)' : 'rgba(120,230,140,0.5)';
       ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath(); ctx.fill();
+    } else if (this.tool === 'interchange' && this.ix && this.ix.pv && m.inside) {
+      const bad = this.ix.bad;
+      for (const l of this.ix.pv.lines) {
+        ctx.strokeStyle = bad ? 'rgba(255,70,70,0.35)' : l.role === 'main' || l.role === 'cross' ? 'rgba(255,210,94,0.35)' : 'rgba(90,200,255,0.45)';
+        ctx.lineWidth = halfWidth(l.type) * 2;
+        r.strokePoly(l.pts);
+      }
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = Math.max(0.3, 1.2 / z);
+      ctx.setLineDash([4 / z, 4 / z]);
+      for (const l of this.ix.pv.lines) r.strokePoly(l.pts);
+      ctx.setLineDash([]);
+      const f = this.ix.fr;
+      ctx.fillStyle = f.snap ? '#ffd25e' : '#5ac8ff';
+      ctx.beginPath(); ctx.arc(f.x, f.y, Math.max(3, 8 / z), 0, Math.PI * 2); ctx.fill();
     } else if (this.tool === 'junction') {
       ctx.strokeStyle = 'rgba(255,210,94,0.6)';
       ctx.lineWidth = 1.5 / z;

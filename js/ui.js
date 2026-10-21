@@ -2,11 +2,13 @@
 import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, BIOMES, DIFFICULTY, MILESTONES } from './config.js';
 import { fmtMoney, fmtTime, clamp } from './util.js';
 import { ZONE_COST } from './tools.js';
+import { TEMPLATES, TEMPLATE_ORDER } from './interchange.js';
 
 const TOOLS = [
   { id: 'select', icon: '🖱️', name: '選取', key: 'V' },
   { id: 'road', icon: '🛣️', name: '道路', key: 'R' },
   { id: 'roundabout', icon: '⭕', name: '圓環', key: 'O' },
+  { id: 'interchange', icon: '🔀', name: '交流道', key: 'I' },
   { id: 'upgrade', icon: '⬆️', name: '升級', key: 'U' },
   { id: 'junction', icon: '🚦', name: '路口', key: 'J' },
   { id: 'zone', icon: '🏘️', name: '分區', key: 'Z' },
@@ -65,6 +67,8 @@ export class UI {
       } else if (k === 'curve') { t.curve = !t.curve; t.pts = t.pts.slice(0, 1); }
       else if (k === 'zone') t.zone = v;
       else if (k === 'rb') t.rbR = Number(v);
+      else if (k === 'ix') t.ixType = v;
+      else if (k === 'rot') t.ixAngle += Number(v) * Math.PI / 12;
       t.dirty = true;
       this.refreshToolbar();
     });
@@ -105,6 +109,10 @@ export class UI {
     } else if (t.tool === 'roundabout') {
       html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="${t.rbR === r ? 'on' : ''}">半徑 ${r} m</button>`).join('') + `</div>`;
       html += `<div class="hint">點擊既有路口將其改建為圓環，或在空地放置圓環。環道車輛擁有路權。</div>`;
+    } else if (t.tool === 'interchange') {
+      html += `<div class="grp">` + TEMPLATE_ORDER.map(k => `<button data-sub="ix" data-v="${k}" class="${t.ixType === k ? 'on' : ''}" title="${TEMPLATES[k].desc}"><b>${TEMPLATES[k].name}</b></button>`).join('') + `</div>`;
+      html += `<div class="grp"><button data-sub="rot" data-v="-1" title="Q">↺</button><button data-sub="rot" data-v="1" title="E">↻</button></div>`;
+      html += `<div class="hint">${TEMPLATES[t.ixType].desc}。移到兩條不同高度道路的交叉處可直接套用；空地上則連主線一起建造。</div>`;
     } else if (t.tool === 'junction') {
       html += `<div class="hint">點擊路口：切換紅綠燈 / 全向停車 / 讓路標誌，調整時相，並可逐條編輯車道連接。</div>`;
     } else if (t.tool === 'bulldoze') {

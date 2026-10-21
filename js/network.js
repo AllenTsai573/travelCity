@@ -318,7 +318,8 @@ export class Network {
         c.from.conns.push(c);
         c.from.outLinks.add(c.to.link.key);
         const delay = n.control === 'signal' ? 9 : n.control === 'stop' ? 5 : (c.conflicts.length && c.score < maxScore ? 2.5 : 0.2);
-        const cost = c.len / c.speed + delay;
+        // 死路迴轉：除非沒有其他路線，否則駕駛不會選擇
+        const cost = c.len / c.speed + delay + (c.turn === 'U' ? 30 : 0);
         const L = c.from.link, prev = L.next.get(c.to.link.key);
         if (prev === undefined || cost < prev) L.next.set(c.to.link.key, cost);
       }
@@ -617,7 +618,8 @@ export class Network {
   }
 
   // 規劃道路：回傳可行性、成本與交叉點
-  planRoad(a, b, ctrl, typeKey, level) {
+  // opts.pts：自訂完整折線（交流道模板用）；opts.hA / opts.hB：未吸附端點的高度
+  planRoad(a, b, ctrl, typeKey, level, opts = {}) {
     const T = ROAD_TYPES[typeKey];
     const g = this.game, terrain = g.terrain;
     const res = { ok: false, reason: '', cost: 0, a, b, ctrl, typeKey, crossings: [], demolish: [] };
@@ -629,12 +631,16 @@ export class Network {
         if (Math.abs(h - Math.round(h)) > 0.2) return NaN;
         return Math.round(h);
       }
-      return level;
+      return null;
     };
-    const hA = hOf(a), hB = hOf(b);
+    const hA = hOf(a) ?? opts.hA ?? level, hB = hOf(b) ?? opts.hB ?? level;
     res.hA = hA; res.hB = hB;
     let pts;
-    if (ctrl) {
+    if (opts.pts) {
+      pts = opts.pts.map(p => ({ x: p.x, y: p.y }));
+      pts[0] = { x: a.x, y: a.y };
+      pts[pts.length - 1] = { x: b.x, y: b.y };
+    } else if (ctrl) {
       const est = dist(a, ctrl) + dist(ctrl, b);
       pts = quadPts(a, ctrl, b, clamp(Math.ceil(est / 8), 6, 48));
     } else pts = [{ x: a.x, y: a.y }, { x: b.x, y: b.y }];
@@ -646,7 +652,7 @@ export class Network {
     if (len < 10) return fail('道路太短');
     for (const p of pts) if (!terrain.inBounds(p.x, p.y, 2)) return fail('超出地圖範圍');
     if (Math.abs(hB - hA) * SLOPE_LEN > len) return fail(`坡度太陡（每層需 ${SLOPE_LEN} 公尺）`);
-    if (ctrl) {
+    if (ctrl || opts.pts) {
       // 曲率限制
       for (let i = 1; i < pts.length - 1; i++) {
         const v1x = pts[i].x - pts[i - 1].x, v1y = pts[i].y - pts[i - 1].y;
@@ -740,9 +746,13 @@ export class Network {
     for (let i = 0; i < seq.length - 1; i++) {
       const p = seq[i], q = seq[i + 1];
       if (p.n === q.n) continue;
-      const exists = [...this.segs.values()].some(s => ((s.a === p.n.id && s.b === q.n.id) || (s.b === p.n.id && s.a === q.n.id)) && Math.abs(s.len - (q.s - p.s)) < 3);
+      // 只有形狀相同（中點重合）才視為重複道路；兩端相同但路線不同（例如對向匝道）仍要建造
+      const piece = cutPoly(plan.pts, plan.cum, p.s, q.s);
+      const pc = polyCum(piece), mid = pointAt(piece, pc, pc[pc.length - 1] / 2);
+      const exists = [...this.segs.values()].some(s => ((s.a === p.n.id && s.b === q.n.id) || (s.b === p.n.id && s.a === q.n.id)) &&
+        Math.abs(s.len - (q.s - p.s)) < 3 && Math.hypot(pointAt(s.pts, s.cum, s.len / 2).x - mid.x, pointAt(s.pts, s.cum, s.len / 2).y - mid.y) < 3);
       if (exists) continue;
-      made.push(this.addSegment(p.n, q.n, plan.typeKey, cutPoly(plan.pts, plan.cum, p.s, q.s)));
+      made.push(this.addSegment(p.n, q.n, plan.typeKey, piece));
     }
     if (g.city) for (const b of plan.demolish) g.city.removeBuilding(b);
     for (const s of made) {

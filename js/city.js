@@ -2,7 +2,7 @@
 import { TRIP_SCALE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap, closestOnPoly } from './util.js';
 import { halfWidth } from './network.js';
-import { lotArt } from './lotart.js';
+import { lotArt, lotAisles, lotParkArea } from './lotart.js';
 
 const ema = (a, x, k) => a + (x - a) * k;
 
@@ -18,9 +18,13 @@ export function driveway(zone, kind, geo) {
   if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R2') return { end: d - 7 };
   if (zone === 'R' && kind === null && geo.rows >= 7 && geo.cols >= 8 && geo.zt === 'R3') return { end: d - 7 };
   if (zone !== 'C') return null;
-  if (kind === 'bigbox') return { end: d * 0.45 - 4 };
-  if (kind === 'mall' || kind === 'market') return { end: d * 0.32 - 4 };
-  if (kind === 'parking') return { end: d - 6, through: true };
+  // 大型停車場：主車道開到停車場底部，再接一條橫向車道與其他平行車道（車位都在真的車道旁，車子不會穿過其他車位）
+  const pa = lotParkArea(kind, geo.w, d);
+  if (pa) {
+    const aisles = lotAisles(pa.u0, pa.u1, geo.w / 2), through = kind === 'parking';
+    if (!aisles.length) return { end: kind === 'parking' ? d - 6 : pa.v1 - 3, through };
+    return { end: pa.v1 - 4.8, through, lot: { aisles, top: pa.v0 + 2 } };
+  }
   if (kind === 'shops' && geo.rows >= 6 && geo.cols >= 5) return { end: d - 6, through: true };
   return null;
 }
@@ -197,6 +201,18 @@ export class City {
       const fp = pointAt(seg.pts, seg.cum, u);
       if (!build({ x: fp.x, y: fp.y, seg: seg.id, u }, P(geo.w / 2, plan.end))) return null;
       if (plan.cross) build(P(6, plan.cross), P(geo.w - 6, plan.cross));
+      if (plan.lot) {
+        // 停車場底部的橫向車道（從主車道盡頭往兩側），再從橫向車道開出各條平行車道
+        const cv = plan.end, end = P(geo.w / 2, cv), en = net.nodeNear(end.x, end.y, 2, 0);
+        const lo = Math.min(...plan.lot.aisles), hi = Math.max(...plan.lot.aisles);
+        if (en && lo < geo.w / 2) build({ x: en.x, y: en.y, node: en.id }, P(lo, cv));
+        if (en && hi > geo.w / 2) build({ x: en.x, y: en.y, node: en.id }, P(hi, cv));
+        for (const a of plan.lot.aisles) {
+          const q = P(a, cv), n = net.nodeNear(q.x, q.y, 2, 0), sn = n ? null : net.segNear(q.x, q.y, 2, 0);
+          const from = n ? { x: n.x, y: n.y, node: n.id } : sn ? { x: sn.x, y: sn.y, seg: sn.seg.id, u: sn.u } : null;
+          if (from) build(from, P(a, plan.lot.top));
+        }
+      }
       net.rebuild();
     } finally { g.spend = spend; g.canAfford = can; }
     const segs = [...net.segs.values()].filter(s => s.type === 'service' && !before.has(s.id)).map(s => s.id);
@@ -283,30 +299,54 @@ export class City {
     return null;
   }
 
-  // 建築的停車位（世界座標、車頭方向），與畫面上 lotArt 的停車位一一對應
+  // 建築的停車位（世界座標、車頭方向），與畫面上 lotArt 的停車位一一對應；貨車車位（卸貨區）另外一組（truckSlotsOf）
   slotsOf(b) {
     const key = b.level + '|' + b.abandoned + '|' + !!b.roads;
     if (!b._slots || b._slots.key !== key) {
       const c0 = b.corners[0], art = lotArt(b);
       const P = (u, v) => ({ x: c0.x + b.tx * u + b.nx * v, y: c0.y + b.ty * u + b.ny * v });
-      const list = art.slots.map(it => {
+      const toSlot = it => {
         const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv;
         return { ...P(cu, cv), ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny, indoor: !!it.indoor, c: it.c };
-      });
+      };
+      const list = art.slots.map(toSlot), tlist = art.tslots.map(toSlot);
       // 建物的牆（車子開進 / 出車位時不能穿過；樹籬、頂棚不算）
       const walls = art.items.filter(it => it.t === 'rect' && it.h >= 1 && !it.car && !it.deco && !it.canopy).map(it => [P(it.u0, it.v0), P(it.u1, it.v0), P(it.u1, it.v1), P(it.u0, it.v1)]);
-      b._slots = { key, list, walls };
-      // 每個車位停的車（顏色）與預約（正在開過來）
-      const occ = b.slotOcc || [];
-      b.slotOcc = list.map((_, i) => occ[i] || null);
-      b.slotRes = list.map(() => false);
+      // 每個車位停的車（顏色）與預約（正在開過來）；tOcc / tRes 為貨車車位
+      // 建築升級 / 改建後配置會變：位置相同的車位沿用原本停著的車與預約（舊存檔沒有位置，依順序沿用）
+      const old = b._slots;
+      const carry = (nl, ol, occ, res) => {
+        const o = nl.map(() => null), r = nl.map(() => false);
+        if (!ol) { nl.forEach((_, i) => { o[i] = (occ && occ[i]) || null; }); return [o, r]; }
+        ol.forEach((p, j) => {
+          if (!(occ && occ[j]) && !(res && res[j])) return;
+          const i = nl.findIndex(q => Math.hypot(q.x - p.x, q.y - p.y) < 1);
+          if (i >= 0) { o[i] = occ && occ[j] || null; r[i] = !!(res && res[j]); }
+        });
+        return [o, r];
+      };
+      [b.slotOcc, b.slotRes] = carry(list, old && old.list, b.slotOcc, b.slotRes);
+      [b.tOcc, b.tRes] = carry(tlist, old && old.tlist, b.tOcc, b.tRes);
+      b._slots = { key, list, tlist, walls };
     }
     return b._slots.list;
   }
+  // 某個位置（車子出發時預約的車位）目前是第幾個車位；配置改變後已不存在就回傳 -1
+  slotIndexAt(b, pt, truck = false) {
+    const list = this.slotSet(b, truck).list;
+    for (let i = 0; i < list.length; i++) if (Math.hypot(list[i].x - pt.x, list[i].y - pt.y) < 1) return i;
+    return -1;
+  }
+  truckSlotsOf(b) { this.slotsOf(b); return b._slots.tlist; }
+  // 依車種取得車位清單與佔用 / 預約陣列
+  slotSet(b, truck) {
+    const list = truck ? this.truckSlotsOf(b) : this.slotsOf(b);
+    return { list, occ: truck ? b.tOcc : b.slotOcc, res: truck ? b.tRes : b.slotRes };
+  }
   // 車位對應的道路位置：車頭方向上最近、而且直直開過去不會穿過建物的道路
   // （臨路車位接前面的道路、巷道 / 停車場車道旁的車位接場內道路）；車子開到這個位置，再沿曲線開進車位
-  slotRoad(b, i) {
-    const net = this.game.net, sl = this.slotsOf(b)[i];
+  slotRoad(b, i, truck = false) {
+    const net = this.game.net, sl = this.slotSet(b, truck).list[i];
     if (!sl) return null;
     if (!b._slotRd || b._slotRd.ver !== net.version || b._slotRd.list !== b._slots.list) {
       // 候選道路：建築自己的場內道路＋地塊附近的一般地面道路（臨路的路段可能被巷道口切成好幾段）
@@ -315,8 +355,8 @@ export class City {
       for (const s of net.segs.values()) if (!s.T.internal && s.T.access && s.drawLevel === 0 && bboxOverlap(bb, s.bbox)) ids.add(s.id);
       b._slotRd = { ver: net.version, list: b._slots.list, map: new Map(), ids: [...ids] };
     }
-    const m = b._slotRd.map;
-    if (m.has(i)) return m.get(i);
+    const m = b._slotRd.map, key = truck ? 't' + i : i;
+    if (m.has(key)) return m.get(key);
     const walls = b._slots.walls;
     let best = null;
     for (const id of b._slotRd.ids) {
@@ -330,26 +370,17 @@ export class City {
       if (!best || score < best.score) best = { seg: id, u: clamp(c.s, 1, s.len - 1), score };
     }
     const r = best && { seg: best.seg, u: best.u };
-    m.set(i, r);
+    m.set(key, r);
     return r;
   }
-  parkedCount(b) { this.slotsOf(b); return b.slotOcc.reduce((a, c) => a + (c ? 1 : 0), 0); }
-  // 預約一個空車位（沒有就回傳 null）
-  reserveSlot(b) {
-    const list = this.slotsOf(b), free = [];
-    for (let i = 0; i < list.length; i++) if (!b.slotOcc[i] && !b.slotRes[i]) free.push(i);
-    if (!free.length) return null;
-    const i = free[Math.floor(this.game.rng.next() * free.length)];
-    b.slotRes[i] = true;
-    return i;
-  }
-  // 隨機挑最多 n 輛停著的車（不重複），依序嘗試開走
-  pickParked(b, n = 1) {
-    const list = this.slotsOf(b), used = [], out = [];
-    for (let i = 0; i < list.length; i++) if (b.slotOcc[i]) used.push(i);
+  parkedCount(b, truck = false) { return this.slotSet(b, truck).occ.reduce((a, c) => a + (c ? 1 : 0), 0); }
+  // 隨機挑最多 n 輛停著的車（不重複），依序嘗試開走；truck 為貨車（卸貨區）
+  pickParked(b, n = 1, truck = false) {
+    const { list, occ } = this.slotSet(b, truck), used = [], out = [];
+    for (let i = 0; i < list.length; i++) if (occ[i]) used.push(i);
     while (used.length && out.length < n) {
       const i = used.splice(Math.floor(this.game.rng.next() * used.length), 1)[0];
-      out.push({ idx: i, slot: list[i], color: b.slotOcc[i] });
+      out.push({ idx: i, slot: list[i], color: occ[i] });
     }
     return out;
   }
@@ -372,6 +403,8 @@ export class City {
     // 住宅一開始大部分的車停在家
     const sl = this.slotsOf(b);
     if (zone === 'R') sl.forEach((s, i) => { if (this.game.rng.next() < 0.7) b.slotOcc[i] = s.c; });
+    // 工業區一開始卸貨區停著幾輛貨車（之後送貨出去就從這裡開出）
+    if (zone === 'I') b.tOcc.forEach((_, i) => { if (this.game.rng.next() < 0.4) b.tOcc[i] = '#d8d0c0'; });
     this.game.terrain.clearTreesCircle(geo.x, geo.y, geo.rad * 0.8);
     return b;
   }
@@ -566,6 +599,8 @@ export class City {
         break;
       case 'goods':
         if (!to.dead && to.zone) to.stock = Math.min(40, to.stock + 6);
+        // 送貨到商店的貨車卸完貨（停在卸貨區）後開回工廠
+        if (!to.dead && to.zone === 'C' && from.zone && !from.dead) this.schedule(g.time + 15 + g.rng.next() * 25, { kind: 'return', from: to, to: from, truck: true });
         toll = 3;
         break;
       case 'mat':
@@ -920,7 +955,7 @@ export class City {
     return {
       nextId: this.nextId,
       buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, zt: b.zt, kind: b.kind, cols: b.cols, rows: b.rows, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned,
-        roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, parkPlan: b.parkPlan || undefined, links: b.links || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
+        roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, parkPlan: b.parkPlan || undefined, links: b.links || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, tOcc: b.tOcc && b.tOcc.some(Boolean) ? b.tOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
       demand: this.demand, stats: this.stats, history: this.history,
@@ -945,6 +980,7 @@ export class City {
       this.slotsOf(b);
       if (s.slotOcc) b.slotOcc = b.slotOcc.map((_, i) => s.slotOcc[i] || null);
       else if (s.parked !== undefined) b.slotOcc = b.slotOcc.map((_, i) => (i < s.parked ? this.slotsOf(b)[i].c : null));
+      if (s.tOcc) b.tOcc = b.tOcc.map((_, i) => s.tOcc[i] || null);
     }
     for (const l of d.lots || []) {
       const seg = net.segs.get(l.seg);

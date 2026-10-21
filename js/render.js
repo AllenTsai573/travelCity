@@ -315,13 +315,14 @@ export class Renderer {
       }
       for (const it of items) {
         if (!detail && (it.t === 'line' || it.car || it.umb || (it.t === 'circle' && it.h < 2 && !it.tree))) continue;
-        if (it.rank !== undefined ? it.indoor || !(b.slotOcc && b.slotOcc[it.rank]) : it.slot !== undefined && it.slot > occ) continue;
+        // 車位上畫實際停著的車（小客車 slotOcc、貨車卸貨區 tOcc）
+        if (it.rank !== undefined ? it.indoor || !(b.slotOcc && b.slotOcc[it.rank]) : it.trank !== undefined ? !(b.tOcc && b.tOcc[it.trank]) : it.slot !== undefined && it.slot > occ) continue;
         if (it.car) {
           // 停著的車與路上的車同樣畫法（顏色是實際停進來的那輛車）
           const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv, pc = P(cu, cv);
           this.localTf(pc.x, pc.y, alongU ? tx : nx, alongU ? ty : ny);
           const L = Math.max(it.du, it.dv) + 0.2, W = Math.min(it.du, it.dv) + 0.1;
-          this.carBody(it.rank !== undefined ? b.slotOcc[it.rank] : it.c, it.truck ? Math.max(L, 7) : Math.min(L, 4.6), it.truck ? 2.4 : Math.min(W, 1.85), !!it.truck, z > 2.2);
+          this.carBody(it.rank !== undefined ? b.slotOcc[it.rank] : it.trank !== undefined ? b.tOcc[it.trank] : it.c, it.truck ? 7.5 : Math.min(L, 4.6), it.truck ? 2.5 : Math.min(W, 1.85), !!it.truck, z > 2.2);
           this.worldTf();
           continue;
         }
@@ -1094,7 +1095,7 @@ export class Renderer {
     const ctx = this.ctx, z = this.cam.z;
     const detail = z > 2.2;
     for (const vh of list) {
-      if (vh.hold > 0) continue;   // 還在從停車位開出來（由停車動畫畫出）
+      if (vh.hold > 0 || vh.leaving > 0) continue;   // 正在開出 / 開進車位（由停車動畫畫出）
       const p = this.vehPose(vh);
       const lat = p.lat;
       const x = p.x - p.dy * lat, y = p.y + p.dx * lat;

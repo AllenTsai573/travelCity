@@ -5,6 +5,7 @@
 import { LANE_W, VEHICLE_COLORS } from './config.js';
 import { findRoute, routeFromPoint } from './routing.js';
 import { clamp, pointAt } from './util.js';
+import { laneOffset } from './network.js';
 
 const FREE = { gap: Infinity, lv: 0 };
 const MAX_VEHICLES = 3000;
@@ -26,7 +27,7 @@ export class Traffic {
   createVehicle(truck) {
     const r = this.game.rng;
     return {
-      id: this.nextId++, truck, len: truck ? 9 : 4.6, w: truck ? 2.5 : 1.9,
+      id: this.nextId++, truck, len: truck ? 7.5 : 4.6, w: truck ? 2.5 : 1.9,
       a: truck ? 0.9 : 1.5 + r.range(-0.2, 0.4), b: truck ? 2.2 : 2.6, T: truck ? 1.6 : 1.15 + r.range(0, 0.35),
       v0f: truck ? 0.9 : r.range(0.92, 1.1), color: truck ? '#d8d0c0' : r.pick(VEHICLE_COLORS),
       track: null, s: 0, v: 0, acc: 0, lat: 0, route: [], ri: 0, nextConn: null, committed: false,
@@ -72,12 +73,22 @@ export class Traffic {
     return lane && !lane.dead ? lane : null;
   }
 
-  spaceAt(lane, s, len) {
+  // back：車尾後方要淨空的距離；headway：後方來車至少要幾秒後才會到
+  spaceAt(lane, s, len, back = 4, headway = 1.6) {
     for (const w of lane.vehs) {
-      if (w.s > s - len - 4 && w.s - w.len < s + 4) return false;
-      if (w.s < s && w.v > 4 && s - len - w.s < w.v * 1.6) return false;
+      if (w.s > s - len - back && w.s - w.len < s + 4) return false;
+      if (w.s < s && w.v > 4 && s - len - w.s < w.v * headway) return false;
     }
     return true;
+  }
+  // 同一處車位（地下停車場入口、相鄰的車位）一次只讓一台車進出
+  slotBusy(b, pt) {
+    for (const f of this.fx) {
+      if (f.done || f.b !== b) continue;
+      const q = f.arrive ? f.pts[3] : f.pts[0];
+      if (Math.hypot(q.x - pt.x, q.y - pt.y) < 3.4) return true;
+    }
+    return false;
   }
 
   // ---------- 生成 / 結束 ----------
@@ -85,42 +96,45 @@ export class Traffic {
   destOf(v) {
     const to = v.trip.to;
     if (!v.slotPt || to.outside) return to;
-    const ver = this.net.version;
-    if (!v._dest || v._dest.ver !== ver) {
-      const rd = this.game.city.slotRoad(to, v.slotIdx);
-      v._dest = rd ? { ver, seg: rd.seg, u: rd.u, id: to.id } : { ver, seg: to.seg, u: to.u, id: to.id };
+    const city = this.game.city, ver = this.net.version, list = city.slotSet(to, v.truck).list;
+    if (!v._dest || v._dest.ver !== ver || v._dest.list !== list) {
+      // 依預約車位的位置找（建築升級後車位編號可能改變）
+      const i = city.slotIndexAt(to, v.slotPt, v.truck);
+      v.slotIdx = i >= 0 ? i : null;
+      const rd = i >= 0 ? city.slotRoad(to, i, v.truck) : null;
+      v._dest = rd ? { ver, list, seg: rd.seg, u: rd.u, id: to.id } : { ver, list, seg: to.seg, u: to.u, id: to.id };
+      if (!rd) v.slotPt = null;
     }
     return v._dest;
   }
 
   trySpawn(trip) {
     if (this.vehicles.length >= MAX_VEHICLES) return 'wait';
-    const net = this.net, city = this.game.city, from = trip.from, to = trip.to;
+    const net = this.net, city = this.game.city, from = trip.from, to = trip.to, truck = !!trip.truck;
     if (!net.segs.get(from.seg) || !net.segs.get(to.seg)) return 'noroute';
-    // 從建築出發：挑一輛停著的車，從它的車位對應的路邊出發；那裡的路邊被擋住時換另一輛（最多試 4 輛）
+    // 從建築出發：挑一輛停著的車（貨車停在卸貨區），從它的車位對應的路邊出發；那裡的路邊被擋住時換另一輛（最多試 4 輛）
     const leaves = [];
-    if (city && from.zone && !from.dead && !trip.truck) {
-      for (const lv of city.pickParked(from, 4)) {
-        const rd = city.slotRoad(from, lv.idx);
+    if (city && from.zone && !from.dead) {
+      const parked = city.pickParked(from, 4, truck);
+      for (const lv of parked) {
+        if (this.slotBusy(from, lv.slot)) continue;
+        const rd = city.slotRoad(from, lv.idx, truck);
         if (rd) leaves.push({ ...lv, pt: { seg: rd.seg, u: rd.u, id: from.id } });
       }
+      // 有停著的車但旁邊正有車在進出：等一下，不要從建物憑空開出一輛
+      if (!leaves.length && parked.length) return 'wait';
     }
     if (!leaves.length) leaves.push(null);
-    // 目的地是建築：先預約一個空車位，開到車位對應的路邊
+    // 目的地是建築：先預約一個空車位（貨車預約卸貨區），開到車位對應的路邊
     let slotIdx = null, slotPt = null;
-    if (city && to.zone && !to.dead && !trip.truck) {
-      const list = city.slotsOf(to);
-      for (let i = 0; i < list.length; i++) if (!to.slotOcc[i] && !to.slotRes[i]) { slotIdx = i; break; }
-      if (slotIdx !== null) {
-        // 隨機挑一個空位
-        const free = list.map((_, i) => i).filter(i => !to.slotOcc[i] && !to.slotRes[i]);
-        slotIdx = free[Math.floor(this.game.rng.next() * free.length)];
-        slotPt = list[slotIdx];
-      }
+    if (city && to.zone && !to.dead) {
+      const { list, occ, res } = city.slotSet(to, truck), free = [];
+      for (let i = 0; i < list.length; i++) if (!occ[i] && !res[i]) free.push(i);
+      if (free.length) { slotIdx = free[Math.floor(this.game.rng.next() * free.length)]; slotPt = list[slotIdx]; }
     }
-    const rd = slotPt ? city.slotRoad(to, slotIdx) : null;
+    const rd = slotPt ? city.slotRoad(to, slotIdx, truck) : null;
     const destPt = rd ? { seg: rd.seg, u: rd.u, id: to.id } : to;
-    const len = trip.truck ? 9 : 4.6;
+    const len = truck ? 7.5 : 4.6;
     let routed = false;
     for (const leave of leaves) {
       const fromPt = leave ? leave.pt : from;
@@ -130,21 +144,24 @@ export class Traffic {
       const link = net.links.get(r.path[0]);
       for (let i = link.lanes.length - 1; i >= 0; i--) {
         const lane = link.lanes[i];
-        const s = clamp(net.segUToLaneS(lane, fromPt.u), 0, lane.len - 0.5);
-        if (this.spaceAt(lane, s, len)) {
-          const v = this.createVehicle(trip.truck);
+        // 從車位開出：在車位稍前方加入車流（轉出時不會掃到後方的車位），後方要留出轉出的空間、來車 3.5 秒內不會到；
+        // 要橫越的車道（例如往對向車道）也要淨空
+        const s = clamp(net.segUToLaneS(lane, fromPt.u) + (leave ? len / 2 + 2 : 0), 0, lane.len - 0.5);
+        const ok = leave ? this.spaceAt(lane, s, len, 9, 3.5) && this.sideClear(lane, s, leave.slot, len) : this.spaceAt(lane, s, len);
+        if (ok) {
+          const v = this.createVehicle(truck);
           v.route = r.path; v.ri = 0; v.trip = trip;
           v.v = from.outside ? Math.min(lane.speed * 0.7, 14) : 0;
           v.fadeIn = from.outside ? 1 : 0;   // 沒有停車位的建築：車由路邊慢慢出現
-          if (rd) { v.slotIdx = slotIdx; v.slotPt = slotPt; to.slotRes[slotIdx] = true; }
+          if (rd) { v.slotIdx = slotIdx; v.slotPt = slotPt; city.slotSet(to, truck).res[slotIdx] = true; }
           this.place(v, lane, s);
           this.vehicles.push(v);
           // 從停車位開出來，到路邊才加入車流（車子就是原本停著的那輛）
           if (leave) {
-            from.slotOcc[leave.idx] = null;
+            city.slotSet(from, truck).occ[leave.idx] = null;
             v.color = leave.color;
             const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
-            const f = this.parkPath(p, leave.slot, v, false);
+            const f = this.parkPath(p, leave.slot, v, false, from, leave.idx);
             this.fx.push(f);
             v.hold = f.dur;
           } else if (from.zone && !from.dead && this.fx.length < 300) {
@@ -165,21 +182,76 @@ export class Traffic {
 
   finish(v, ok) {
     if (v.dead) return;
+    // 正在轉進車位時被移除（例如道路被拆）：直接結束
+    if (v.leaving > 0) { this.endTrip(v, v.finishOk); return; }
     // 抵達建築：開進預約好的車位停好（沒有車位就開進建物 / 地下停車場）
     const to = v.trip && v.trip.to;
-    const hasSlot = v.slotIdx !== undefined && v.slotIdx !== null && to && to.slotRes;
+    if (v.slotPt && to && to.zone) this.destOf(v);   // 確認預約的車位還在（建築升級後依位置對應）
+    const res = to && (v.truck ? to.tRes : to.slotRes);
+    const hasSlot = v.slotIdx !== undefined && v.slotIdx !== null && res;
+    let f = null;
     if (ok && to && to.zone && !to.dead && v.track && v.track.pts) {
       const p = pointAt(v.track.pts, v.track.cum, clamp(v.s - v.len / 2, 0, v.track.len));
-      if (hasSlot) this.fx.push(this.parkPath(p, v.slotPt, v, true, to, v.slotIdx));
+      if (hasSlot) this.fx.push(f = this.parkPath(p, v.slotPt, v, true, to, v.slotIdx));
       else if (this.fx.length < 300) {
         const gx = to.x - p.x, gy = to.y - p.y, L = Math.hypot(gx, gy) || 1, k = Math.min(10, L * 0.5);
-        this.fx.push(this.parkPath(p, { x: p.x + gx / L * k, y: p.y + gy / L * k, ax: gx / L, ay: gy / L, indoor: true }, v, true));
+        this.fx.push(f = this.parkPath(p, { x: p.x + gx / L * k, y: p.y + gy / L * k, ax: gx / L, ay: gy / L, indoor: true }, v, true));
       }
-    } else if (hasSlot) to.slotRes[v.slotIdx] = false;
+    } else if (hasSlot) res[v.slotIdx] = false;
+    // 轉進車位時車身還壓在車道上：先留在車道上（不畫出來）擋住後面的車，直到沿曲線開離車道（橫向超過 3.2 m）
+    if (f && v.track.kind === 'lane') {
+      const [p0, p1, p2, p3] = f.pts, dx = p1.x - p0.x, dy = p1.y - p0.y, L = Math.hypot(dx, dy) || 1;
+      let kk = 1;
+      for (let k = 0.05; k <= 1; k += 0.05) {
+        const e = k * k * (3 - 2 * k), m = 1 - e;
+        const x = m * m * m * p0.x + 3 * m * m * e * p1.x + 3 * m * e * e * p2.x + e * e * e * p3.x;
+        const y = m * m * m * p0.y + 3 * m * m * e * p1.y + 3 * m * e * e * p2.y + e * e * e * p3.y;
+        if (Math.abs((x - p0.x) * dy - (y - p0.y) * dx) / L > 3.2) { kk = k; break; }
+      }
+      v.leaving = f.dur * kk + 0.2; v.finishOk = ok; v.v = 0; v.acc = 0;
+      v.s = Math.min(v.s, v.track.len - 0.05);
+      return;
+    }
+    this.endTrip(v, ok);
+  }
+  endTrip(v, ok) {
     this.removeFromTrack(v);
     v.dead = true;
     v.track = null;
+    v.leaving = 0;
     if (this.game.city) this.game.city.onTripEnd(v.trip, ok, v.age);
+  }
+
+  // 停進 / 開出路邊車位時要橫越的其他車道是否淨空：檢查自己的車道與車位那一側路邊之間的車道，
+  // 旁邊有車或 3 秒內會開到就不行
+  sideClear(lane, s, slotPt, len) {
+    const net = this.net, seg = lane.seg, u = net.laneSToSegU(lane, s), p = pointAt(seg.pts, seg.cum, u);
+    const side = Math.sign((slotPt.x - p.x) * -p.dy + (slotPt.y - p.y) * p.dx);
+    const my = laneOffset(seg.T, lane.dir, lane.idx);
+    for (const L of seg.lanes) {
+      if (L === lane || (laneOffset(seg.T, L.dir, L.idx) - my) * side <= 0) continue;
+      const s2 = net.segUToLaneS(L, u);
+      for (const w of L.vehs) {
+        if (w.s > s2 - len - 3 && w.s - w.len < s2 + len + 3) return false;
+        if (w.s < s2 && s2 - w.s < Math.max(8, w.v * 3)) return false;
+      }
+      // 這條車道的起點就在附近：從後方路口正要開進來的車也算
+      if (s2 < 45) for (const c of net.nodes.get(L.link.from)?.conns || []) {
+        if (c.to !== L) continue;
+        for (const w of c.vehs) if (c.len - w.s + s2 < Math.max(10, w.v * 3)) return false;
+        for (const w of c.from.vehs) if (c.from.len - w.s + c.len + s2 < Math.max(10, w.v * 3) && w.nextConn === c) return false;
+      }
+    }
+    // 車位靠近路口（例如停車場車道的交叉口）：路口裡正在轉彎的車離開後才進出
+    for (const nid of [seg.a, seg.b]) {
+      const n = net.nodes.get(nid);
+      if (!n || Math.hypot(n.x - p.x, n.y - p.y) > n.radius + 16) continue;
+      for (const c of n.conns) for (const w of c.vehs) {
+        const q = pointAt(c.pts, c.cum, clamp(w.s - w.len / 2, 0, c.len));
+        if (Math.hypot(q.x - p.x, q.y - p.y) < len + 6) return false;
+      }
+    }
+    return true;
   }
   despawnAll(list) { for (const v of list) this.finish(v, false); }
 
@@ -444,11 +516,25 @@ export class Traffic {
     return gap > 250 ? FREE : { gap, lv };
   }
 
+  // 從同一條車道分出去的其他連接上、車尾還在共用起點附近的車（剛轉進去 / 剛分岔的前車）
+  // s0：自己在這段共用起點之後的位置（還在車道上時為負值）
+  forkLeader(lane, own, s0, best) {
+    for (const c of lane.conns) {
+      if (c === own || !c.vehs.length) continue;
+      const w = c.vehs[c.vehs.length - 1], rear = w.s - w.len;
+      if (rear > 6 || w.s <= s0) continue;
+      const gap = rear - s0;
+      if (gap < best.gap) best = { gap, lv: w.v };
+    }
+    return best;
+  }
+
   leader(v) {
     const tr = v.track;
     if (v.idx > 0) {
       const L = tr.vehs[v.idx - 1];
-      return { gap: L.s - L.len - v.s, lv: L.v };
+      const r = { gap: L.s - L.len - v.s, lv: L.v };
+      return tr.kind === 'conn' && v.s < 6 ? this.forkLeader(tr.from, tr, v.s, r) : r;
     }
     const dist = tr.len - v.s;
     if (tr.kind === 'lane') {
@@ -462,13 +548,15 @@ export class Traffic {
           if (dist < v.v * v.v / 6 + 4) v.committed = true;
         }
       }
+      let r;
       if (c.vehs.length) {
         const w = c.vehs[c.vehs.length - 1];
-        return { gap: dist + w.s - w.len, lv: w.v };
-      }
-      return this.leaderOnLaneStart(c, dist + c.len);
+        r = { gap: dist + w.s - w.len, lv: w.v };
+      } else r = this.leaderOnLaneStart(c, dist + c.len);
+      return dist < 30 ? this.forkLeader(tr, c, -dist, r) : r;
     }
-    return this.leaderOnLaneStart(tr, dist);
+    const r = this.leaderOnLaneStart(tr, dist);
+    return v.s < 6 ? this.forkLeader(tr.from, tr, v.s, r) : r;
   }
 
   computeAccel(v) {
@@ -517,6 +605,12 @@ export class Traffic {
         let bd = Infinity;
         for (const l of lanes) if (Math.min(reach[l.idx].d, 4) === bestD && Math.abs(l.idx - lane.idx) < bd) { bd = Math.abs(l.idx - lane.idx); mand = Math.sign(l.idx - lane.idx); }
       }
+    }
+    // 快到路邊的車位：先換到最外側車道，轉進去時才不用橫越同向車道（有足夠車距才換，不硬切）
+    if (atDest && v.slotPt && v.trip.to.zone && lane.idx < lanes.length - 1) {
+      const dS = this.destS(v) - v.s, p = pointAt(lane.pts, lane.cum, clamp(v.s, 0, lane.len));
+      // distEff 設很大：不急迫，只在車距足夠（≥ 3 m、後車不必急煞）時才換
+      if (dS > 0 && dS < 250 && (v.slotPt.x - p.x) * -p.dy + (v.slotPt.y - p.y) * p.dx > 0) { mand = 1; distEff = 999; }
     }
     if (!mand && (distEnd < 40 || v.s < 5)) return;
     const opts = mand ? [mand] : [-1, 1];
@@ -582,7 +676,9 @@ export class Traffic {
     const dx = sl.x - p.x, dy = sl.y - p.y, dist = Math.hypot(dx, dy) || 1;
     let ax = sl.ax, ay = sl.ay;
     if ((arrive ? 1 : -1) * (ax * dx + ay * dy) < 0) { ax = -ax; ay = -ay; }
-    const k0 = Math.min(5, dist * 0.45), k1 = Math.min(5, dist * 0.45);
+    // 控制點依車位與路邊點的前後距離（e）與橫向距離（D）縮放：轉進 / 轉出時不會先衝過頭再折回，掃到旁邊的車位
+    const e = (arrive ? 1 : -1) * (dx * p.dx + dy * p.dy), D = Math.abs(dx * p.dy - dy * p.dx);
+    const k0 = clamp(e * 0.9, 0.6, 5), k1 = clamp(D * 0.7, 1, 5);
     const pts = arrive
       ? [{ x: p.x, y: p.y }, { x: p.x + p.dx * k0, y: p.y + p.dy * k0 }, { x: sl.x - ax * k1, y: sl.y - ay * k1 }, { x: sl.x, y: sl.y }]
       : [{ x: sl.x, y: sl.y }, { x: sl.x + ax * k1, y: sl.y + ay * k1 }, { x: p.x - p.dx * k0, y: p.y - p.dy * k0 }, { x: p.x, y: p.y }];
@@ -599,15 +695,15 @@ export class Traffic {
         if (f.t >= f.dur && !f.done) {
           f.done = true;
           // 停好了：車位記下這輛車（顏色），取消預約
-          if (f.b && f.arrive && f.idx !== null && f.b.slotOcc) { f.b.slotRes[f.idx] = false; if (!f.b.dead) f.b.slotOcc[f.idx] = f.color; }
+          if (f.b && f.arrive && f.idx !== null && f.b.slotOcc) { const st = this.game.city.slotSet(f.b, f.truck); st.res[f.idx] = false; if (!f.b.dead) st.occ[f.idx] = f.color; }
         }
       }
       this.fx = this.fx.filter(f => !f.done);
     }
     const vs = this.vehicles;
-    for (const v of vs) if (!v.dead) v.acc = this.computeAccel(v);
+    for (const v of vs) if (!v.dead) v.acc = v.leaving > 0 || v.hold > 0 ? 0 : this.computeAccel(v);
     for (const v of vs) {
-      if (v.dead) continue;
+      if (v.dead || v.leaving > 0) continue;
       // 還在從停車位開出來：先停在路邊等
       if (v.hold > 0) { v.hold -= dt; v.v = 0; if (v.hold <= 0) v.fadeIn = 1; continue; }
       if (v.fadeIn < 1) v.fadeIn = Math.min(1, v.fadeIn + dt / 0.8);
@@ -617,6 +713,10 @@ export class Traffic {
     let anyDead = false;
     for (const v of vs) {
       if (v.dead) { anyDead = true; continue; }
+      // 正在轉進車位：時間到才真正離開車道
+      if (v.leaving > 0) { v.leaving -= dt; v.v = 0; if (v.leaving <= 0) { this.endTrip(v, v.finishOk); anyDead = true; } continue; }
+      // 正在從車位開出來：停在路邊不動
+      if (v.hold > 0) { v.v = 0; v.age += dt; continue; }
       v.v = Math.max(0, v.v + v.acc * dt);
       v.s += v.v * dt;
       v.braking = v.acc < -1.2;
@@ -628,6 +728,9 @@ export class Traffic {
       if (v.dead) { anyDead = true; continue; }
       const tr = v.track;
       if (tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === this.destOf(v).seg && v.s >= this.destS(v)) {
+        // 車位在路的另一側：停在原地等要橫越的車道淨空（最多 15 秒）
+        const ahead = v.idx > 0 ? tr.vehs[v.idx - 1] : null;
+        if (v.slotPt && (v.parkWait || 0) < 15 && (!this.sideClear(tr, v.s, v.slotPt, v.len) || this.slotBusy(v.trip.to, v.slotPt) || (ahead && ahead.s - ahead.len - v.s < 6))) { v.parkWait = (v.parkWait || 0) + dt; v.s = this.destS(v); v.v = 0; continue; }
         this.finish(v, true); anyDead = true; continue;
       }
       v.rerouteT -= dt;

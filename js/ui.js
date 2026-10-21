@@ -19,7 +19,7 @@ const TOOLS = [
   { id: 'zone', icon: '🏘️', name: '分區', key: 'Z' },
   { id: 'bulldoze', icon: '🚧', name: '拆除', key: 'B' },
 ];
-const PURPOSE = { work: '通勤上班', home: '回家', shop: '購物', goods: '貨運（商品）', mat: '貨運（原料）', through: '過境交通', visit: '觀光住宿' };
+const PURPOSE = { work: '通勤上班', home: '回家', shop: '購物', goods: '貨運（商品）', mat: '貨運（原料）', through: '過境交通', visit: '觀光住宿', return: '卸完貨回程' };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pct = v => Math.round(clamp(v, 0, 1) * 100) + '%';
 const bar = (v, good = true) => {

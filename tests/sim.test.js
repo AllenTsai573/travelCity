@@ -44,7 +44,7 @@ for (let h = 0; h < 20; h++) {
 }
 assert(intruders === 0, `沒有車開進別人的場內道路（${intruders} 次）`);
 // 停車位：每個室外車位都接到一條道路，從車位直直開到路上不會穿過建物；
-// 一般地塊也不會穿過其他車位（大型停車場有多條車道，不檢查車位）
+// 也不會穿過其他車位（大型停車場的每條車道都是真的場內道路）
 {
   const cross = (a, b, c, d) => { const o = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)); return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0; };
   const hits = (a, b, poly) => poly.some((p, i) => cross(a, b, p, poly[(i + 1) % poly.length]));
@@ -55,18 +55,20 @@ assert(intruders === 0, `沒有車開進別人的場內道路（${intruders} 次
     const P = (u, v) => ({ x: c0.x + b.tx * u + b.nx * v, y: c0.y + b.ty * u + b.ny * v });
     const box = it => (it.du !== undefined ? [P(it.u0, it.v0), P(it.u0 + it.du, it.v0), P(it.u0 + it.du, it.v0 + it.dv), P(it.u0, it.v0 + it.dv)] : [P(it.u0, it.v0), P(it.u1, it.v0), P(it.u1, it.v1), P(it.u0, it.v1)]);
     const walls = art.items.filter(it => it.t === 'rect' && it.h >= 1 && !it.car && !it.deco && !it.canopy).map(box);
-    const bigLot = ['market', 'mall', 'bigbox', 'parking'].includes(b.kind);
-    g.city.slotsOf(b).forEach((sl, i) => {
+    const others = [...art.slots, ...art.tslots].filter(it => !it.indoor);
+    for (const truck of [false, true]) g.city.slotSet(b, truck).list.forEach((sl, i) => {
       if (sl.indoor) return;
       n++;
-      const rd = g.city.slotRoad(b, i);
+      const rd = g.city.slotRoad(b, i, truck);
       if (!rd) { noRoad++; return; }
-      const s = g.net.segs.get(rd.seg), p = pointAt(s.pts, s.cum, rd.u);
-      if (walls.some(w => hits(sl, p, w))) { thruB++; bad.push(`${b.zt}${b.kind ? ':' + b.kind : ''}`); }
-      if (!bigLot && art.slots.some((it, j) => j !== i && !it.indoor && hits(sl, p, box(it)))) { thruC++; bad.push(`${b.zt}${b.kind ? ':' + b.kind : ''}（車位）`); }
+      const s = g.net.segs.get(rd.seg), p = pointAt(s.pts, s.cum, rd.u), me = (truck ? art.tslots : art.slots)[i];
+      if (walls.some(w => hits(sl, p, w))) { thruB++; bad.push(`${b.zt}${b.kind ? ':' + b.kind : ''}${truck ? '貨車' : ''}`); }
+      if (others.some(it => it !== me && hits(sl, p, box(it)))) { thruC++; bad.push(`${b.zt}${b.kind ? ':' + b.kind : ''}${truck ? '貨車' : ''}（車位）`); }
     });
   }
-  assert(n > 100 && noRoad === 0, `每個室外車位都接到道路（${n} 個，${noRoad} 個沒有）`);
+  assert(n > 100 && noRoad === 0, `每個室外車位（含卸貨區）都接到道路（${n} 個，${noRoad} 個沒有）`);
+  const docks = g.city.buildings.filter(b => b.zone === 'I').reduce((a, b) => a + g.city.parkedCount(b, true), 0);
+  assert(docks > 0, `工業區卸貨區有貨車停著（${docks} 輛）`);
   assert(thruB === 0 && thruC === 0, `從車位開到路上不穿過建物 / 其他車位（穿過建物 ${thruB}、車位 ${thruC}）${[...new Set(bad)].slice(0, 6).join('、')}`);
 }
 // 停車：住宅一開始有車停在家，車輛出發後停車數減少、回來後增加

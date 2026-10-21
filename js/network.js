@@ -254,9 +254,11 @@ export class Network {
       const c = (d1.x * d2.x + d1.y * d2.y) / ((Math.hypot(d1.x, d1.y) * Math.hypot(d2.x, d2.y)) || 1);
       const sameLanes = s1.T.fwd + s1.T.bwd === s2.T.fwd + s2.T.bwd && s1.T.median === s2.T.median;
       if (sameLanes && c < -0.985) return 0.3;
+      // 急彎：銜接區依夾角加長，否則內外車道的端點會交錯，各車道的連接線互相交叉（並排的車會重疊）
+      const ang = Math.acos(clamp(c, -1, 1)), bend = (maxHW + 1) / Math.tan(Math.max(ang, 0.2) / 2) + 2;
       // 車道數不同：拉長銜接區，讓路面逐漸收窄 / 加寬
-      if (!sameLanes) return maxHW * 1.4 + 4;
-      return maxHW * 0.9 + 2.5;
+      if (!sameLanes) return clamp(Math.max(maxHW * 1.4 + 4, bend), 0, 60);
+      return clamp(Math.max(maxHW * 0.9 + 2.5, bend), 0, 60);
     }
     // 路口範圍依最小夾角決定：斜交路口的重疊區較長，車道需在重疊區外才開始
     let minAng = Math.PI;

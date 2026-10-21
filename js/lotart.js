@@ -31,7 +31,7 @@ export function lotArt(b) {
       if (lane && Math.abs(u0 + CELL - lu) < CELL * 1.2) continue;
       if (r() > fill) { if (r() < 0.6) tree(u0 + 6, v0 + 6); continue; }
       const hw = 3.4 + r() * 1.3, hd = 2.8 + r() * 1.2, cu = u0 + 6 + (r() - 0.5) * 1.5, cv = v0 + 5.2 + (r() - 0.5) * 1.2;
-      rect(cu - hw, cv - hd, cu + hw, cv + hd, pick(r, ROOF_R), 1.4 + lv * 0.3, { ridge: r() < 0.5 ? 'u' : 'v' });
+      rect(cu - hw, cv - hd, cu + hw, cv + hd, pick(r, ROOF_R), 4 + lv * 0.8 + r() * 1.2, { ridge: r() < 0.5 ? 'u' : 'v', wall: pick(r, ['#efe6d6', '#e6dccb', '#f2efe8', '#e9d9c4', '#dfe3e6']) });
       if (r() < 0.55) tree(u0 + (r() < 0.5 ? 2 : 10), v0 + 10.5, 0.8);
     }
   } else if (b.zt === 'R2') {
@@ -41,7 +41,7 @@ export function lotArt(b) {
       for (let i = 0; i < b.cols; i += 4) {
         if (r() > fill + 0.15) { tree(i * CELL + 8, j * CELL + 6); continue; }
         const u1 = Math.min(b.cols, i + 4) * CELL - 1.5;
-        rect(i * CELL + 1.5, j * CELL + 1.5, u1, j * CELL + 10.5, pick(r, WALL_R2), 3 + lv * 1.2, { grid: 'u' });
+        rect(i * CELL + 1.5, j * CELL + 1.5, u1, j * CELL + 10.5, pick(r, WALL_R2), 7 + lv * 2.5, { grid: 'u' });
       }
       if (j + 3 <= b.rows) for (let i = 0; i < b.cols; i += 2) if (r() < 0.5) tree(i * CELL + 6, j * CELL + 15, 0.8);
     }
@@ -65,6 +65,15 @@ export function lotArt(b) {
       for (let v = 6; v < bv - 4; v += 6) line([{ u: 6, v }, { u: w - 6, v }], 'rgba(255,255,255,0.75)', 0.25, [2.2, 0.6]);
       road([{ u: w / 2, v: 0 }, { u: w / 2, v: bv - 2 }], 5);
       for (let k = 0; k < 10 + lv * 6; k++) items.push({ t: 'rect', u0: 8 + r() * (w - 16), v0: 5 + r() * (bv - 12), du: 4.4, dv: 1.9, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6']), h: 0.4, car: true });
+    } else if (b.kind === 'hotel') {
+      // 飯店：高樓主體＋泳池、花園與臨路的落客區
+      const s = Math.min(w, d);
+      rect(w * 0.2, d * 0.32, w * 0.8, d * 0.32 + Math.min(16, d * 0.4), '#e9e2d6', 10 + lv * 6, { grid: 'both' });
+      rect(w * 0.42, d * 0.32, w * 0.58, d * 0.32 + Math.min(16, d * 0.4), '#d7c9a7', 13 + lv * 6);
+      rect(w * 0.3, d * 0.72, w * 0.6, d * 0.72 + Math.min(8, s * 0.18), '#5fc4e8', 0, { pool: true });
+      road([{ u: w * 0.3, v: 0 }, { u: w * 0.3, v: d * 0.22 }, { u: w * 0.7, v: d * 0.22 }, { u: w * 0.7, v: 0 }], 4.5);
+      rect(w * 0.36, d * 0.07, w * 0.64, d * 0.18, '#7fb069');
+      for (let k = 0; k < 6; k++) tree(4 + r() * (w - 8), d * 0.66 + r() * (d * 0.32), 0.9);
     } else if (b.kind === 'mall') {
       for (let k = 0; k < 8 + lv * 5; k++) items.push({ t: 'rect', u0: 6 + r() * (w - 12), v0: 4 + r() * (d * 0.23 - 7), du: 4.4, dv: 1.9, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6']), h: 0.4, car: true });
       rect(3, 3, w - 3, d * 0.23, '#7f8287');
@@ -77,7 +86,7 @@ export function lotArt(b) {
       let u = 1;
       while (u < w - 4) {
         const sw = b.kind === 'market' ? w - 2 : Math.min(w - 1 - u, 7 + r() * 9);
-        if (r() < fill + 0.15) rect(u, 1.5, u + sw - 1, deep - 1, pick(r, ['#93b9df', '#bcd6ee', '#e4c9a8', '#c9d8b6', '#e8b9b0']), 3 + lv * 1.6, { awning: true });
+        if (r() < fill + 0.15) rect(u, 1.5, u + sw - 1, deep - 1, pick(r, ['#93b9df', '#bcd6ee', '#e4c9a8', '#c9d8b6', '#e8b9b0']), 4.5 + lv * 1.8, { awning: true });
         u += sw;
       }
       if (d - deep > 6) rect(2, deep + 1, w - 2, d - 2, '#7f8287');
@@ -87,8 +96,13 @@ export function lotArt(b) {
     base = '#bab4a7';
     // 工業區：從路邊進入的主幹道，大地塊再加一條橫向道路，建築依功能不同
     const spine = w / 2, cross = b.rows >= 10 ? d * 0.55 : null;
-    road([{ u: spine, v: 0 }, { u: spine, v: d - 4 }], 7);
-    if (cross) road([{ u: 4, v: cross }, { u: w - 4, v: cross }], 7);
+    // 裝卸用的貨車
+    for (let k = 0; k < 2 + lv; k++) items.push({ t: 'rect', u0: spine + (r() < 0.5 ? -9 : 5) , v0: 8 + r() * (d - 20), du: 2.4, dv: 7, c: pick(r, ['#d8d8d8', '#e0b24f', '#2e6fb7']), h: 0.8, car: true });
+    // 有實際的廠區道路時由路網繪製，這裡只畫裝飾用的
+    if (!b.roads) {
+      road([{ u: spine, v: 0 }, { u: spine, v: d - 4 }], 7);
+      if (cross) road([{ u: 4, v: cross }, { u: w - 4, v: cross }], 7);
+    }
     const blocks = [];
     for (const [u0, u1] of [[3, spine - 5], [spine + 5, w - 3]]) {
       if (u1 - u0 < 8) continue;

@@ -69,8 +69,8 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 #subbar button.th { padding: 3px 5px 4px; gap: 1px; }
 #subbar button.th .thumb { display: block; border-radius: 3px; }
 #subbar button.th b { font-size: 12px; }
-#subbar button.ix { width: 76px; }
-#subbar button.ix b { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+#subbar button.ix { width: 84px; }
+#subbar button.ix b { font-size: 11px; white-space: normal; line-height: 1.2; text-align: center; word-break: keep-all; }
 #subbar { max-height: 46vh; overflow-y: auto; max-width: min(900px, calc(100vw - 16px)); }
 #subbar .grp.ix { flex-wrap: nowrap; }
 @media (max-width: 900px) { #subbar .grp.ix { flex-wrap: wrap; } }

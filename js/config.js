@@ -84,9 +84,9 @@ export const ZONES = {
 // 分區格子：每格 6 m × 6 m，沿道路排列；玩家一次拖曳的範圍會依各分區的最大地塊切成數塊
 export const CELL = 6;
 export const ZONE_TYPES = {
-  R1: { zone: 'R', name: '低密度住宅', short: '低密度', max: 12, per: [0.3, 0.45, 0.6] },
-  R2: { zone: 'R', name: '中密度住宅', short: '中密度', max: 12, per: [0.55, 0.8, 1.05] },
-  R3: { zone: 'R', name: '高密度住宅', short: '高密度', max: 24, per: [0.75, 1.1, 1.5] },
+  R1: { zone: 'R', name: '低密度住宅', short: '低密度', max: 12, per: [0.45, 0.65, 0.85] },
+  R2: { zone: 'R', name: '中密度住宅', short: '中密度', max: 12, per: [0.8, 1.15, 1.5] },
+  R3: { zone: 'R', name: '高密度住宅', short: '高密度', max: 24, per: [1.0, 1.5, 2.0] },
   C:  { zone: 'C', name: '商業區', short: '商業', max: 30, per: [0.22, 0.38, 0.55] },
   I:  { zone: 'I', name: '工業區', short: '工業', max: 32, per: [0.16, 0.26, 0.38] },
 };
@@ -97,6 +97,7 @@ export const SHOP_KINDS = {
   market: { name: '超級市場', jobs: 0.9, shop: 1.3 },
   bigbox: { name: '大型量販店', jobs: 0.8, shop: 2.2, minCells: 15 },
   mall:   { name: '購物中心', jobs: 1.2, shop: 1.8, minCells: 15 },
+  hotel:  { name: '飯店', jobs: 1.1, shop: 0.4, minCells: 5, visit: 1 },
 };
 export const INDUSTRY_KINDS = {
   factory:   { name: '製造工廠', jobs: 1, goods: 1, pol: 1 },

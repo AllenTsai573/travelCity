@@ -366,10 +366,10 @@ export class Tools {
   // ---------- 分區（格子） ----------
   // 游標附近可劃設分區的道路，以及沿路的格子編號與離路邊的深度
   zoneAnchor(x, y) {
-    const net = this.net;
+    const net = this.net, park = this.g.city.parkRoadSet();
     let best = null;
     for (const s of net.segs.values()) {
-      if (!s.T.access || s.drawLevel !== 0 || net.nodes.get(s.a).level !== 0 || net.nodes.get(s.b).level !== 0) continue;
+      if (!s.T.access || s.drawLevel !== 0 || net.nodes.get(s.a).level !== 0 || net.nodes.get(s.b).level !== 0 || park.has(s.id)) continue;
       const b = s.bbox, R = 32 * CELL;
       if (x < b.x0 - R || x > b.x1 + R || y < b.y0 - R || y > b.y1 + R) continue;
       const c = closestOnPoly(s.pts, s.cum, { x, y });
@@ -462,7 +462,7 @@ export class Tools {
       case 'bulldoze': {
         const h = this.hover;
         if (!h) return;
-        if (h.type === 'building') { if (h.obj.built === false) g.city.removeLot(h.obj); else g.city.removeBuilding(h.obj); g.city.recount(); }
+        if (h.type === 'building') { if (h.obj.built === false) g.city.removeLot(h.obj); else g.city.removeBuilding(h.obj, false, true); g.city.recount(); }
         else {
           const err = net.bulldoze(h.obj);
           if (err) g.notify(err, 'warn');
@@ -691,12 +691,12 @@ export class Tools {
   drawZoneGrid(ctx, r) {
     const z = this.cam.z, net = this.net;
     if (z < 0.45) return;
-    const v = r.view(40), D = 6;
+    const v = r.view(40), D = 6, park = this.g.city.parkRoadSet();
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = Math.max(0.12, 0.7 / z);
     ctx.beginPath();
     for (const s of net.segs.values()) {
-      if (!s.T.access || s.drawLevel !== 0 || !r.inView(s.bbox, v)) continue;
+      if (!s.T.access || s.drawLevel !== 0 || !r.inView(s.bbox, v) || park.has(s.id)) continue;
       const n = Math.floor((s.len - s.rb - s.ra) / CELL + 1e-6);
       if (n < 1) continue;
       const off = halfWidth(s.T) + 1.5;

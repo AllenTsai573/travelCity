@@ -150,6 +150,17 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   c._comp = new Set(net.nodes.keys()); c._compVer = net.version;
   c.developLots();
   assert(c.buildings.length > before && c.lots.length < 4, `有需求時空地塊會發展成建築（${c.buildings.length - before} 棟）`);
+  // 工業園區：開出真正的廠區道路，進出點在園區內
+  const ip = c.planStroke('I', seg, -1, seg.ra + 150, seg.ra + 150 + 16 * 6, 16).find(l => l.ok);
+  const ib = ip && c.develop(c.addLot('I', ip.seg, ip.u, ip.side, ip.cols, ip.rows));
+  assert(ib && ib.roads && ib.roads.length >= 2 && ib.roads.includes(ib.seg), `工業園區內有道路（${ib && ib.roads ? ib.roads.length : 0} 段），出入點在園區內`);
+  const dz2 = JSON.parse(JSON.stringify({ net: net.serialize(), city: c.serialize() }));
+  const g4 = makeGame(seed - 1, 'temperate', 'normal', false);
+  g4.net.load(dz2.net); g4.city.load(dz2.city);
+  const ib2 = g4.city.buildings.find(b => b.zone === 'I' && b.cols === ib.cols && b.rows === ib.rows && Math.hypot(b.x - ib.x, b.y - ib.y) < 20);
+  assert(ib2 && ib2.roads && Math.hypot(ib2.x - ib.x, ib2.y - ib.y) < 0.5, '存讀檔：園區道路與建築位置' + (ib2 ? ` ${!!ib2.roads} ${Math.round(ib2.x - ib.x)},${Math.round(ib2.y - ib.y)}` : ' 找不到建築'));
+  c.removeBuilding(ib, false, true);
+  assert(ib.roads === null && !net.segs.has(ib.seg), '拆除工業建築時一併拆除園區道路');
   const hb = c.buildings.find(b => b.zt === 'R1' && b.cols === 10 && b.rows === 12);
   assert(!hb || c.cap(hb) >= 20, `10×12 低密度住宅的住戶數（${hb && c.cap(hb)}）`);
 }

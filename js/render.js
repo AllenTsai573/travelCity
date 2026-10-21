@@ -5,6 +5,18 @@ import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, poi
 import { halfWidth, laneOffset } from './network.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
+// 顏色明暗（建物牆面與斜屋頂用），結果快取
+const shadeCache = new Map();
+function shade(hex, f) {
+  const k = hex + f.toFixed(2);
+  let v = shadeCache.get(k);
+  if (v) return v;
+  const n = parseInt(hex.slice(1, 7), 16);
+  const ch = s => Math.max(0, Math.min(255, Math.round(((n >> s) & 255) * f)));
+  v = `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+  shadeCache.set(k, v);
+  return v;
+}
 const ASPHALT = '#46494e';
 // 鋪面道路統一柏油色，銜接處不會出現色差；鄉間小路為碎石色
 const roadColor = T => (T.rank === 0 ? T.color : ASPHALT);
@@ -184,9 +196,10 @@ export class Renderer {
       if (z > 1.1) g.tools.drawCells(ctx, l, 'rgba(255,255,255,0.28)');
     }
     const detail = z > 0.55;
-    for (const b of city.buildings) {
-      if (!inV(b)) continue;
-      const key = b.level + '|' + b.abandoned;
+    // 由北往南畫，較南邊（離鏡頭近）的高樓會蓋住後方
+    const vis = city.buildings.filter(inV).sort((p, q) => p.y - q.y);
+    for (const b of vis) {
+      const key = b.level + '|' + b.abandoned + '|' + !!b.roads;
       if (!b._art || b._art.key !== key) b._art = { key, ...lotArt(b) };
       const c0 = b.corners[0], tx = b.tx, ty = b.ty, nx = b.nx, ny = b.ny;
       const P = (u, w) => ({ x: c0.x + tx * u + nx * w, y: c0.y + ty * u + ny * w });
@@ -194,7 +207,12 @@ export class Renderer {
       quad(b.corners);
       ctx.fillStyle = b.abandoned ? '#8f8c84' : b._art.base;
       ctx.fill();
-      const items = b._art.items;
+      // 依底部（最南端）排序，讓同一地塊內的建物也能正確前後遮擋
+      if (!b._art.sorted) {
+        const low = it => (it.t === 'circle' ? P(it.u, it.v).y + it.r : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => p.y)));
+        b._art.sorted = b._art.items.map(it => [low(it), it]).sort((p, q) => (p[1].h >= 1) - (q[1].h >= 1) || p[0] - q[0]).map(x => x[1]);
+      }
+      const items = b._art.sorted;
       // 陰影
       if (detail) {
         ctx.fillStyle = 'rgba(0,0,0,0.2)';
@@ -208,6 +226,7 @@ export class Renderer {
       }
       for (const it of items) {
         if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2))) continue;
+        const col = b.abandoned && it.h >= 1 && !it.car ? '#a5a39c' : it.c;
         if (it.t === 'line') {
           ctx.strokeStyle = it.c; ctx.lineWidth = it.w; ctx.lineCap = 'butt';
           ctx.setLineDash(it.dash || []);
@@ -216,34 +235,68 @@ export class Renderer {
           continue;
         }
         if (it.t === 'circle') {
-          const p = P(it.u, it.v);
-          ctx.fillStyle = b.abandoned && it.h >= 2 ? '#a5a39c' : it.c;
-          ctx.beginPath(); ctx.arc(p.x, p.y, it.r, 0, Math.PI * 2); ctx.fill();
+          const p = P(it.u, it.v), H = detail && it.h >= 2 ? it.h * 0.7 : 0;
+          if (H) {
+            // 圓柱（儲槽 / 煙囪）：側面＋頂面
+            ctx.fillStyle = shade(col, 0.72);
+            ctx.beginPath(); ctx.arc(p.x, p.y, it.r, 0, Math.PI); ctx.lineTo(p.x - it.r, p.y - H); ctx.arc(p.x, p.y - H, it.r, Math.PI, 0, true); ctx.closePath(); ctx.fill();
+          }
+          ctx.fillStyle = col;
+          ctx.beginPath(); ctx.arc(p.x, p.y - H, it.r, 0, Math.PI * 2); ctx.fill();
+          if (H) { ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.3; ctx.stroke(); }
           if (it.stack && detail && b.happy > 0.4 && !b.abandoned) {
             ctx.fillStyle = 'rgba(225,225,225,0.35)';
             const t = (g.time * 0.6 + b.id) % 6;
-            ctx.beginPath(); ctx.arc(p.x + t, p.y - t * 1.2, 1.5 + t * 0.4, 0, Math.PI * 2); ctx.fill();
-          } else if (it.h >= 2 && detail) { ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.3; ctx.stroke(); }
+            ctx.beginPath(); ctx.arc(p.x + t, p.y - H - t * 1.2, 1.5 + t * 0.4, 0, Math.PI * 2); ctx.fill();
+          }
           continue;
         }
         const c = it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1);
-        quad(c);
-        ctx.fillStyle = b.abandoned && it.h ? '#a5a39c' : it.c;
+        const H = detail && it.h >= 1 && !it.car ? it.h * 0.7 : 0;
+        if (H) {
+          // 牆面：朝南（朝鏡頭）的邊往上拉出，依朝向決定明暗（光從左上方來）
+          let area = 0;
+          for (let i = 0; i < 4; i++) { const p = c[i], q = c[(i + 1) % 4]; area += p.x * q.y - q.x * p.y; }
+          const sg = area > 0 ? 1 : -1;
+          for (let i = 0; i < 4; i++) {
+            const p = c[i], q = c[(i + 1) % 4], ox = (q.y - p.y) * sg, oy = -(q.x - p.x) * sg;
+            if (oy <= 0) continue;
+            const L = Math.hypot(ox, oy) || 1;
+            ctx.fillStyle = shade(it.wall || col, (it.wall ? 0.9 : 0.74) + 0.14 * (-ox / L));
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.lineTo(q.x, q.y - H); ctx.lineTo(p.x, p.y - H); ctx.closePath(); ctx.fill();
+          }
+        }
+        const up = pts => pts.map(p => ({ x: p.x, y: p.y - H }));
+        if (H && it.ridge) {
+          // 斜屋頂：兩面不同明暗，屋脊再抬高一點
+          const rH = Math.min(3, (it.ridge === 'u' ? it.v1 - it.v0 : it.u1 - it.u0) * 0.35);
+          const halves = it.ridge === 'u'
+            ? [[P(it.u0, it.v0), P(it.u1, it.v0), P(it.u1, (it.v0 + it.v1) / 2), P(it.u0, (it.v0 + it.v1) / 2), -1], [P(it.u0, it.v1), P(it.u1, it.v1), P(it.u1, (it.v0 + it.v1) / 2), P(it.u0, (it.v0 + it.v1) / 2), 1]]
+            : [[P(it.u0, it.v0), P(it.u0, it.v1), P((it.u0 + it.u1) / 2, it.v1), P((it.u0 + it.u1) / 2, it.v0), -1], [P(it.u1, it.v0), P(it.u1, it.v1), P((it.u0 + it.u1) / 2, it.v1), P((it.u0 + it.u1) / 2, it.v0), 1]];
+          for (const [a1, a2, r2, r1, sgn] of halves) {
+            const fx = (it.ridge === 'u' ? nx : tx) * sgn, fy = (it.ridge === 'u' ? ny : ty) * sgn;
+            ctx.fillStyle = shade(col, 1 - 0.16 * fx - 0.12 * fy);
+            quad([{ x: a1.x, y: a1.y - H }, { x: a2.x, y: a2.y - H }, { x: r2.x, y: r2.y - H - rH }, { x: r1.x, y: r1.y - H - rH }]);
+            ctx.fill();
+          }
+          continue;
+        }
+        quad(up(c));
+        ctx.fillStyle = col;
         ctx.fill();
         if (!detail || it.car || !it.h) continue;
         ctx.strokeStyle = 'rgba(0,0,0,0.28)'; ctx.lineWidth = 0.3; ctx.stroke();
+        const Pu = (u, w) => { const p = P(u, w); return { x: p.x, y: p.y - H }; };
         ctx.beginPath();
-        if (it.ridge === 'u') { const m0 = P(it.u0, (it.v0 + it.v1) / 2), m1 = P(it.u1, (it.v0 + it.v1) / 2); ctx.moveTo(m0.x, m0.y); ctx.lineTo(m1.x, m1.y); }
-        if (it.ridge === 'v') { const m0 = P((it.u0 + it.u1) / 2, it.v0), m1 = P((it.u0 + it.u1) / 2, it.v1); ctx.moveTo(m0.x, m0.y); ctx.lineTo(m1.x, m1.y); }
         if (z > 1.4 && (it.grid || it.stripes)) {
           const du = it.grid === 'v' || it.stripes === 'v' ? 0 : it.stripes ? 4 : 3, dv = it.grid === 'u' || it.stripes === 'u' ? 0 : it.stripes ? 4 : 3;
-          if (du) for (let u = it.u0 + du; u < it.u1 - 0.5; u += du) { const a = P(u, it.v0), e = P(u, it.v1); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
-          if (dv) for (let w = it.v0 + dv; w < it.v1 - 0.5; w += dv) { const a = P(it.u0, w), e = P(it.u1, w); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
+          if (du) for (let u = it.u0 + du; u < it.u1 - 0.5; u += du) { const a = Pu(u, it.v0), e = Pu(u, it.v1); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
+          if (dv) for (let w = it.v0 + dv; w < it.v1 - 0.5; w += dv) { const a = Pu(it.u0, w), e = Pu(it.u1, w); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
         }
         ctx.lineWidth = 0.25; ctx.stroke();
         if (b.abandoned) continue;
-        if (it.awning) { quad(box(it.u0, it.v0, it.u1, it.v0 + 1.2)); ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill(); }
-        if (it.stripe) { quad(box(it.u0 + 3, it.v0 + 1.5, it.u0 + Math.min(18, (it.u1 - it.u0) * 0.4), it.v0 + 4.5)); ctx.fillStyle = it.stripe; ctx.fill(); }
+        if (it.awning) { quad(up(box(it.u0, it.v0, it.u1, it.v0 + 1.2))); ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill(); }
+        if (it.stripe) { quad(up(box(it.u0 + 3, it.v0 + 1.5, it.u0 + Math.min(18, (it.u1 - it.u0) * 0.4), it.v0 + 4.5))); ctx.fillStyle = it.stripe; ctx.fill(); }
         if (it.docks) { ctx.fillStyle = '#5b5f64'; for (let u = it.u0 + 2; u < it.u1 - 3; u += 5) { quad(box(u, it.v0 - 1.2, u + 3, it.v0)); ctx.fill(); } }
       }
     }

@@ -19,7 +19,7 @@ const TOOLS = [
   { id: 'zone', icon: '🏘️', name: '分區', key: 'Z' },
   { id: 'bulldoze', icon: '🚧', name: '拆除', key: 'B' },
 ];
-const PURPOSE = { work: '通勤上班', home: '回家', shop: '購物', goods: '貨運（商品）', mat: '貨運（原料）', through: '過境交通' };
+const PURPOSE = { work: '通勤上班', home: '回家', shop: '購物', goods: '貨運（商品）', mat: '貨運（原料）', through: '過境交通', visit: '觀光住宿' };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pct = v => Math.round(clamp(v, 0, 1) * 100) + '%';
 const bar = (v, good = true) => {
@@ -348,7 +348,7 @@ export class UI {
     if (!sel) return;
     const o = sel.obj;
     switch (act) {
-      case 'demolish': g.city.removeBuilding(o); g.city.recount(); this.select(null); break;
+      case 'demolish': g.city.removeBuilding(o, false, true); g.city.recount(); this.select(null); break;
       case 'bulldoze-seg': { const e = net.bulldoze(o); if (e) g.notify(e, 'warn'); else this.select(null); break; }
       case 'reverse': { const ns = net.replaceSegment(o, o.type, true); net.rebuild(); this.select({ type: 'segment', obj: ns }); break; }
       case 'ctl':

@@ -205,13 +205,18 @@ export const TEMPLATES = {
     },
   },
   spui: {
-    group: '服務型', name: '單點式 SPUI', desc: '四條匝道在主線正下方匯成單一號誌路口，佔地小、通行量大', L: 360, Lc: 300,
+    group: '服務型', name: '單點式 SPUI', desc: '左轉匯集到主線正下方的單一號誌路口（大半徑轉彎），右轉走自由右轉匝道不必等號誌；佔地小、通行量大', L: 360, Lc: 300,
     main: 'highway', cross: 'avenue', M: 1, C: 0,
     build() {
-      const out = [], dx = 0.894, dy = 0.447;
+      // 參考 MoDOT / KYTC 的 SPUI 設計：出口匝道在 x≈-150 分成兩支，左轉進中央號誌，右轉以半徑 60 m 自由併入橫交道路
+      const out = [], dx = 0.894, dy = 0.447, X = 150, W = 30, R = 60;
       for (const k of [0, 2]) {
-        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-330, 0, 1, 0).to(-80, 34, 1, 0).to(0, 0, dx, -dy).pts, k), prof: [[0, 'M'], [1, 'C']] });
-        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(0, 0, dx, dy).to(80, 34, 1, 0).to(330, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
+        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-340, 0, 1, 0).to(-X, W, 1, 0).pts, k), prof: [[0, 'M'], [1, 'C']] });
+        out.push({ label: '出口左轉', type: 'ramp', pts: rotPts(new Path(-X, W, 1, 0).to(0, 0, dx, -dy).pts, k), prof: [[0, 'C'], [1, 'C']] });
+        out.push({ label: '出口右轉', type: 'ramp', pts: rotPts(new Path(-X, W, 1, 0).line(-R, W).turn(R, 90).pts, k), prof: [[0, 'C'], [1, 'C']] });
+        out.push({ label: '入口左轉', type: 'ramp', pts: rotPts(new Path(0, 0, dx, dy).to(X, W, 1, 0).pts, k), prof: [[0, 'C'], [1, 'C']] });
+        out.push({ label: '入口右轉', type: 'ramp', pts: rotPts(new Path(0, W + R, 0, -1).turn(R, 90).line(X, W).pts, k), prof: [[0, 'C'], [1, 'C']] });
+        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(X, W, 1, 0).to(340, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
       }
       return { elems: out, signals: [{ x: 0, y: 0, lv: 'C' }] };
     },
@@ -384,12 +389,12 @@ export const TEMPLATES = {
     main: 'highway', cross: 'highway', M: 0, C: 0, levels: () => ({ A: 1, B: 2 }),
     build() {
       const out = [];
-      // 支線 → 西行：沿支線東側北上跨越主線，再左彎併入西行
-      out.push({ label: '左轉高架匝道', type: 'ramp', pts: new Path(0, 260, 0, -1).to(14, 170, 0, -1).line(14, -20).turn(170, -90).to(-440, 0, -1, 0).pts,
-        prof: [[0, 'C'], [0.24, 'A'], [0.62, 'A'], [1, 'M']] });
-      // 西行 → 支線：右出後左彎，斜向跨越主線與右轉匝道，併入支線西側
-      out.push({ label: '左轉高架匝道', type: 'ramp', pts: new Path(440, 0, -1, 0).to(160, -36, -1, 0).turn(185, -90).to(0, 260, 0, 1).pts,
-        prof: [[0, 'M'], [0.3, 'B'], [0.78, 'B'], [1, 'C']] });
+      // 支線 → 西行：沿支線東側北上跨越主線，再以大半徑左彎併入西行
+      const up = new Path(0, 260, 0, -1).to(14, 170, 0, -1).line(14, -20).turn(170, -90).to(-440, 0, -1, 0).pts;
+      out.push({ label: '左轉高架匝道', type: 'ramp', pts: up, prof: [[0, 'C'], [0.24, 'A'], [0.62, 'A'], [1, 'M']] });
+      // 西行 → 支線：與上一條左右對稱（鏡射後反向），在主線北側中央以不同高度與它交叉
+      const down = up.map(p => ({ x: -p.x, y: p.y })).reverse();
+      out.push({ label: '左轉高架匝道', type: 'ramp', pts: down, prof: [[0, 'M'], [0.38, 'B'], [0.76, 'B'], [1, 'C']] });
       // 右轉：星形匝道（左轉高架匝道從上方跨越）
       out.push({ label: '右轉匝道', type: 'ramp', pts: starPts(330), prof: [[0, 'M'], [1, 'C']] });
       out.push({ label: '右轉匝道', type: 'ramp', pts: rotPts(starPts(330), 3), prof: [[0, 'C'], [1, 'M']] });
@@ -516,7 +521,7 @@ export function previewTemplate(key, fr) {
     const l0 = lv[e.prof[0][1]] ?? 0, l1 = lv[e.prof[e.prof.length - 1][1]] ?? 0;
     cost += len * ROAD_TYPES[e.type].cost * (levelMul(l0) + levelMul(l1)) / 2;
   }
-  return { lines, cost: Math.round(cost), levelError: lv.error };
+  return { lines, cost: interchangePrice(cost), levelError: lv.error };
 }
 
 // 在指定路網上依序建造（dry-run 時用複製的路網）
@@ -600,13 +605,25 @@ function cloneNetwork(game) {
   return net;
 }
 
-// 建造交流道：先在複製的路網上試建，全部成功才在真正的路網上建造
+// 交流道整組優惠價：依道路造價換算到 $45,000～$60,000（越大越貴）
+export function interchangePrice(raw) {
+  const t = Math.min(1, Math.max(0, (raw - 60000) / 200000));
+  return Math.round((45000 + 15000 * t) / 500) * 500;
+}
+
+// 建造交流道：先在複製的路網上試建，全部成功才在真正的路網上建造（以整組價格計費）
 export function placeInterchange(game, key, fr) {
   if (!fr.ok) return { ok: false, reason: fr.reason };
   if (fr.snap && (TEMPLATES[key].freeOnly || TEMPLATES[key].tee)) return { ok: false, reason: `${TEMPLATES[key].name}只能在空地上建造（會一併建出主線）` };
   const dry = buildOn(cloneNetwork(game), key, fr);
   if (!dry.ok) return dry;
-  if (!game.canAfford(dry.cost)) return { ok: false, reason: `資金不足（約 $${dry.cost.toLocaleString()}）` };
-  const real = buildOn(game.net, key, fr);
-  return real.ok ? { ok: true, cost: real.cost } : real;
+  const price = interchangePrice(dry.cost);
+  if (!game.canAfford(price)) return { ok: false, reason: `資金不足（$${price.toLocaleString()}）` };
+  const spend = game.spend;
+  game.spend = () => {};
+  let real;
+  try { real = buildOn(game.net, key, fr); } finally { game.spend = spend; }
+  if (!real.ok) return real;
+  game.spend(price);
+  return { ok: true, cost: price, raw: real.cost };
 }

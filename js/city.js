@@ -74,7 +74,9 @@ export class City {
       id: this.nextId++, zone, seg: seg.id, u, side, level, ...geo,
       happy: 0.7, workOK: 0.8, shopOK: 0.8, timeScore: 0.8, pollution: 0, noise: 0,
       workSat: 0.7, goodsSat: 1, custSat: 0.6, matSat: 1, stock: zone === 'R' ? 0 : 8, custLevel: 0, present: 0,
-      acc: { work: 0, shop: 0, goods: 0, mat: 0, outw: 0 }, queue: [], spawnCD: 0, highT: 0, lowT: 0,
+      // 起始累計量隨機，讓各棟建築的出發時間錯開
+      acc: { work: this.game.rng.next(), shop: this.game.rng.next(), goods: this.game.rng.next(), mat: this.game.rng.next(), outw: this.game.rng.next() },
+      queue: [], spawnCD: 0, highT: 0, lowT: 0,
       abandoned: false, abT: 0, variant: (this.nextId * 7919) % 5, dead: false, born: this.game.time,
     };
     this.buildings.push(b);

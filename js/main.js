@@ -66,7 +66,7 @@ class Game {
     this.diff = DIFFICULTY[difficulty];
     this.rng = new RNG(seed * 7 + 13);
     this.terrain = new Terrain(seed, biome, MAP_SIZE);
-    this.time = 6 * 60;
+    this.time = 7 * 60;
     this.money = this.diff.money;
     this.milestone = this.diff.unlockAll ? MILESTONES.length - 1 : 0;
     this.net = new Network(this);

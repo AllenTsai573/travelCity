@@ -1,6 +1,6 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
 import { LANE_W, LEVEL_H, ZONES } from './config.js';
-import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly } from './util.js';
+import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly, closestOnPoly } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
@@ -328,6 +328,13 @@ export class Renderer {
         return { ...m, pts: cutPoly(m.pts, m.cum, f0 * ml, f1 * ml) };
       });
       if (openings.length) mk = Renderer.splitEdges(mk, openings);
+      for (const nd of [A, B]) {
+        const ji = nd.jinfo;
+        if (!ji || !ji.ramp || !ji.others.includes(seg)) continue;
+        const ms = ji.pairs[0];
+        const lim = Math.max(...ms.map(m => halfWidth(m.T))) - 0.6;
+        mk = Renderer.dropInside(mk, p => Math.min(...ms.map(m => closestOnPoly(m.pts, m.cum, p).d)) < lim);
+      }
       pieces.push({
         lv, mk, col: roadColor(seg.T),
         grad: hA !== hB ? { p0: C[0], p1: C[C.length - 1], h0: C[0].h, h1: C[C.length - 1].h } : null,
@@ -382,7 +389,7 @@ export class Renderer {
         const C = Renderer.withNormals(pts.map((p, i) => ({ x: p.x, y: p.y, w: e1.hw + (e2.hw - e1.hw) * sm(clamp(cum[i] / tot, 0, 1)), h: n.level })));
         return {
           body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, 0.5),
-          mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc) : [],
+          mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc) : this.transitionMarks(n, e1, e2, C),
         };
       };
       if (segs.length === 2) {
@@ -454,7 +461,7 @@ export class Renderer {
               }
               if (best) {
                 const mainHW = Math.max(...pairs[0].map(e => e.hw));
-                strips.push(this.rampMergeGeom(best, merge, o.hw, n.level, n, mainHW, info.mainDir));
+                strips.push(this.rampMergeGeom(best, merge, o.hw, n.level, n, mainHW, pairs[0].map(e => e.s)));
               }
             }
           }
@@ -489,17 +496,78 @@ export class Renderer {
   }
 
   // 匝道與主線的銜接：匝道寬度漸變到一個車道寬的匯流帶，加上沿主線外側的漸變車道
+  // 不同道路類型相接（車道增減、四轉三、分隔島變寬）的銜接帶標線：
+  // 邊線沿漸變路緣、分隔島寬度內插、車道線由實際車道連接推得（被併掉的車道不畫分隔線）
+  transitionMarks(n, e1, e2, C) {
+    const W75 = 'rgba(255,255,255,0.75)', mk = [];
+    const sm = t => t * t * (3 - 2 * t);
+    const N = C.length;
+    const off = (sgn, f) => C.map((q, i) => { const o = f(q, i); return { x: q.x + q.nx * sgn * o, y: q.y + q.ny * sgn * o }; });
+    for (const sgn of [1, -1]) mk.push({ pts: off(sgn, q => q.w - 0.75), c: W75, w: 0.15, dash: null, edge: true });
+    const T1 = e1.s.T, T2 = e2.s.T;
+    if (T1.bwd > 0 && T2.bwd > 0) {
+      const m1 = T1.median || 0, m2 = T2.median || 0;
+      const med = i => m1 + (m2 - m1) * sm(i / (N - 1 || 1));
+      if (Math.max(m1, m2) > 1) {
+        const L = off(1, (q, i) => Math.max(0, med(i) / 2 - 0.2)), R = off(-1, (q, i) => Math.max(0, med(i) / 2 - 0.2));
+        mk.push({ poly: [...L, ...R.reverse()], c: (T1.green || T2.green) ? '#6f9e4f' : '#9a9a92' });
+      }
+      for (const sgn of [1, -1]) mk.push({ pts: off(sgn, (q, i) => Math.max(0.18, med(i) / 2 - 0.2)), c: '#e8c547', w: 0.15, dash: null });
+    }
+    // 車道線：相鄰兩條直行連接若接到相鄰車道，中間畫虛線
+    const pair = new Set([e1.s, e2.s]);
+    const byLink = new Map();
+    for (const c of n.conns) {
+      if (!pair.has(c.from.seg) || !pair.has(c.to.seg) || c.from.seg === c.to.seg) continue;
+      const k = c.from.link.key;
+      if (!byLink.has(k)) byLink.set(k, []);
+      byLink.get(k).push(c);
+    }
+    const resample = (c, k) => { const out = []; for (let i = 0; i <= k; i++) { const p = pointAt(c.pts, c.cum, c.len * i / k); out.push(p); } return out; };
+    for (const cs of byLink.values()) {
+      cs.sort((a, b) => a.from.idx - b.from.idx || a.to.idx - b.to.idx);
+      for (let i = 0; i < cs.length; i++) for (let j = 0; j < cs.length; j++) {
+        const a = cs[i], b = cs[j];
+        if (b.from.idx !== a.from.idx + 1 || b.to.idx !== a.to.idx + 1) continue;
+        const pa = resample(a, 16), pb = resample(b, 16);
+        mk.push({ pts: pa.map((p, k) => ({ x: (p.x + pb[k].x) / 2, y: (p.y + pb[k].y) / 2 })), c: 'rgba(255,255,255,0.8)', w: 0.14, dash: [3, 5] });
+      }
+    }
+    for (const m of mk) if (m.pts) m.cum = polyCum(m.pts);
+    return mk;
+  }
+
+  // 把落在指定區域內的標線段去掉
+  static dropInside(marks, inside) {
+    const out = [];
+    for (const m of marks) {
+      if (!m.pts) { out.push(m); continue; }
+      const dense = [];
+      for (let i = 0; i < m.pts.length - 1; i++) {
+        const a = m.pts[i], b = m.pts[i + 1];
+        const k = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y)));
+        for (let t = 0; t < k; t++) dense.push({ x: a.x + (b.x - a.x) * t / k, y: a.y + (b.y - a.y) * t / k });
+      }
+      dense.push(m.pts[m.pts.length - 1]);
+      let run = [];
+      const flush = () => { if (run.length >= 2) { const r = { ...m, pts: run }; r.cum = polyCum(run); out.push(r); } run = []; };
+      for (const p of dense) { if (inside(p)) flush(); else run.push(p); }
+      flush();
+    }
+    return out;
+  }
+
   // 匝道匯流帶：維持匝道寬度沿匯入 / 分出軌跡接到主線外側，並畫出匝道標線
   // - 外側邊線一路延續，最後與主線邊線接上
   // - 內側邊線畫到碰到主線路面為止（形成三角槽化區的尖端）
-  rampMergeGeom(c, merge, rampHW, level, node, mainHW, mainDir) {
+  rampMergeGeom(c, merge, rampHW, level, node, mainHW, mainSegs) {
     const endHW = LANE_W / 2 + 0.8;
     const sm = t => t * t * (3 - 2 * t);
     const C = Renderer.withNormals(c.pts.map((p, i) => {
       const f = sm(c.cum[i] / (c.len || 1));
       return { x: p.x, y: p.y, w: merge ? rampHW + (endHW - rampHW) * f : endHW + (rampHW - endHW) * f, h: level };
     }));
-    const lat = p => Math.abs(mainDir.x * (p.y - node.y) - mainDir.y * (p.x - node.x));
+    const lat = p => Math.min(...mainSegs.map(m => closestOnPoly(m.pts, m.cum, p).d));
     const mid = C[Math.floor(C.length / 2)];
     // 外側 = 離主線較遠的一側
     const outer = lat({ x: mid.x + mid.nx, y: mid.y + mid.ny }) > lat({ x: mid.x - mid.nx, y: mid.y - mid.ny }) ? 1 : -1;
@@ -625,6 +693,7 @@ export class Renderer {
         for (const [, j] of joints) if (j.mk && j.mk.length) mkSets.push(j.mk);
         for (const mks of mkSets) {
           for (const m of mks) {
+            if (m.poly) { ctx.fillStyle = m.c; this.fillPoly(m.poly); continue; }
             ctx.strokeStyle = m.c;
             ctx.lineWidth = m.w;
             ctx.lineCap = m.median ? 'butt' : 'round';

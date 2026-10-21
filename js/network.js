@@ -36,6 +36,14 @@ function mergeSide(inL, outL) {
   return (q.x - p.x) * -t.y + (q.y - p.y) * t.x > 0 ? 'MR' : 'ML';
 }
 
+// 直行時車道靠內側對齊：車道數減少時由最外側車道併入（四轉三），增加時新車道從外側長出
+function alignLanes(n, m) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push([i, Math.min(i, m - 1)]);
+  for (let j = n; j < m; j++) out.push([n - 1, j]);
+  return out;
+}
+
 function mapLanes(A, B) {
   const n = A.length, m = B.length, out = new Map();
   const add = (i, j) => out.set(i + ':' + j, [i, j]);
@@ -204,18 +212,25 @@ export class Network {
     const main = info.pairs[0];
     const mainHW = Math.max(halfWidth(main[0].T), halfWidth(main[1].T));
     const need = mainHW + halfWidth(seg.T) + 0.3;
-    const u = info.mainDir, atA = seg.a === node.id;
+    const atA = seg.a === node.id;
     const maxT = seg.len * 0.45;
+    // 以實際主線路面（而非通過節點的直線）量測匝道是否已離開主線
+    const distMain = p => Math.min(...main.map(m => closestOnPoly(m.pts, m.cum, p).d));
     for (let t = 2; t < maxT; t += 1) {
       const p = pointAt(seg.pts, seg.cum, atA ? t : seg.len - t);
-      if (Math.abs(u.x * (p.y - node.y) - u.y * (p.x - node.x)) >= need) return t;
+      if (distMain(p) >= need) return t;
     }
     return maxT;
   }
 
   computeRadius(node) {
     // 匝道路口：主線直通，只需很短的銜接區（匝道本身在離開主線路面處才截斷）
-    if (node.jinfo && node.jinfo.ramp) return 4;
+    if (node.jinfo && node.jinfo.ramp) {
+      // 主線車道數在此改變（例如匝道匯入後三轉四）：需要較長的漸變段
+      const [m1, m2] = node.jinfo.pairs[0];
+      if (m1.T.fwd !== m2.T.fwd || m1.T.bwd !== m2.T.bwd || m1.T.median !== m2.T.median) return Math.max(halfWidth(m1.T), halfWidth(m2.T)) * 1.4 + 4;
+      return 4;
+    }
     const segs = node.segs.map(id => this.segs.get(id)).filter(Boolean);
     if (segs.length <= 1) return 0;
     let maxHW = 0;
@@ -456,7 +471,9 @@ export class Network {
           inIdx = hasS ? [0] : hasR ? (n >= 2 ? range(0, Math.ceil(n / 2)) : [0]) : range(0, n);
           outIdx = inIdx.length > 1 ? range(0, m) : [0];
         }
-        for (const [i, j] of mapLanes(inIdx, outIdx)) conns.push(this.makeConn(node, inL.lanes[i], c.outL.lanes[j], c.cls));
+        const straight = c.cls === 'S' || (cands.length === 1 && c.cls !== 'MR' && c.cls !== 'ML' && c.cls !== 'U');
+        const pairs = straight && inIdx.length === n && outIdx.length === m ? alignLanes(n, m) : mapLanes(inIdx, outIdx);
+        for (const [i, j] of pairs) conns.push(this.makeConn(node, inL.lanes[i], c.outL.lanes[j], c.cls));
       }
     }
     node.conns = conns;
@@ -733,7 +750,23 @@ export class Network {
     }
     g.spend(plan.cost);
     this.rebuild();
+    this.checkOneWay(made);
     return nB;
+  }
+
+  // 單行道 / 匝道若在路口接不上（例如方向與主線不符），提示玩家
+  checkOneWay(segs) {
+    for (const sg of segs) {
+      if (!this.segs.has(sg.id) || sg.T.bwd > 0) continue;
+      const A = this.nodes.get(sg.a), B = this.nodes.get(sg.b);
+      const L = sg.links[1];
+      const exitOK = B.segs.length < 2 || L.lanes.some(l => l.conns.length);
+      const entryOK = A.segs.length < 2 || A.conns.some(c => c.to.seg === sg);
+      if (!exitOK || !entryOK) {
+        this.game.notify && this.game.notify(`這條${sg.T.name}${!entryOK ? '無法駛入' : '無法駛出'}：靠右行駛時，匝道 / 單行道要接在主線行進方向的右側`, 'warn');
+        return;
+      }
+    }
   }
 
   // 圓環

@@ -5,7 +5,7 @@ export const SIM_DT = 0.1;          // 模擬步長（秒）
 export const CLOCK = 0.5;           // 每 1 模擬秒推進的遊戲分鐘數（一天 = 48 分鐘 @1x）
 export const MAP_SIZE = 2400;       // 地圖邊長（公尺）
 
-// 10 種道路類型。rank 越高越有路權；access=false 表示沿線不可建築（封閉式道路）
+// 13 種道路類型。rank 越高越有路權；access=false 表示沿線不可建築（封閉式道路）
 export const ROAD_TYPES = {
   dirt:      { name: '鄉間小路',       short: '小路', fwd: 1, bwd: 1, speed: 30,  rank: 0, cost: 6,  median: 0,   access: true,  color: '#7d7466', unlock: 0 },
   street:    { name: '市區道路',       short: '市區', fwd: 1, bwd: 1, speed: 50,  rank: 1, cost: 12, median: 0,   access: true,  color: '#4a4d52', unlock: 0 },
@@ -17,8 +17,11 @@ export const ROAD_TYPES = {
   express:   { name: '快速道路（2+2）', short: '快速', fwd: 2, bwd: 2, speed: 90,  rank: 3, cost: 55, median: 2,   access: false, color: '#3c3f44', unlock: 0 },
   highway:   { name: '高速公路（3+3）', short: '國道', fwd: 3, bwd: 3, speed: 110, rank: 3, cost: 80, median: 3,   access: false, color: '#3a3d42', unlock: 0 },
   freeway1:  { name: '單向高速（3 線）', short: '單高', fwd: 3, bwd: 0, speed: 110, rank: 3, cost: 45, median: 0,   access: false, color: '#3a3d42', unlock: 0 },
+  ramp2:     { name: '雙線匝道',        short: '匝2', fwd: 2, bwd: 0, speed: 70,  rank: 2, cost: 34, median: 0,   access: false, color: '#3f4247', unlock: 0 },
+  highway4:  { name: '高速公路（4+4）', short: '國道4', fwd: 4, bwd: 4, speed: 110, rank: 3, cost: 105, median: 3,  access: false, color: '#3a3d42', unlock: 0 },
+  freeway4:  { name: '單向高速（4 線）', short: '單高4', fwd: 4, bwd: 0, speed: 110, rank: 3, cost: 60, median: 0,   access: false, color: '#3a3d42', unlock: 0 },
 };
-export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'express', 'highway', 'freeway1'];
+export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'ramp2', 'express', 'highway', 'highway4', 'freeway1', 'freeway4'];
 
 // 高度層級：-2 深隧道、-1 路塹/隧道、0 地面、1~3 高架
 export const LEVELS = [

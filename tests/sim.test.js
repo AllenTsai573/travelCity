@@ -130,6 +130,7 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   const money = gz.money;
   const r1 = c.planStroke('R1', seg, 1, seg.ra, seg.ra + 30 * 6, 20);
   assert(r1.length === 3 && r1.every(l => l.cols === 10 && l.rows <= 12), `低密度住宅：30 格切成 3 塊 10 格、深度不超過 12（${r1.map(l => l.cols + '×' + l.rows).join(' ')}）`);
+  assert(c.planStroke('R1', seg, 1, seg.ra, seg.ra + 6, 5).length === 0 && c.planStroke('C', seg, 1, seg.ra, seg.ra + 12, 1).every(l => l.rows >= 2), '所有地塊最小 2×2 格');
   const r3 = c.planStroke('R3', seg, 1, seg.ra, seg.ra + 30 * 6, 30);
   assert(r3.length === 2 && r3.every(l => l.rows <= 24), `高密度住宅：最大 24×24（${r3.map(l => l.cols + '×' + l.rows).join(' ')}）`);
   for (const l of c.planStroke('C', seg, -1, seg.ra, seg.ra + 18 * 6, 16)) if (l.ok) c.addLot(l.zt, seg, l.u, l.side, l.cols, l.rows);
@@ -150,8 +151,19 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   c._comp = new Set(net.nodes.keys()); c._compVer = net.version;
   c.developLots();
   assert(c.buildings.length > before && c.lots.length < 4, `有需求時空地塊會發展成建築（${c.buildings.length - before} 棟）`);
+  // 有停車場的商業：從路邊開一條場內道路進停車場
+  {
+    const xs = seg.pts[0].x + seg.ra + 300, sP = net.segNear(xs + 40, y, 3, 0).seg, uP = xs - sP.pts[0].x;
+    const pp = c.planStroke('C', sP, -1, uP, uP + 12 * 6, 10).find(l => l.ok);
+    const keep = c.pickKind; c.pickKind = () => 'parking';
+    const pb = pp && c.develop(c.addLot('C', pp.seg, pp.u, pp.side, pp.cols, pp.rows));
+    c.pickKind = keep;
+    assert(pb && pb.roads && net.segs.get(pb.seg).type === 'service', '停車場有場內道路，顧客開進停車場');
+  }
   // 工業園區：開出真正的廠區道路，進出點在園區內
-  const ip = c.planStroke('I', seg, -1, seg.ra + 150, seg.ra + 150 + 16 * 6, 16).find(l => l.ok);
+  // 前面的商業地塊可能開了車道把路段切開，重新找出這個位置的路段
+  const xs = seg.pts[0].x + seg.ra + 150, sI = net.segNear(xs + 40, y, 3, 0).seg, uI = xs - sI.pts[0].x;
+  const ip = c.planStroke('I', sI, -1, uI, uI + 16 * 6, 16).find(l => l.ok);
   const ib = ip && c.develop(c.addLot('I', ip.seg, ip.u, ip.side, ip.cols, ip.rows));
   assert(ib && ib.roads && ib.roads.length >= 2 && ib.roads.includes(ib.seg), `工業園區內有道路（${ib && ib.roads ? ib.roads.length : 0} 段），出入點在園區內`);
   const dz2 = JSON.parse(JSON.stringify({ net: net.serialize(), city: c.serialize() }));

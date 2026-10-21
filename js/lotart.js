@@ -17,6 +17,28 @@ export function lotArt(b) {
   const tree = (u, v, s = 1) => items.push({ t: 'circle', u, v, r: (2 + r() * 1.4) * s, c: pick(r, ['#4f8a3c', '#5d9a47', '#467d36']), h: 1.2 });
   const road = (pts, wd = 5) => items.push({ t: 'line', pts, c: '#5b5f64', w: wd });
   const line = (pts, c, wd, dash) => items.push({ t: 'line', pts, c, w: wd, dash });
+  // 停車場：沿車道兩側畫停車格（每格 2.6 m × 5 m），車道間距 17 m；real 表示主車道由路網畫出
+  const parking = (u0, v0, u1, v1, spine, real, occ, fromBack = false) => {
+    rect(u0, v0, u1, v1, '#7f8287');
+    const aisles = [spine];
+    for (let a = spine - 17; a - 8 >= u0; a -= 17) aisles.push(a);
+    for (let a = spine + 17; a + 8 <= u1; a += 17) aisles.push(a);
+    const top = fromBack ? v0 + 1 : v0 + 1, bot = v1 - 7;
+    for (const a of aisles) {
+      if (a !== spine || !real) rect(a - 3, fromBack ? v0 : v0, a + 3, v1 - 1, '#878a8f');
+      for (const sd of [-1, 1]) {
+        const e0 = a + sd * 3, e1 = a + sd * 8;
+        if (Math.min(e0, e1) < u0 || Math.max(e0, e1) > u1) continue;
+        for (let v = top; v + 2.6 <= bot; v += 2.6) {
+          line([{ u: e0, v }, { u: e1, v }], 'rgba(255,255,255,0.9)', 0.25);
+          if (r() < occ) items.push({ t: 'rect', u0: Math.min(e0, e1) + 0.4, v0: v + 0.4, du: 4.2, dv: 1.8, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f']), h: 0.4, car: true });
+        }
+        line([{ u: e1, v: top }, { u: e1, v: bot }], 'rgba(255,255,255,0.9)', 0.25);
+      }
+    }
+    // 底部橫向通道把各車道連起來
+    if (aisles.length > 1) rect(u0 + 1, v1 - 6.5, u1 - 1, v1 - 0.5, '#878a8f');
+  };
   let base = '#a6c98f';
   const fill = [0.55, 0.8, 1][lv - 1];
 
@@ -31,7 +53,10 @@ export function lotArt(b) {
       if (lane && Math.abs(u0 + CELL - lu) < CELL * 1.2) continue;
       if (r() > fill) { if (r() < 0.6) tree(u0 + 6, v0 + 6); continue; }
       const hw = 3.4 + r() * 1.3, hd = 2.8 + r() * 1.2, cu = u0 + 6 + (r() - 0.5) * 1.5, cv = v0 + 5.2 + (r() - 0.5) * 1.2;
-      rect(cu - hw, cv - hd, cu + hw, cv + hd, pick(r, ROOF_R), 4 + lv * 0.8 + r() * 1.2, { ridge: r() < 0.5 ? 'u' : 'v', wall: pick(r, ['#efe6d6', '#e6dccb', '#f2efe8', '#e9d9c4', '#dfe3e6']) });
+      // 臨路的房子有車道接到路邊，靠巷道的接到巷道
+      if (j === 0) rect(cu + hw - 2.6, 0, cu + hw - 0.4, cv - hd, '#bdb8ae');
+      else if (lane && Math.abs(u0 + 6 - lu) < 20) { const toL = u0 + 6 < lu; rect(toL ? cu + hw : lu + 2.5, cv - 1.2, toL ? lu - 2.5 : cu - hw, cv + 1.2, '#bdb8ae'); }
+      rect(cu - hw, cv - hd, cu + hw, cv + hd, pick(r, ROOF_R), 3.6 + lv * 0.6 + r() * 1, { ridge: r() < 0.5 ? 'u' : 'v', wall: pick(r, ['#efe6d6', '#e6dccb', '#f2efe8', '#e9d9c4', '#dfe3e6']) });
       if (r() < 0.55) tree(u0 + (r() < 0.5 ? 2 : 10), v0 + 10.5, 0.8);
     }
   } else if (b.zt === 'R2') {
@@ -57,40 +82,55 @@ export function lotArt(b) {
     }
   } else if (b.zone === 'C') {
     base = '#c7c3b8';
-    if (b.kind === 'bigbox') {
-      // 大型量販店：後方大倉庫、前方大停車場
+    const real = !!b.roads, k = b.kind;
+    if (k === 'bigbox') {
+      // 大型量販店：前方大停車場（車道從臨路開進來）、後方大倉庫
       const bv = d * 0.45;
-      rect(3, 3, w - 3, bv - 2, '#7f8287');
-      rect(w * 0.12, bv, w * 0.88, d - 4, '#d9d6cf', 6 + lv, { stripe: pick(r, ['#c8102e', '#005daa', '#e4002b']) });
-      for (let v = 6; v < bv - 4; v += 6) line([{ u: 6, v }, { u: w - 6, v }], 'rgba(255,255,255,0.75)', 0.25, [2.2, 0.6]);
-      road([{ u: w / 2, v: 0 }, { u: w / 2, v: bv - 2 }], 5);
-      for (let k = 0; k < 10 + lv * 6; k++) items.push({ t: 'rect', u0: 8 + r() * (w - 16), v0: 5 + r() * (bv - 12), du: 4.4, dv: 1.9, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6']), h: 0.4, car: true });
-    } else if (b.kind === 'hotel') {
+      parking(3, 2, w - 3, bv - 1, w / 2, real, 0.35 + lv * 0.15);
+      rect(w * 0.12, bv + 1, w * 0.88, d - 4, '#d9d6cf', 7 + lv, { stripe: pick(r, ['#c8102e', '#005daa', '#e4002b']), units: 4 });
+    } else if (k === 'mall' || k === 'market') {
+      const pv = d * 0.32;
+      parking(3, 2, w - 3, pv - 1, w / 2, real, 0.3 + lv * 0.15);
+      if (k === 'mall') {
+        rect(w * 0.15, pv + 2, w * 0.85, d - 4, '#e3ddd2', 8 + lv * 2, { grid: 'both', units: 5 });
+        rect(w * 0.45, pv + 2, w * 0.55, d - 4, '#bcd6ee', 8.5 + lv * 2);
+      } else rect(w * 0.1, pv + 2, w * 0.9, d - 3, pick(r, ['#93b9df', '#e4c9a8', '#c9d8b6']), 5 + lv, { awning: true, units: 3 });
+    } else if (k === 'parking') {
+      parking(2, 2, w - 2, d - 2, w / 2, real, 0.4 + lv * 0.15);
+    } else if (k === 'hotel') {
       // 飯店：高樓主體＋泳池、花園與臨路的落客區
       const s = Math.min(w, d);
-      rect(w * 0.2, d * 0.32, w * 0.8, d * 0.32 + Math.min(16, d * 0.4), '#e9e2d6', 10 + lv * 6, { grid: 'both' });
-      rect(w * 0.42, d * 0.32, w * 0.58, d * 0.32 + Math.min(16, d * 0.4), '#d7c9a7', 13 + lv * 6);
-      rect(w * 0.3, d * 0.72, w * 0.6, d * 0.72 + Math.min(8, s * 0.18), '#5fc4e8', 0, { pool: true });
+      rect(w * 0.2, d * 0.32, w * 0.8, d * 0.32 + Math.min(16, d * 0.4), '#e9e2d6', 12 + lv * 7, { grid: 'both', units: 2 });
+      rect(w * 0.42, d * 0.32 - 2, w * 0.58, d * 0.32, '#d7c9a7', 4);
+      rect(w * 0.3, d * 0.72, w * 0.6, d * 0.72 + Math.min(8, s * 0.18), '#5fc4e8', 0);
       road([{ u: w * 0.3, v: 0 }, { u: w * 0.3, v: d * 0.22 }, { u: w * 0.7, v: d * 0.22 }, { u: w * 0.7, v: 0 }], 4.5);
       rect(w * 0.36, d * 0.07, w * 0.64, d * 0.18, '#7fb069');
-      for (let k = 0; k < 6; k++) tree(4 + r() * (w - 8), d * 0.66 + r() * (d * 0.32), 0.9);
-    } else if (b.kind === 'mall') {
-      for (let k = 0; k < 8 + lv * 5; k++) items.push({ t: 'rect', u0: 6 + r() * (w - 12), v0: 4 + r() * (d * 0.23 - 7), du: 4.4, dv: 1.9, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6']), h: 0.4, car: true });
-      rect(3, 3, w - 3, d * 0.23, '#7f8287');
-      rect(w * 0.18, d * 0.25, w * 0.82, d * 0.85, '#e3ddd2', 7 + lv * 2, { grid: 'both' });
-      rect(w * 0.45, d * 0.25, w * 0.55, d * 0.85, '#bcd6ee', 7 + lv * 2.2);
-      for (let v = 5; v < d * 0.22; v += 6) line([{ u: 6, v }, { u: w - 6, v }], 'rgba(255,255,255,0.75)', 0.25, [2.2, 0.6]);
+      for (let i = 0; i < 6; i++) tree(4 + r() * (w - 8), d * 0.66 + r() * (d * 0.32), 0.9);
+    } else if (k === 'office') {
+      // 辦公大樓：玻璃帷幕高樓＋前廣場，側邊地下停車場入口
+      const tw = Math.min(w - 6, 26), td = Math.min(d - 10, 22);
+      rect(3, 2, w - 3, 8, '#d9d6cf');
+      rect(w / 2 - tw / 2, d / 2 - td / 2 + 3, w / 2 + tw / 2, d / 2 + td / 2 + 3, pick(r, ['#7fa7c9', '#8fb7d6', '#9bb0c4', '#6f93b3']), 14 + lv * 9 + r() * 6, { grid: 'both', glass: true, units: 2 });
+      road([{ u: w - 4, v: 0 }, { u: w - 4, v: d - 4 }], 4);
+      tree(5, 5, 0.8); tree(w * 0.35, 5, 0.8);
+    } else if (k === 'gas') {
+      // 加油站：前方頂棚與加油島、後方便利商店，兩個出入口
+      base = '#b9b6ae';
+      road([{ u: 3, v: 0 }, { u: 3, v: d * 0.55 }, { u: w - 3, v: d * 0.55 }, { u: w - 3, v: 0 }], 4.5);
+      rect(w * 0.18, d * 0.12, w * 0.82, d * 0.45, '#f1f1ef', 4.5, { canopy: pick(r, ['#d62828', '#1d6fb8', '#2a9d3f', '#f2a900']) });
+      for (let i = 0; i < 3; i++) rect(w * (0.28 + i * 0.2) - 0.8, d * 0.25, w * (0.28 + i * 0.2) + 0.8, d * 0.32, '#5b5f64', 1.2);
+      rect(w * 0.25, d * 0.66, w * 0.75, d - 2, '#e8e2d4', 3.5, { awning: true });
     } else {
-      // 商店街 / 超市：臨路排一排店面，後方停車
-      const deep = Math.min(b.rows, b.kind === 'market' ? 4 : 2) * CELL;
+      // 商店街：臨路排一排店面；夠深的地塊在後方設停車場，中間留車道進去
+      const deep = Math.min(b.rows, 2) * CELL, gap = real || b.rows >= 6;
       let u = 1;
       while (u < w - 4) {
-        const sw = b.kind === 'market' ? w - 2 : Math.min(w - 1 - u, 7 + r() * 9);
-        if (r() < fill + 0.15) rect(u, 1.5, u + sw - 1, deep - 1, pick(r, ['#93b9df', '#bcd6ee', '#e4c9a8', '#c9d8b6', '#e8b9b0']), 4.5 + lv * 1.8, { awning: true });
+        let sw = Math.min(w - 1 - u, 7 + r() * 9);
+        if (gap && u < w / 2 + 4 && u + sw > w / 2 - 4) { if (u < w / 2 - 6) sw = w / 2 - 4 - u; else { u = w / 2 + 4; continue; } }
+        if (r() < fill + 0.15) rect(u, 1.5, u + sw - 1, deep - 1, pick(r, ['#93b9df', '#bcd6ee', '#e4c9a8', '#c9d8b6', '#e8b9b0']), 4.5 + lv * 1.8, { awning: true, units: 1 });
         u += sw;
       }
-      if (d - deep > 6) rect(2, deep + 1, w - 2, d - 2, '#7f8287');
-      for (let v = deep + 4; v < d - 2; v += 6) line([{ u: 3, v }, { u: w - 3, v }], 'rgba(255,255,255,0.6)', 0.22, [2.2, 0.6]);
+      if (d - deep > 12) parking(2, deep + 1, w - 2, d - 2, w / 2, real, 0.3 + lv * 0.12, true);
     }
   } else {
     base = '#bab4a7';

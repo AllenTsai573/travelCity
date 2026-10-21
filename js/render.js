@@ -210,19 +210,29 @@ export class Renderer {
       // 依底部（最南端）排序，讓同一地塊內的建物也能正確前後遮擋
       if (!b._art.sorted) {
         const low = it => (it.t === 'circle' ? P(it.u, it.v).y + it.r : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => p.y)));
-        b._art.sorted = b._art.items.map(it => [low(it), it]).sort((p, q) => (p[1].h >= 1) - (q[1].h >= 1) || p[0] - q[0]).map(x => x[1]);
+        // 地面上的東西（鋪面、標線）照產生順序，再畫車，最後是由北往南排序的建物
+        const flat = b._art.items.filter(it => !(it.h >= 1) && !it.car), cars = b._art.items.filter(it => it.car);
+        const tall = b._art.items.filter(it => it.h >= 1 && !it.car).map(it => [low(it), it]).sort((p, q) => p[0] - q[0]).map(x => x[1]);
+        b._art.sorted = [...flat, ...cars, ...tall];
       }
       const items = b._art.sorted;
       // 陰影
+      // 陰影從建物底部往右下方投射（與底部相連，不會看起來浮在空中）
       if (detail) {
-        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillStyle = 'rgba(20,24,30,0.24)';
         for (const it of items) {
           if (!it.h || it.t === 'line') continue;
-          const o = it.h * 0.45;
-          if (it.t === 'circle') { ctx.beginPath(); ctx.arc(P(it.u, it.v).x + o, P(it.u, it.v).y + o, it.r, 0, Math.PI * 2); ctx.fill(); continue; }
+          const o = it.h * 0.55;
+          if (it.t === 'circle') {
+            const p = P(it.u, it.v);
+            ctx.lineCap = 'round'; ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = it.r * 2;
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + o, p.y + o * 0.6); ctx.stroke();
+            continue;
+          }
           const c = it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1);
-          quad(c.map(p => ({ x: p.x + o, y: p.y + o }))); ctx.fill();
+          quad(convexHull([...c, ...c.map(p => ({ x: p.x + o, y: p.y + o * 0.6 }))])); ctx.fill();
         }
+        ctx.lineCap = 'round';
       }
       for (const it of items) {
         if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2))) continue;
@@ -235,7 +245,7 @@ export class Renderer {
           continue;
         }
         if (it.t === 'circle') {
-          const p = P(it.u, it.v), H = detail && it.h >= 2 ? it.h * 0.7 : 0;
+          const p = P(it.u, it.v), H = detail && it.h >= 2 ? it.h * 0.5 : 0;
           if (H) {
             // 圓柱（儲槽 / 煙囪）：側面＋頂面
             ctx.fillStyle = shade(col, 0.72);
@@ -252,7 +262,7 @@ export class Renderer {
           continue;
         }
         const c = it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1);
-        const H = detail && it.h >= 1 && !it.car ? it.h * 0.7 : 0;
+        const H = detail && it.h >= 1 && !it.car ? it.h * 0.5 : 0;
         if (H) {
           // 牆面：朝南（朝鏡頭）的邊往上拉出，依朝向決定明暗（光從左上方來）
           let area = 0;
@@ -264,12 +274,23 @@ export class Renderer {
             const L = Math.hypot(ox, oy) || 1;
             ctx.fillStyle = shade(it.wall || col, (it.wall ? 0.9 : 0.74) + 0.14 * (-ox / L));
             ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.lineTo(q.x, q.y - H); ctx.lineTo(p.x, p.y - H); ctx.closePath(); ctx.fill();
+            // 每層樓一排窗（約 3 m 一層，畫面上壓縮成 1.5 m）
+            if (z > 1.6 && H > 2.2 && !it.ridge) {
+              ctx.strokeStyle = it.glass ? 'rgba(210,235,255,0.55)' : 'rgba(40,52,64,0.38)';
+              ctx.lineWidth = Math.min(0.7, H / 12);
+              ctx.beginPath();
+              for (let f = 1.0; f < H - 0.4; f += 1.5) { ctx.moveTo(p.x + (q.x - p.x) * 0.06, p.y - f + (q.y - p.y) * 0.06); ctx.lineTo(q.x - (q.x - p.x) * 0.06, q.y - f - (q.y - p.y) * 0.06); }
+              ctx.stroke();
+            }
+            // 牆腳的暗線，讓建物「站」在地上
+            ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.35;
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
           }
         }
         const up = pts => pts.map(p => ({ x: p.x, y: p.y - H }));
         if (H && it.ridge) {
           // 斜屋頂：兩面不同明暗，屋脊再抬高一點
-          const rH = Math.min(3, (it.ridge === 'u' ? it.v1 - it.v0 : it.u1 - it.u0) * 0.35);
+          const rH = Math.min(1.3, (it.ridge === 'u' ? it.v1 - it.v0 : it.u1 - it.u0) * 0.16);
           const halves = it.ridge === 'u'
             ? [[P(it.u0, it.v0), P(it.u1, it.v0), P(it.u1, (it.v0 + it.v1) / 2), P(it.u0, (it.v0 + it.v1) / 2), -1], [P(it.u0, it.v1), P(it.u1, it.v1), P(it.u1, (it.v0 + it.v1) / 2), P(it.u0, (it.v0 + it.v1) / 2), 1]]
             : [[P(it.u0, it.v0), P(it.u0, it.v1), P((it.u0 + it.u1) / 2, it.v1), P((it.u0 + it.u1) / 2, it.v0), -1], [P(it.u1, it.v0), P(it.u1, it.v1), P((it.u0 + it.u1) / 2, it.v1), P((it.u0 + it.u1) / 2, it.v0), 1]];
@@ -286,6 +307,23 @@ export class Renderer {
         ctx.fill();
         if (!detail || it.car || !it.h) continue;
         ctx.strokeStyle = 'rgba(0,0,0,0.28)'; ctx.lineWidth = 0.3; ctx.stroke();
+        // 平屋頂的女兒牆與屋頂設備
+        if (H > 2 && z > 0.9) {
+          const ins = 0.9;
+          quad(up(box(it.u0 + ins, it.v0 + ins, it.u1 - ins, it.v1 - ins)));
+          ctx.strokeStyle = shade(col, 0.82); ctx.lineWidth = 0.45; ctx.stroke();
+          if (it.units && !b.abandoned) {
+            const n = it.units, du = (it.u1 - it.u0), dv = (it.v1 - it.v0);
+            for (let k = 0; k < n; k++) {
+              const fu = ((k * 0.618 + b.id * 0.13) % 1) * 0.6 + 0.2, fv = ((k * 0.382 + b.id * 0.29) % 1) * 0.6 + 0.2;
+              const cu = it.u0 + du * fu, cv = it.v0 + dv * fv, sz = Math.min(2.2, du * 0.08, dv * 0.12);
+              const bc = up(box(cu - sz, cv - sz * 0.7, cu + sz, cv + sz * 0.7));
+              quad(bc.map(p => ({ x: p.x + 0.35, y: p.y + 0.35 }))); ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fill();
+              quad(bc.map(p => ({ x: p.x, y: p.y - 0.5 }))); ctx.fillStyle = '#c9ccd0'; ctx.fill();
+            }
+          }
+        }
+        if (it.canopy) { quad(up(box(it.u0, it.v0, it.u1, it.v0 + 1))); ctx.fillStyle = it.canopy; ctx.fill(); quad(up(box(it.u0, it.v1 - 1, it.u1, it.v1))); ctx.fill(); }
         const Pu = (u, w) => { const p = P(u, w); return { x: p.x, y: p.y - H }; };
         ctx.beginPath();
         if (z > 1.4 && (it.grid || it.stripes)) {
@@ -963,26 +1001,27 @@ export class Renderer {
   turnArrows(lane) {
     const set = new Set(lane.conns.map(c => (c.turn === 'MR' || c.turn === 'ML' ? 'S' : c.turn)));
     if (!set.size) return;
-    const ctx = this.ctx, p = pointAt(lane.pts, lane.cum, lane.len - 7.5);
+    // 整個箭頭控制在車道中心 ±1 m 內，不壓到車道線
+    const ctx = this.ctx, p = pointAt(lane.pts, lane.cum, lane.len - 8);
     const fx = p.dx, fy = p.dy, rx = -p.dy, ry = p.dx;
     const P = (f, r) => [p.x + fx * f + rx * r, p.y + fy * f + ry * r];
     const head = (f, r, hx, hy) => {
       const [x, y] = P(f, r), nx = -hy, ny = hx;
-      ctx.beginPath(); ctx.moveTo(x + hx * 0.9, y + hy * 0.9);
-      ctx.lineTo(x + nx * 0.6, y + ny * 0.6); ctx.lineTo(x - nx * 0.6, y - ny * 0.6); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + hx * 0.7, y + hy * 0.7);
+      ctx.lineTo(x + nx * 0.45, y + ny * 0.45); ctx.lineTo(x - nx * 0.45, y - ny * 0.45); ctx.closePath(); ctx.fill();
     };
     ctx.strokeStyle = ctx.fillStyle = 'rgba(255,255,255,0.82)';
-    ctx.lineWidth = 0.32;
-    ctx.beginPath(); ctx.moveTo(...P(-2.6, 0)); ctx.lineTo(...P(0.2, 0)); ctx.stroke();
-    if (set.has('S')) { ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.lineTo(...P(2, 0)); ctx.stroke(); head(2, 0, fx, fy); }
+    ctx.lineWidth = 0.26;
+    ctx.beginPath(); ctx.moveTo(...P(-2.4, 0)); ctx.lineTo(...P(0.2, 0)); ctx.stroke();
+    if (set.has('S')) { ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.lineTo(...P(1.8, 0)); ctx.stroke(); head(1.8, 0, fx, fy); }
     for (const [k, sg] of [['L', -1], ['R', 1]]) {
       if (!set.has(k)) continue;
-      ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.quadraticCurveTo(...P(1.3, 0), ...P(1.3, sg * 0.9)); ctx.stroke();
-      head(1.3, sg * 0.9, rx * sg, ry * sg);
+      ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.quadraticCurveTo(...P(1.1, 0), ...P(1.1, sg * 0.45)); ctx.stroke();
+      head(1.1, sg * 0.45, rx * sg, ry * sg);
     }
     if (set.has('U')) {
-      ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.quadraticCurveTo(...P(1.8, 0), ...P(1.8, -0.8)); ctx.quadraticCurveTo(...P(1.8, -1.5), ...P(0.6, -1.5)); ctx.stroke();
-      head(0.6, -1.5, -fx, -fy);
+      ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.quadraticCurveTo(...P(1.5, 0), ...P(1.5, -0.45)); ctx.quadraticCurveTo(...P(1.5, -0.9), ...P(0.5, -0.9)); ctx.stroke();
+      head(0.5, -0.9, -fx, -fy);
     }
   }
 

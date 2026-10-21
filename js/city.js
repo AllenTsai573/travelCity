@@ -4,6 +4,20 @@ import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOv
 import { halfWidth } from './network.js';
 
 const ema = (a, x, k) => a + (x - a) * k;
+
+// 需要場內道路的建築：工業園區（主幹道＋大園區的橫向道路）與附停車場的商業（從臨路開進停車場的車道）
+// 回傳車道終點與橫向道路離路邊的距離（公尺），與 lotart.js 的配置一致
+export function driveway(zone, kind, geo) {
+  const d = geo.d;
+  if (geo.rows < 5 || geo.cols < 3) return null;
+  if (zone === 'I') return { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null };
+  if (zone !== 'C') return null;
+  if (kind === 'bigbox') return { end: d * 0.45 - 4 };
+  if (kind === 'mall' || kind === 'market') return { end: d * 0.32 - 4 };
+  if (kind === 'parking') return { end: d - 6 };
+  if (kind === 'shops' && geo.rows >= 6) return { end: d - 6 };
+  return null;
+}
 const gauss = (h, mu, sd) => Math.exp(-0.5 * ((h - mu) / sd) ** 2) / (sd * 2.5066);
 
 export class City {
@@ -88,15 +102,16 @@ export class City {
     const Z = ZONE_TYPES[zt];
     const a = Math.max(Math.min(u0, u1), seg.ra), b = Math.min(Math.max(u0, u1), seg.len - seg.rb);
     const total = Math.floor((b - a) / CELL + 1e-6);
-    if (total < 1) return [];
-    const n = Math.ceil(total / Z.max), depth = clamp(rows, 1, Z.max), res = [];
+    // 所有地塊最小 2×2 格
+    if (total < 2) return [];
+    const n = Math.min(Math.ceil(total / Z.max), Math.floor(total / 2)), depth = clamp(rows, 2, Z.max), res = [];
     let start = a;
     for (let i = 0; i < n; i++) {
       const cols = Math.floor(total / n) + (i < total % n ? 1 : 0);
       const u = start + cols * CELL / 2;
       let r = depth, reason = null;
-      for (; r >= 1; r--) { reason = this.canPlaceLot(seg, u, side, cols, r); if (!reason) break; }
-      const ok = r >= 1;
+      for (; r >= 2; r--) { reason = this.canPlaceLot(seg, u, side, cols, r); if (!reason) break; }
+      const ok = r >= 2;
       res.push({ zt, seg, u, side, cols, rows: ok ? r : depth, ok, reason, geo: this.lotGeom(seg, u, side, cols, ok ? r : depth) });
       start += cols * CELL;
     }
@@ -123,8 +138,10 @@ export class City {
     if (!seg) { this.removeLot(l); return null; }
     this.removeLot(l);
     const geo = this.lotGeom(seg, l.u, l.side, l.cols, l.rows);
-    const roads = l.zone === 'I' ? this.buildParkRoads(geo, seg, l.u) : null;
-    const b = this.addBuilding(l.zt, seg, l.u, l.side, l.cols, l.rows, level, null, geo);
+    const kind = this.pickKind(l.zt, l.cols, l.rows);
+    const plan = driveway(l.zone, kind, geo);
+    const roads = plan ? this.buildParkRoads(geo, seg, l.u, plan) : null;
+    const b = this.addBuilding(l.zt, seg, l.u, l.side, l.cols, l.rows, level, kind, geo);
     if (roads) {
       // 臨路的位置可能因開路而被切開，改記最近的臨路路段
       const c = geo.corners[0], m = { x: c.x + geo.tx * geo.w / 2 - geo.nx * 2, y: c.y + geo.ty * geo.w / 2 - geo.ny * 2 };
@@ -135,14 +152,14 @@ export class City {
     return b;
   }
 
-  // 工業園區的廠區道路：從臨路處開一條主幹道進園區，深的園區再加一條橫向道路；員工與貨車都開進去
-  buildParkRoads(geo, seg, u) {
+  // 場內道路：工業園區的主幹道（深的再加橫向道路）、停車場的車道；員工、貨車與顧客都開進去
+  buildParkRoads(geo, seg, u, plan) {
     const g = this.game, net = g.net;
     const P = (a, v) => ({ x: geo.corners[0].x + geo.tx * a + geo.nx * v, y: geo.corners[0].y + geo.ty * a + geo.ny * v });
     const spend = g.spend, can = g.canAfford;
     g.spend = () => {}; g.canAfford = () => true;
     const build = (a, b) => {
-      const plan = net.planRoad(a, b, null, 'street', 0);
+      const plan = net.planRoad(a, b, null, 'service', 0);
       if (!plan.ok) return false;
       plan.demolish = [];
       net.executeRoad(plan);
@@ -150,12 +167,12 @@ export class City {
     };
     try {
       const fp = pointAt(seg.pts, seg.cum, u);
-      if (!build({ x: fp.x, y: fp.y, seg: seg.id, u }, P(geo.w / 2, geo.d - 6))) return null;
-      if (geo.rows >= 10) build(P(6, geo.d * 0.55), P(geo.w - 6, geo.d * 0.55));
+      if (!build({ x: fp.x, y: fp.y, seg: seg.id, u }, P(geo.w / 2, plan.end))) return null;
+      if (plan.cross) build(P(6, plan.cross), P(geo.w - 6, plan.cross));
       net.rebuild();
     } finally { g.spend = spend; g.canAfford = can; }
-    const segs = [...net.segs.values()].filter(s => s.type === 'street' && pointInPoly(pointAt(s.pts, s.cum, s.len / 2), geo.corners)).map(s => s.id);
-    const q = P(geo.w / 2, geo.d * 0.8), acc = net.segNear(q.x, q.y, 4, 0);
+    const segs = [...net.segs.values()].filter(s => s.type === 'service' && pointInPoly(pointAt(s.pts, s.cum, s.len / 2), geo.corners)).map(s => s.id);
+    const q = P(geo.w / 2, Math.max(8, plan.end - 6)), acc = net.segNear(q.x, q.y, 4, 0);
     if (!segs.length || !acc) return null;
     return { segs, access: { seg: acc.seg.id, u: acc.u } };
   }
@@ -171,9 +188,12 @@ export class City {
   pickKind(zt, cols, rows) {
     const rng = this.game.rng, zone = ZONE_TYPES[zt].zone;
     if (zone === 'C') {
-      if (Math.min(cols, rows) >= SHOP_KINDS.bigbox.minCells) return rng.pick(['bigbox', 'bigbox', 'mall', 'hotel', 'market']);
-      if (Math.min(cols, rows) >= SHOP_KINDS.hotel.minCells && rng.chance(0.3)) return 'hotel';
-      return cols * rows >= 60 && rng.chance(0.4) ? 'market' : 'shops';
+      const m = Math.min(cols, rows), x = rng.next();
+      if (m >= SHOP_KINDS.bigbox.minCells) return rng.pick(['bigbox', 'bigbox', 'mall', 'hotel', 'office', 'market']);
+      if (m >= 5) return x < 0.2 ? 'hotel' : x < 0.42 ? 'office' : x < 0.48 ? 'parking' : cols * rows >= 60 && x < 0.75 ? 'market' : 'shops';
+      if (m >= 4 && x < 0.2) return 'office';
+      if (m >= 3 && x < 0.38) return 'gas';
+      return m >= 4 && x < 0.44 ? 'parking' : 'shops';
     }
     if (zone === 'I') return rng.pick(Object.keys(INDUSTRY_KINDS));
     return null;

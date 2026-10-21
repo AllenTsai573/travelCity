@@ -141,10 +141,10 @@ export const TEMPLATES = {
     group: '服務型', name: '鑽石型', desc: '四條匝道在橫交道路上形成兩處號誌路口，佔地最小', L: 360, Lc: 300,
     main: 'highway', cross: 'avenue', M: 1, C: 0,
     build() {
-      const D = 75, out = [];
+      const D = 75, Lr = 270, out = [];
       for (const k of [0, 2]) {
-        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-330, 0, 1, 0).to(-45, D, 1, 0).line(0, D).pts, k), prof: [[0, 'M'], [1, 'C']] });
-        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(0, D, 1, 0).line(45, D).to(330, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
+        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-Lr, 0, 1, 0).to(-40, D, 1, 0).line(0, D).pts, k), prof: [[0, 'M'], [1, 'C']] });
+        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(0, D, 1, 0).line(40, D).to(Lr, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
       }
       return { elems: out, signals: [{ x: 0, y: D, lv: 'C' }, { x: 0, y: -D, lv: 'C' }] };
     },
@@ -153,13 +153,13 @@ export const TEMPLATES = {
     group: '服務型', name: '部分苜蓿葉 A', desc: '左轉上高速走環道（位於橫交道路之前），出口匝道在橫交道路上以號誌 T 字路口銜接', L: 440, Lc: 320,
     main: 'highway', cross: 'avenue', M: 1, C: 0,
     build() {
-      const D = 165, out = [];
+      const D = 145, out = [];
       for (const k of [0, 2]) {
         // 西南象限：南行 → 東行的環道（入口）、東行出口匝道到 T 字路口
         out.push({ label: '左轉入口環道', type: 'ramp', pts: rotPts(rotPts(cloverLoopPts(), 1), k), prof: [[0, 'C'], [1, 'M']] });
-        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-420, 0, 1, 0).to(-150, D, 1, 0).line(0, D).pts, k), prof: [[0, 'M'], [1, 'C']] });
+        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-320, 0, 1, 0).to(-140, D, 1, 0).line(0, D).pts, k), prof: [[0, 'M'], [1, 'C']] });
         // 東南象限：北行 → 東行的右轉入口
-        out.push({ label: '右轉入口', type: 'ramp', pts: rotPts(new Path(0, 260, 0, -1).to(420, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
+        out.push({ label: '右轉入口', type: 'ramp', pts: rotPts(new Path(0, 215, 0, -1).to(320, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
       }
       return { elems: out, signals: [{ x: 0, y: D, lv: 'C' }, { x: 0, y: -D, lv: 'C' }] };
     },
@@ -172,7 +172,7 @@ export const TEMPLATES = {
       for (const k of [0, 2]) {
         // 東南象限：東行駛過橫交道路後右出，180° 髮夾彎接回橫交道路
         out.push({ label: '出口環道', type: 'ramp', pts: rotPts(new Path(30, 0, 1, 0).to(115, 24, 1, 0).turn(46, 180).line(0, D1).pts, k), prof: [[0, 'M'], [1, 'C']] });
-        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(0, D2, 1, 0).line(70, D2).to(400, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
+        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(0, D2, 1, 0).line(70, D2).to(390, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
       }
       return { elems: out, signals: [{ x: 0, y: D1, lv: 'C' }, { x: 0, y: -D1, lv: 'C' }, { x: 0, y: D2, lv: 'C' }, { x: 0, y: -D2, lv: 'C' }] };
     },
@@ -187,12 +187,12 @@ export const TEMPLATES = {
       out.push({ label: '北行分岔車道', type: 'oneway2', pts: nb.pts, prof: [[0, 'C'], [1, 'C']], role: 'ddi' });
       out.push({ label: '南行分岔車道', type: 'oneway2', pts: rotPts(nb.pts, 2), prof: [[0, 'C'], [1, 'C']], role: 'ddi' });
       for (const k of [0, 2]) {
-        const off = new Path(-330, 0, 1, 0).to(-85, Yr, 1, 0).line(-o, Yr);
+        const off = new Path(-250, 0, 1, 0).to(-80, Yr, 1, 0).line(-o, Yr);
         const offPts = off.pts, offCum = polyCum(offPts), offLen = offCum[offCum.length - 1];
         // 右轉：在端點前約 70 m 分出，緊貼著在交叉點外側併入
         const sDiv = offLen - 70, pd = pointAt(offPts, offCum, sDiv);
         const slipOff = new Path(pd.x, pd.y, pd.dx, pd.dy).to(-14, Y1 + 30, 0.17, 0.985).to(0, Y1 + 55, 0, 1);
-        const on = new Path(o, Yr, 1, 0).line(85, Yr).to(330, 0, 1, 0);
+        const on = new Path(o, Yr, 1, 0).line(80, Yr).to(250, 0, 1, 0);
         const onPts = on.pts, onCum = polyCum(onPts), onLen = onCum[onCum.length - 1];
         const sJoin = 95, pm = pointAt(onPts, onCum, sJoin);
         const slipOn = new Path(0, Y1 + 55, 0, -1).to(14, Y1 + 30, 0.17, -0.985).to(pm.x, pm.y, pm.dx, pm.dy);
@@ -209,14 +209,14 @@ export const TEMPLATES = {
     main: 'highway', cross: 'avenue', M: 1, C: 0,
     build() {
       // 參考 MoDOT / KYTC 的 SPUI 設計：出口匝道在 x≈-150 分成兩支，左轉進中央號誌，右轉以半徑 60 m 自由併入橫交道路
-      const out = [], dx = 0.894, dy = 0.447, X = 150, W = 30, R = 60;
+      const out = [], dx = 0.894, dy = 0.447, X = 125, W = 28, R = 50, Lr = 265;
       for (const k of [0, 2]) {
-        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-340, 0, 1, 0).to(-X, W, 1, 0).pts, k), prof: [[0, 'M'], [1, 'C']] });
+        out.push({ label: '出口匝道', type: 'ramp', pts: rotPts(new Path(-Lr, 0, 1, 0).to(-X, W, 1, 0).pts, k), prof: [[0, 'M'], [1, 'C']] });
         out.push({ label: '出口左轉', type: 'ramp', pts: rotPts(new Path(-X, W, 1, 0).to(0, 0, dx, -dy).pts, k), prof: [[0, 'C'], [1, 'C']] });
         out.push({ label: '出口右轉', type: 'ramp', pts: rotPts(new Path(-X, W, 1, 0).line(-R, W).turn(R, 90).pts, k), prof: [[0, 'C'], [1, 'C']] });
         out.push({ label: '入口左轉', type: 'ramp', pts: rotPts(new Path(0, 0, dx, dy).to(X, W, 1, 0).pts, k), prof: [[0, 'C'], [1, 'C']] });
         out.push({ label: '入口右轉', type: 'ramp', pts: rotPts(new Path(0, W + R, 0, -1).turn(R, 90).line(X, W).pts, k), prof: [[0, 'C'], [1, 'C']] });
-        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(X, W, 1, 0).to(340, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
+        out.push({ label: '入口匝道', type: 'ramp', pts: rotPts(new Path(X, W, 1, 0).to(Lr, 0, 1, 0).pts, k), prof: [[0, 'C'], [1, 'M']] });
       }
       return { elems: out, signals: [{ x: 0, y: 0, lv: 'C' }] };
     },

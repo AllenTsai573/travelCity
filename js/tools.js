@@ -1,7 +1,7 @@
 // 玩家工具與輸入處理
 import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, CELL, levelMul } from './config.js';
 import { halfWidth } from './network.js';
-import { pointAt, closestOnPoly, clamp, fmtMoney, convexOverlap } from './util.js';
+import { pointAt, closestOnPoly, clamp, fmtMoney, convexOverlap, pointInPoly } from './util.js';
 const convexOverlapSafe = (a, b) => { try { return convexOverlap(a, b); } catch { return false; } };
 import { TEMPLATES, findCrossing, frameFromCrossing, previewTemplate, placeInterchange } from './interchange.js';
 
@@ -687,24 +687,67 @@ export class Tools {
     }
     ctx.stroke();
   }
-  // 道路兩側的分區格子（像城市天際線那樣，沿路 6 格深），只在分區工具時顯示
-  drawZoneGrid(ctx, r) {
-    const z = this.cam.z, net = this.net;
-    if (z < 0.45) return;
-    const v = r.view(40), D = 6, park = this.g.city.parkRoadSet();
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = Math.max(0.12, 0.7 / z);
-    ctx.beginPath();
+  // 道路兩側的分區格子（像城市天際線那樣，沿路 6 格深）。不同道路的格子不重疊：
+  // 等級高 / 較長的道路先佔格，與其他道路、已有格子、建築或水域重疊的格子就不顯示。結果依路網版本快取
+  zoneCells() {
+    const net = this.net, city = this.g.city, T = this.g.terrain;
+    const key = net.version + ':' + city.buildings.length + ':' + city.lots.length;
+    if (this._zc && this._zc.key === key) return this._zc.cells;
+    const park = city.parkRoadSet(), D = 6, B = 12;
+    const bucket = (m, x, y, v) => { const k = Math.floor(x / B) + ',' + Math.floor(y / B); let a = m.get(k); if (!a) m.set(k, a = []); a.push(v); };
+    const near = (m, x, y, r, f) => {
+      for (let i = Math.floor((x - r) / B); i <= Math.floor((x + r) / B); i++) for (let j = Math.floor((y - r) / B); j <= Math.floor((y + r) / B); j++) {
+        const a = m.get(i + ',' + j); if (a) for (const v of a) if (f(v)) return true;
+      }
+      return false;
+    };
+    // 道路取樣點（所有地面道路）
+    const roadPts = new Map();
     for (const s of net.segs.values()) {
-      if (!s.T.access || s.drawLevel !== 0 || !r.inView(s.bbox, v) || park.has(s.id)) continue;
+      if (s.drawLevel !== 0) continue;
+      const hw = halfWidth(s.T);
+      for (let t = 0; t <= s.len; t += 3) { const p = pointAt(s.pts, s.cum, t); bucket(roadPts, p.x, p.y, { x: p.x, y: p.y, hw, seg: s.id }); }
+    }
+    // 建築與地塊
+    const blds = new Map();
+    for (const b of [...city.buildings, ...city.lots]) {
+      const bb = { x0: Math.min(...b.corners.map(p => p.x)), x1: Math.max(...b.corners.map(p => p.x)), y0: Math.min(...b.corners.map(p => p.y)), y1: Math.max(...b.corners.map(p => p.y)) };
+      for (let x = Math.floor(bb.x0 / B); x <= Math.floor(bb.x1 / B); x++) for (let y = Math.floor(bb.y0 / B); y <= Math.floor(bb.y1 / B); y++) bucket(blds, x * B + 1, y * B + 1, b);
+    }
+    const taken = new Map(), cells = [];
+    const segs = [...net.segs.values()].filter(s => s.T.access && s.drawLevel === 0 && !park.has(s.id) && net.nodes.get(s.a).level === 0 && net.nodes.get(s.b).level === 0)
+      .sort((p, q) => q.T.rank - p.T.rank || q.len - p.len);
+    for (const s of segs) {
       const n = Math.floor((s.len - s.rb - s.ra) / CELL + 1e-6);
       if (n < 1) continue;
       const off = halfWidth(s.T) + 1.5;
       for (const side of [1, -1]) {
         const at = (i, j) => { const p = pointAt(s.pts, s.cum, s.ra + i * CELL); return { x: p.x - p.dy * side * (off + j * CELL), y: p.y + p.dx * side * (off + j * CELL) }; };
-        for (let i = 0; i <= n; i++) { const a = at(i, 0), b = at(i, D); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
-        for (let j = 0; j <= D; j++) { const a = at(0, j); ctx.moveTo(a.x, a.y); for (let i = 1; i <= n; i++) { const b = at(i, j); ctx.lineTo(b.x, b.y); } }
+        for (let i = 0; i < n; i++) for (let j = 0; j < D; j++) {
+          const c = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+          const cx = (c[0].x + c[2].x) / 2, cy = (c[0].y + c[2].y) / 2;
+          if (T.isWater(cx, cy)) break;
+          if (near(roadPts, cx, cy, 20, v => v.seg !== s.id && Math.hypot(v.x - cx, v.y - cy) < v.hw + 3.2)) break;
+          if (near(taken, cx, cy, 6, v => Math.hypot(v.x - cx, v.y - cy) < 5.2)) break;
+          if (near(blds, cx, cy, 0, b => pointInPoly({ x: cx, y: cy }, b.corners))) continue;
+          bucket(taken, cx, cy, { x: cx, y: cy });
+          cells.push(c);
+        }
       }
+    }
+    this._zc = { key, cells };
+    return cells;
+  }
+  drawZoneGrid(ctx, r) {
+    const z = this.cam.z;
+    if (z < 0.45) return;
+    const v = r.view(10);
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+    ctx.lineWidth = Math.max(0.12, 0.7 / z);
+    ctx.beginPath();
+    for (const c of this.zoneCells()) {
+      if (c[0].x < v.x0 || c[0].x > v.x1 || c[0].y < v.y0 || c[0].y > v.y1) continue;
+      ctx.moveTo(c[0].x, c[0].y); ctx.lineTo(c[1].x, c[1].y); ctx.lineTo(c[2].x, c[2].y); ctx.lineTo(c[3].x, c[3].y); ctx.closePath();
     }
     ctx.stroke();
   }

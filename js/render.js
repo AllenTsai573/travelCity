@@ -1,4 +1,5 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
+import { lotArt } from './lotart.js';
 import { LANE_W, LEVEL_H, ZONES } from './config.js';
 import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly, closestOnPoly } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
@@ -170,55 +171,80 @@ export class Renderer {
   }
 
   drawBuildings(v) {
-    const g = this.game, ctx = this.ctx, z = this.cam.z;
-    for (const b of g.city.buildings) {
-      if (b.x < v.x0 - 30 || b.x > v.x1 + 30 || b.y < v.y0 - 30 || b.y > v.y1 + 30) continue;
-      const Z = ZONES[b.zone];
-      const c = b.corners;
-      // 地塊
-      ctx.fillStyle = b.abandoned ? '#8a8a84' : Z.color[0];
-      ctx.globalAlpha = 0.55;
-      ctx.beginPath();
-      ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath();
+    const g = this.game, ctx = this.ctx, z = this.cam.z, city = g.city;
+    const inV = b => !(b.x + b.rad < v.x0 || b.x - b.rad > v.x1 || b.y + b.rad < v.y0 || b.y - b.rad > v.y1);
+    const quad = c => { ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < c.length; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath(); };
+    // 已劃設、尚未發展的分區
+    for (const l of city.lots) {
+      if (!inV(l)) continue;
+      const col = ZONES[l.zone].color[l.zt === 'R1' ? 0 : l.zt === 'R3' ? 2 : 1];
+      quad(l.corners);
+      ctx.fillStyle = col; ctx.globalAlpha = 0.3; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = col; ctx.lineWidth = Math.max(0.3, 1.4 / z); ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]);
+      if (z > 1.1) g.tools.drawCells(ctx, l, 'rgba(255,255,255,0.28)');
+    }
+    const detail = z > 0.55;
+    for (const b of city.buildings) {
+      if (!inV(b)) continue;
+      const key = b.level + '|' + b.abandoned;
+      if (!b._art || b._art.key !== key) b._art = { key, ...lotArt(b) };
+      const c0 = b.corners[0], tx = b.tx, ty = b.ty, nx = b.nx, ny = b.ny;
+      const P = (u, w) => ({ x: c0.x + tx * u + nx * w, y: c0.y + ty * u + ny * w });
+      const box = (u0, v0, u1, v1) => [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)];
+      quad(b.corners);
+      ctx.fillStyle = b.abandoned ? '#8f8c84' : b._art.base;
       ctx.fill();
-      ctx.globalAlpha = 1;
-      // 建物本體
-      const sh = 0.18 + (3 - b.level) * 0.06;
-      const ins = c.map(p => ({ x: b.x + (p.x - b.x) * (1 - sh), y: b.y + (p.y - b.y) * (1 - sh) }));
-      const hgt = b.level * (b.zone === 'C' ? 2.6 : 1.5);
-      ctx.fillStyle = 'rgba(0,0,0,0.22)';
-      ctx.beginPath();
-      ctx.moveTo(ins[0].x + hgt, ins[0].y + hgt); for (let i = 1; i < 4; i++) ctx.lineTo(ins[i].x + hgt, ins[i].y + hgt); ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = b.abandoned ? '#a5a39c' : Z.roof[(b.level - 1 + b.variant) % 3];
-      ctx.beginPath();
-      ctx.moveTo(ins[0].x, ins[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(ins[i].x, ins[i].y); ctx.closePath();
-      ctx.fill();
-      if (z > 0.8) {
-        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-        ctx.lineWidth = 0.4;
-        ctx.stroke();
-        if (b.zone === 'R' && !b.abandoned) {
-          // 屋脊
-          ctx.beginPath();
-          ctx.moveTo((ins[0].x + ins[3].x) / 2, (ins[0].y + ins[3].y) / 2);
-          ctx.lineTo((ins[1].x + ins[2].x) / 2, (ins[1].y + ins[2].y) / 2);
-          ctx.stroke();
+      const items = b._art.items;
+      // 陰影
+      if (detail) {
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        for (const it of items) {
+          if (!it.h || it.t === 'line') continue;
+          const o = it.h * 0.45;
+          if (it.t === 'circle') { ctx.beginPath(); ctx.arc(P(it.u, it.v).x + o, P(it.u, it.v).y + o, it.r, 0, Math.PI * 2); ctx.fill(); continue; }
+          const c = it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1);
+          quad(c.map(p => ({ x: p.x + o, y: p.y + o }))); ctx.fill();
         }
-        if (b.zone === 'I' && !b.abandoned) {
-          ctx.fillStyle = '#6b6159';
-          ctx.beginPath(); ctx.arc(b.x + (ins[2].x - b.x) * 0.5, b.y + (ins[2].y - b.y) * 0.5, 1.6, 0, Math.PI * 2); ctx.fill();
-          if (b.happy > 0.4) {
-            ctx.fillStyle = 'rgba(220,220,220,0.35)';
-            const t = (this.game.time * 0.6 + b.id) % 6;
-            ctx.beginPath(); ctx.arc(b.x + (ins[2].x - b.x) * 0.5 + t, b.y + (ins[2].y - b.y) * 0.5 - t * 1.2, 1.5 + t * 0.4, 0, Math.PI * 2); ctx.fill();
-          }
+      }
+      for (const it of items) {
+        if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2))) continue;
+        if (it.t === 'line') {
+          ctx.strokeStyle = it.c; ctx.lineWidth = it.w; ctx.lineCap = 'butt';
+          ctx.setLineDash(it.dash || []);
+          ctx.beginPath(); it.pts.forEach((q, i) => { const p = P(q.u, q.v); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }); ctx.stroke();
+          ctx.setLineDash([]); ctx.lineCap = 'round';
+          continue;
         }
-        if (b.zone === 'C' && !b.abandoned) {
-          ctx.fillStyle = 'rgba(255,255,255,0.35)';
-          const m = ins.map(p => ({ x: b.x + (p.x - b.x) * 0.55, y: b.y + (p.y - b.y) * 0.55 }));
-          ctx.beginPath(); ctx.moveTo(m[0].x, m[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(m[i].x, m[i].y); ctx.closePath(); ctx.fill();
+        if (it.t === 'circle') {
+          const p = P(it.u, it.v);
+          ctx.fillStyle = b.abandoned && it.h >= 2 ? '#a5a39c' : it.c;
+          ctx.beginPath(); ctx.arc(p.x, p.y, it.r, 0, Math.PI * 2); ctx.fill();
+          if (it.stack && detail && b.happy > 0.4 && !b.abandoned) {
+            ctx.fillStyle = 'rgba(225,225,225,0.35)';
+            const t = (g.time * 0.6 + b.id) % 6;
+            ctx.beginPath(); ctx.arc(p.x + t, p.y - t * 1.2, 1.5 + t * 0.4, 0, Math.PI * 2); ctx.fill();
+          } else if (it.h >= 2 && detail) { ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.3; ctx.stroke(); }
+          continue;
         }
+        const c = it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1);
+        quad(c);
+        ctx.fillStyle = b.abandoned && it.h ? '#a5a39c' : it.c;
+        ctx.fill();
+        if (!detail || it.car || !it.h) continue;
+        ctx.strokeStyle = 'rgba(0,0,0,0.28)'; ctx.lineWidth = 0.3; ctx.stroke();
+        ctx.beginPath();
+        if (it.ridge === 'u') { const m0 = P(it.u0, (it.v0 + it.v1) / 2), m1 = P(it.u1, (it.v0 + it.v1) / 2); ctx.moveTo(m0.x, m0.y); ctx.lineTo(m1.x, m1.y); }
+        if (it.ridge === 'v') { const m0 = P((it.u0 + it.u1) / 2, it.v0), m1 = P((it.u0 + it.u1) / 2, it.v1); ctx.moveTo(m0.x, m0.y); ctx.lineTo(m1.x, m1.y); }
+        if (z > 1.4 && (it.grid || it.stripes)) {
+          const du = it.grid === 'v' || it.stripes === 'v' ? 0 : it.stripes ? 4 : 3, dv = it.grid === 'u' || it.stripes === 'u' ? 0 : it.stripes ? 4 : 3;
+          if (du) for (let u = it.u0 + du; u < it.u1 - 0.5; u += du) { const a = P(u, it.v0), e = P(u, it.v1); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
+          if (dv) for (let w = it.v0 + dv; w < it.v1 - 0.5; w += dv) { const a = P(it.u0, w), e = P(it.u1, w); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
+        }
+        ctx.lineWidth = 0.25; ctx.stroke();
+        if (b.abandoned) continue;
+        if (it.awning) { quad(box(it.u0, it.v0, it.u1, it.v0 + 1.2)); ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill(); }
+        if (it.stripe) { quad(box(it.u0 + 3, it.v0 + 1.5, it.u0 + Math.min(18, (it.u1 - it.u0) * 0.4), it.v0 + 4.5)); ctx.fillStyle = it.stripe; ctx.fill(); }
+        if (it.docks) { ctx.fillStyle = '#5b5f64'; for (let u = it.u0 + 2; u < it.u1 - 3; u += 5) { quad(box(u, it.v0 - 1.2, u + 3, it.v0)); ctx.fill(); } }
       }
     }
   }

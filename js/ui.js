@@ -1,7 +1,6 @@
 // 介面：頂部資訊列、工具列、資訊面板、路口編輯器、對話框
-import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, BIOMES, DIFFICULTY, MILESTONES } from './config.js';
+import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, ZONE_ORDER, SHOP_KINDS, INDUSTRY_KINDS, BIOMES, DIFFICULTY, MILESTONES } from './config.js';
 import { fmtMoney, fmtTime, clamp } from './util.js';
-import { ZONE_COST } from './tools.js';
 import { TEMPLATES, TEMPLATE_ORDER } from './interchange.js';
 import { roadThumb, roundaboutThumb, interchangeThumb } from './thumbs.js';
 
@@ -115,8 +114,10 @@ export class UI {
         html += `<div class="hint">左鍵連續鋪路 · 右鍵/Esc 結束 · Shift 角度吸附 · Alt 不吸附 · [ ] 切換高度</div>`;
       } else html += `<div class="hint">點擊道路以變更類型（同類單行道則反轉方向）</div>`;
     } else if (t.tool === 'zone') {
-      html += `<div class="grp">` + ['R', 'C', 'I'].map(z => `<button data-sub="zone" data-v="${z}" class="zone-${z} ${t.zone === z ? 'on' : ''}"><b>${ZONES[z].name}</b><small>${fmtMoney(ZONE_COST[z])}</small></button>`).join('') + `</div>`;
-      html += `<div class="hint">在道路旁點擊或拖曳劃設分區。住宅怕工業污染與高速公路噪音。</div>`;
+      const zdesc = { R1: '透天、獨棟', R2: '公寓、連棟', R3: '大樓', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機' };
+      html += `<div class="grp">` + ZONE_ORDER.map(k => { const Z = ZONE_TYPES[k]; return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''}" title="${Z.name}：最大 ${Z.max}×${Z.max} 格（每格 6 m）｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>最大 ${Z.max}×${Z.max} · 免費</small></button>`; }).join('')
+        + `<button data-sub="zone" data-v="X" class="${t.zone === 'X' ? 'on' : ''}" title="拖曳範圍內的空分區取消"><b>✕ 取消分區</b><small>僅空地</small></button></div>`;
+      html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m）。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕工業污染與高速公路噪音。</div>`;
     } else if (t.tool === 'roundabout') {
       html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="th ${t.rbR === r ? 'on' : ''}">${roundaboutThumb(r)}<b>半徑 ${r} m</b></button>`).join('') + `</div>`;
       html += `<div class="hint">點擊既有路口將其改建為圓環，或在空地放置圓環。環道車輛擁有路權。</div>`;
@@ -230,7 +231,8 @@ export class UI {
   buildingPanel(b) {
     const g = this.g, Z = ZONES[b.zone], cap = g.city.cap(b);
     return {
-      head: `<h3>${b.zone === 'R' ? '🏠' : b.zone === 'C' ? '🏬' : '🏭'} ${Z.name}建築 #${b.id}</h3>`,
+      head: `<h3>${b.zone === 'R' ? (b.zt === 'R3' ? '🏢' : '🏠') : b.zone === 'C' ? '🏬' : '🏭'} ${b.zone === 'C' ? SHOP_KINDS[b.kind]?.name || '商店' : b.zone === 'I' ? INDUSTRY_KINDS[b.kind]?.name || '工廠' : ZONE_TYPES[b.zt].name} #${b.id}</h3>
+        <p class="note">${ZONE_TYPES[b.zt].name} · 地塊 ${b.cols}×${b.rows} 格（${b.cols * 6}×${b.rows * 6} m）</p>`,
       dyn: () => {
         let rows = `<dt>等級</dt><dd>${'★'.repeat(b.level)}${'☆'.repeat(3 - b.level)}${b.abandoned ? '（已廢棄）' : ''}</dd>
           <dt>滿意度</dt><dd>${bar(b.happy)} ${pct(b.happy)}</dd>`;

@@ -763,6 +763,7 @@ export class Network {
       made.push(this.addSegment(p.n, q.n, plan.typeKey, piece, { ring: plan.ring }));
     }
     if (g.city) for (const b of plan.demolish) g.city.removeBuilding(b);
+    if (g.city && g.city.onRoadBuilt) g.city.onRoadBuilt(made);
     for (const s of made) {
       if (s.drawLevel === 0) g.terrain.clearTreesAlong(s.pts, halfWidth(s.T) + 3);
     }

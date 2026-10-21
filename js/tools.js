@@ -1,10 +1,10 @@
 // 玩家工具與輸入處理
-import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, levelMul } from './config.js';
+import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, CELL, levelMul } from './config.js';
 import { halfWidth } from './network.js';
-import { pointAt, closestOnPoly, clamp, fmtMoney } from './util.js';
+import { pointAt, closestOnPoly, clamp, fmtMoney, convexOverlap } from './util.js';
+const convexOverlapSafe = (a, b) => { try { return convexOverlap(a, b); } catch { return false; } };
 import { TEMPLATES, findCrossing, frameFromCrossing, previewTemplate, placeInterchange } from './interchange.js';
 
-export const ZONE_COST = { R: 300, C: 450, I: 600 };
 
 export class Tools {
   constructor(game, canvas) {
@@ -14,7 +14,7 @@ export class Tools {
     this.roadType = 'street';
     this.level = 0;
     this.curve = false;
-    this.zone = 'R';
+    this.zone = 'R1';   // 分區種類（ZONE_TYPES 的鍵），'X' 為取消分區
     this.rbR = 26;
     this.ixType = 'diamond';
     this.ixAngle = 0;
@@ -31,7 +31,6 @@ export class Tools {
     this.pinch = null;
     this.keys = new Set();
     this.dirty = true;
-    this.lastZone = null;
     this.bind();
   }
 
@@ -71,7 +70,7 @@ export class Tools {
       }
       this.updateMouse(e);
       this.down = { btn: e.button, sx: e.offsetX, sy: e.offsetY, cx: this.cam.x, cy: this.cam.y, moved: false, touch: e.pointerType === 'touch' };
-      if (e.button === 0 && this.tool === 'zone') { this.lastZone = null; this.zonePaint(true); }
+      if (e.button === 0 && this.tool === 'zone') this.zoneStart();
       // 路口車道連接：從進入車道（橘點）按住拖曳到離開車道（綠點）
       if (e.button === 0 && this.tool === 'junction') {
         const h = this.jLaneHit();
@@ -91,7 +90,7 @@ export class Tools {
       if (d && this.jDrag) { if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 6) d.moved = true; return; }
       if (d) {
         if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 6) d.moved = true;
-        if (d.btn === 0 && this.tool === 'zone' && !d.touch) { this.zonePaint(false); return; }
+        if (this.zStroke) { this.zoneMove(); return; }
         if (d.moved) {
           this.cam.x = d.cx - (e.offsetX - d.sx) / this.cam.z;
           this.cam.y = d.cy - (e.offsetY - d.sy) / this.cam.z;
@@ -104,6 +103,7 @@ export class Tools {
       if (this.ptrs.size < 2) this.pinch = null;
       const d = this.down;
       this.down = null;
+      if (this.zStroke) { this.zoneCommit(d && d.moved); return; }
       if (this.jDrag) {
         const jd = this.jDrag;
         this.jDrag = null;
@@ -261,6 +261,8 @@ export class Tools {
       case 'bulldoze': {
         const b = g.city.buildingAt(m.x, m.y);
         if (b) { this.hover = { type: 'building', obj: b }; this.setTip(`拆除${ZONES[b.zone].name}建築`); break; }
+        const l = g.city.lotAt(m.x, m.y);
+        if (l) { this.hover = { type: 'building', obj: l }; this.setTip(`取消${ZONE_TYPES[l.zt].name}分區`); break; }
         const s = net.segNear(m.x, m.y, Math.max(1, 4 / this.cam.z), 'any');
         if (s) { this.hover = { type: 'segment', obj: s.seg }; this.setTip(`拆除 ${s.seg.T.name}（${Math.round(s.seg.len)} m）`); }
         break;
@@ -274,11 +276,11 @@ export class Tools {
         break;
       }
       case 'zone': {
-        const z = this.zoneTarget(m.x, m.y);
-        this.hover = z;
-        if (!z) { this.setTip(`沿道路點擊或拖曳以劃設${ZONES[this.zone].name}區（${fmtMoney(ZONE_COST[this.zone])}/塊）`); break; }
-        if (z.reason) this.setTip(z.reason, true);
-        else this.setTip(`${ZONES[this.zone].name}區 ${fmtMoney(ZONE_COST[this.zone])}`);
+        if (this.zStroke) break;
+        const a = this.zoneAnchor(m.x, m.y);
+        this.hover = a;
+        const name = this.zone === 'X' ? '取消分區' : ZONE_TYPES[this.zone].name;
+        this.setTip(a ? `按住沿道路拖曳劃設${name}（往外拖可加深；免費）` : `移到道路旁劃設${name}`);
         break;
       }
       case 'junction': {
@@ -361,38 +363,70 @@ export class Tools {
     return { ok: true, cost, text: `改為${T.name}：${fmtMoney(cost)}${lost ? ` · 將拆除 ${lost} 棟沿線建築` : ''}` };
   }
 
-  zoneTarget(x, y) {
-    const net = this.net, city = this.g.city;
+  // ---------- 分區（格子） ----------
+  // 游標附近可劃設分區的道路，以及沿路的格子編號與離路邊的深度
+  zoneAnchor(x, y) {
+    const net = this.net;
     let best = null;
     for (const s of net.segs.values()) {
-      const hw = halfWidth(s.T);
-      const b = s.bbox;
-      if (x < b.x0 - 40 || x > b.x1 + 40 || y < b.y0 - 40 || y > b.y1 + 40) continue;
+      if (!s.T.access || s.drawLevel !== 0 || net.nodes.get(s.a).level !== 0 || net.nodes.get(s.b).level !== 0) continue;
+      const b = s.bbox, R = 32 * CELL;
+      if (x < b.x0 - R || x > b.x1 + R || y < b.y0 - R || y > b.y1 + R) continue;
       const c = closestOnPoly(s.pts, s.cum, { x, y });
-      if (c.d > hw + ZONES[this.zone].d + 4) continue;
-      if (!best || c.d < best.d) best = { seg: s, u: c.s, d: c.d };
+      if (!best || c.d < best.c.d) best = { seg: s, c };
     }
-    if (!best) return null;
-    const s = best.seg;
-    const p = pointAt(s.pts, s.cum, best.u);
-    const side = ((x - p.x) * -p.dy + (y - p.y) * p.dx) > 0 ? 1 : -1;
-    const Z = ZONES[this.zone];
-    const u = clamp(best.u, s.ra + Z.w / 2 + 1, s.len - s.rb - Z.w / 2 - 1);
-    let reason = city.canPlace(this.zone, s, u, side);
-    if (!reason && !this.g.canAfford(ZONE_COST[this.zone])) reason = '資金不足';
-    return { seg: s, u, side, reason, geo: city.lotGeom(this.zone, s, u, side) };
+    if (!best || best.c.d > halfWidth(best.seg.T) + 4 * CELL) return null;
+    return this.zoneCell(best.seg, x, y);
   }
-
-  zonePaint(first) {
-    const m = this.mouse;
-    const t = this.zoneTarget(m.x, m.y);
-    if (!t || t.reason) { if (first && t?.reason) this.g.notify(t.reason, 'warn'); return; }
-    if (this.lastZone && Math.hypot(t.geo.x - this.lastZone.x, t.geo.y - this.lastZone.y) < 6) return;
-    this.g.city.addBuilding(this.zone, t.seg, t.u, t.side);
-    this.g.spend(ZONE_COST[this.zone]);
-    this.g.city.recount();
-    this.lastZone = { x: t.geo.x, y: t.geo.y };
+  zoneCell(s, x, y, side = 0) {
+    const c = closestOnPoly(s.pts, s.cum, { x, y });
+    const p = pointAt(s.pts, s.cum, c.s);
+    const sd = side || (((x - p.x) * -p.dy + (y - p.y) * p.dx) > 0 ? 1 : -1);
+    const signed = ((x - p.x) * -p.dy + (y - p.y) * p.dx) * sd;
+    const nCells = Math.floor((s.len - s.rb - s.ra) / CELL + 1e-6);
+    const i = clamp(Math.floor((c.s - s.ra) / CELL), 0, Math.max(0, nCells - 1));
+    const depth = Math.max(1, Math.ceil((signed - halfWidth(s.T) - 1.5) / CELL));
+    return { seg: s, side: sd, i, depth, nCells, geo: this.g.city.lotGeom(s, s.ra + (i + 0.5) * CELL, sd, 1, 1) };
+  }
+  zoneStart() {
+    const a = this.zoneAnchor(this.mouse.x, this.mouse.y);
+    if (!a || a.nCells < 1) return;
+    this.zStroke = { seg: a.seg, side: a.side, i0: a.i, i1: a.i, rows: a.depth, moved: false };
+    this.zoneMove();
+  }
+  zoneMove() {
+    const st = this.zStroke, m = this.mouse, city = this.g.city;
+    if (!this.net.segs.has(st.seg.id)) { this.zStroke = null; return; }
+    const c = this.zoneCell(st.seg, m.x, m.y, st.side);
+    if (c.i !== st.i0 || c.depth !== st.rows) st.moved = true;
+    st.i1 = c.i; st.rows = c.depth;
+    const s = st.seg, a = s.ra + Math.min(st.i0, st.i1) * CELL, b = s.ra + (Math.max(st.i0, st.i1) + 1) * CELL;
+    if (this.zone === 'X') st.rect = city.lotGeom(s, (a + b) / 2, st.side, Math.round((b - a) / CELL), Math.max(1, st.rows));
+    else st.plan = city.planStroke(this.zone, s, st.side, a, b, st.rows);
     this.dirty = true;
+  }
+  zoneCommit(dragged) {
+    const st = this.zStroke, g = this.g, city = g.city;
+    this.zStroke = null;
+    this.dirty = true;
+    if (!st) return;
+    // 只點一下：依分區給一塊預設大小的地塊
+    if (!st.moved && !dragged && this.zone !== 'X') {
+      const Z = ZONE_TYPES[this.zone], cols = Math.min(Z.max, this.zone === 'R1' || this.zone === 'R2' ? 4 : 6);
+      const i0 = clamp(st.i0 - Math.floor((cols - 1) / 2), 0, Math.max(0, Math.floor((st.seg.len - st.seg.rb - st.seg.ra) / CELL) - cols));
+      st.plan = city.planStroke(this.zone, st.seg, st.side, st.seg.ra + i0 * CELL, st.seg.ra + (i0 + cols) * CELL, cols);
+    }
+    if (this.zone === 'X') {
+      const r = st.rect;
+      const hit = r ? city.lots.filter(l => Math.hypot(l.x - r.x, l.y - r.y) < l.rad + r.rad && convexOverlapSafe(l.corners, r.corners)) : [];
+      for (const l of hit) city.removeLot(l);
+      if (hit.length) g.notify(`已取消 ${hit.length} 塊分區`, 'minor');
+      return;
+    }
+    const ok = (st.plan || []).filter(p => p.ok);
+    for (const p of ok) city.addLot(p.zt, p.seg, p.u, p.side, p.cols, p.rows);
+    if (ok.length) g.notify(`已劃設 ${ok.length} 塊${ZONE_TYPES[this.zone].name}（${ok.map(p => p.cols + '×' + p.rows).join('、')} 格）`, 'minor');
+    else if (st.plan && st.plan.length) g.notify(st.plan[0].reason || '無法劃設', 'warn');
   }
 
   // ---------- 點擊 ----------
@@ -428,7 +462,7 @@ export class Tools {
       case 'bulldoze': {
         const h = this.hover;
         if (!h) return;
-        if (h.type === 'building') { g.city.removeBuilding(h.obj); g.city.recount(); }
+        if (h.type === 'building') { if (h.obj.built === false) g.city.removeLot(h.obj); else g.city.removeBuilding(h.obj); g.city.recount(); }
         else {
           const err = net.bulldoze(h.obj);
           if (err) g.notify(err, 'warn');
@@ -575,10 +609,22 @@ export class Tools {
         ctx.strokeStyle = col; ctx.lineWidth = 2 / z;
         ctx.beginPath(); ctx.arc(h.obj.x, h.obj.y, h.obj.radius + 5, 0, Math.PI * 2); ctx.stroke();
       }
-    } else if (this.tool === 'zone' && this.hover) {
-      const h = this.hover, c = h.geo.corners;
-      ctx.fillStyle = h.reason ? 'rgba(255,70,70,0.45)' : 'rgba(120,230,140,0.5)';
-      ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath(); ctx.fill();
+    } else if (this.tool === 'zone') {
+      this.drawZoneGrid(ctx, r);
+      const quad = (c, fill, stroke) => {
+        ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath();
+        if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+        if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = Math.max(0.4, 2 / z); ctx.stroke(); }
+      };
+      const st = this.zStroke;
+      if (st && st.rect) quad(st.rect.corners, 'rgba(255,70,70,0.35)', '#ff5a5a');
+      else if (st && st.plan) {
+        const col = ZONES[ZONE_TYPES[this.zone].zone].color[1];
+        for (const p of st.plan) {
+          quad(p.geo.corners, p.ok ? col + '88' : 'rgba(255,70,70,0.45)', p.ok ? '#fff' : '#ff5a5a');
+          if (z > 0.5) this.drawCells(ctx, p.geo, 'rgba(255,255,255,0.5)');
+        }
+      } else if (this.hover && this.hover.geo) quad(this.hover.geo.corners, 'rgba(255,255,255,0.35)', '#fff');
     } else if (this.tool === 'interchange' && this.ix && this.ix.pv && m.inside) {
       const bad = this.ix.bad;
       for (const l of this.ix.pv.lines) {
@@ -624,6 +670,43 @@ export class Tools {
         ctx.setLineDash([]);
       }
     }
+  }
+
+  // 地塊內的格線
+  drawCells(ctx, geo, col) {
+    const c0 = geo.corners[0], z = this.cam.z;
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(0.15, 0.8 / z);
+    ctx.beginPath();
+    for (let i = 1; i < geo.cols; i++) {
+      const x = c0.x + geo.tx * i * CELL, y = c0.y + geo.ty * i * CELL;
+      ctx.moveTo(x, y); ctx.lineTo(x + geo.nx * geo.d, y + geo.ny * geo.d);
+    }
+    for (let j = 1; j < geo.rows; j++) {
+      const x = c0.x + geo.nx * j * CELL, y = c0.y + geo.ny * j * CELL;
+      ctx.moveTo(x, y); ctx.lineTo(x + geo.tx * geo.w, y + geo.ty * geo.w);
+    }
+    ctx.stroke();
+  }
+  // 道路兩側的分區格子（像城市天際線那樣，沿路 6 格深），只在分區工具時顯示
+  drawZoneGrid(ctx, r) {
+    const z = this.cam.z, net = this.net;
+    if (z < 0.45) return;
+    const v = r.view(40), D = 6;
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = Math.max(0.12, 0.7 / z);
+    ctx.beginPath();
+    for (const s of net.segs.values()) {
+      if (!s.T.access || s.drawLevel !== 0 || !r.inView(s.bbox, v)) continue;
+      const n = Math.floor((s.len - s.rb - s.ra) / CELL + 1e-6);
+      if (n < 1) continue;
+      const off = halfWidth(s.T) + 1.5;
+      for (const side of [1, -1]) {
+        const at = (i, j) => { const p = pointAt(s.pts, s.cum, s.ra + i * CELL); return { x: p.x - p.dy * side * (off + j * CELL), y: p.y + p.dx * side * (off + j * CELL) }; };
+        for (let i = 0; i <= n; i++) { const a = at(i, 0), b = at(i, D); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+        for (let j = 0; j <= D; j++) { const a = at(0, j); ctx.moveTo(a.x, a.y); for (let i = 1; i <= n; i++) { const b = at(i, j); ctx.lineTo(b.x, b.y); } }
+      }
+    }
+    ctx.stroke();
   }
 
   drawScreenOverlay() {

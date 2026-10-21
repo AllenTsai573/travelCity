@@ -1,5 +1,5 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
-import { ZONES, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
+import { ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap } from './util.js';
 import { halfWidth } from './network.js';
 
@@ -10,6 +10,7 @@ export class City {
   constructor(game) {
     this.game = game;
     this.buildings = [];
+    this.lots = [];        // 已劃設、尚未發展的分區地塊
     this.byId = new Map();
     this.nextId = 1;
     this.outside = [];
@@ -23,55 +24,115 @@ export class City {
     this.accThrough = new Map();
   }
 
-  // ---------- 建築位置 ----------
-  lotGeom(zone, seg, u, side) {
-    const Z = ZONES[zone];
+  // ---------- 地塊 ----------
+  // 沿路段 seg 在 u 處（臨路邊的中點）、side 側，寬 cols 格、深 rows 格的長方形地塊
+  lotGeom(seg, u, side, cols, rows) {
     const p = pointAt(seg.pts, seg.cum, u);
     const nx = -p.dy * side, ny = p.dx * side;
-    const off = halfWidth(seg.T) + 2;
-    const cx = p.x + nx * (off + Z.d / 2), cy = p.y + ny * (off + Z.d / 2);
-    const tx = p.dx, ty = p.dy, hw = Z.w / 2, hd = Z.d / 2;
+    const off = halfWidth(seg.T) + 1.5;
+    const w = cols * CELL, d = rows * CELL;
+    const cx = p.x + nx * (off + d / 2), cy = p.y + ny * (off + d / 2);
+    const tx = p.dx, ty = p.dy, hw = w / 2, hd = d / 2;
+    // 0：臨路左、1：臨路右、2：後方右、3：後方左
     const corners = [
       { x: cx - tx * hw - nx * hd, y: cy - ty * hw - ny * hd },
       { x: cx + tx * hw - nx * hd, y: cy + ty * hw - ny * hd },
       { x: cx + tx * hw + nx * hd, y: cy + ty * hw + ny * hd },
       { x: cx - tx * hw + nx * hd, y: cy - ty * hw + ny * hd },
     ];
-    return { x: cx, y: cy, angle: Math.atan2(ty, tx), corners, nx, ny, w: Z.w, d: Z.d };
+    return { x: cx, y: cy, angle: Math.atan2(ty, tx), corners, nx, ny, tx, ty, w, d, cols, rows, rad: Math.hypot(hw, hd) };
   }
 
-  canPlace(zone, seg, u, side) {
-    const g = this.game, net = g.net, Z = ZONES[zone];
+  canPlaceLot(seg, u, side, cols, rows, skip = null) {
+    const g = this.game, net = g.net;
     if (!seg.T.access) return '此道路類型不可沿線建築';
     if (net.nodes.get(seg.a).level !== 0 || net.nodes.get(seg.b).level !== 0) return '需沿地面道路建築';
-    if (u < seg.ra + Z.w / 2 + 1 || u > seg.len - seg.rb - Z.w / 2 - 1) return '太靠近路口';
-    const geo = this.lotGeom(zone, seg, u, side);
-    for (const c of [...geo.corners, geo]) {
-      if (!g.terrain.inBounds(c.x, c.y, 2)) return '超出地圖範圍';
-      if (g.terrain.isWater(c.x, c.y)) return '不可建在水上';
+    const w = cols * CELL;
+    if (u < seg.ra + w / 2 - 0.5 || u > seg.len - seg.rb - w / 2 + 0.5) return '太靠近路口';
+    const geo = this.lotGeom(seg, u, side, cols, rows);
+    // 水域與地圖邊界：每格檢查一次
+    for (let i = 0; i <= cols; i++) for (let j = 0; j <= rows; j++) {
+      const c = geo.corners[0], x = c.x + geo.tx * i * CELL + geo.nx * j * CELL, y = c.y + geo.ty * i * CELL + geo.ny * j * CELL;
+      if (!g.terrain.inBounds(x, y, 2)) return '超出地圖範圍';
+      if (g.terrain.isWater(x, y)) return '不可建在水上';
+    }
+    // 稍微內縮，讓相鄰地塊可以共用邊界
+    const inset = geo.corners.map(p => ({ x: geo.x + (p.x - geo.x) * (1 - 0.6 / geo.rad), y: geo.y + (p.y - geo.y) * (1 - 0.6 / geo.rad) }));
+    for (const b of [...this.buildings, ...this.lots]) {
+      if (b === skip || Math.abs(b.x - geo.x) > b.rad + geo.rad || Math.abs(b.y - geo.y) > b.rad + geo.rad) continue;
+      if (convexOverlap(b.corners, inset)) return b.built === false ? '與其他分區重疊' : '與其他建築重疊';
     }
     const bb = polyBBox(geo.corners, 0);
-    for (const b of this.buildings) {
-      if (Math.abs(b.x - geo.x) > 45 || Math.abs(b.y - geo.y) > 45) continue;
-      if (convexOverlap(b.corners, geo.corners)) return '與其他建築重疊';
-    }
     for (const s of net.segs.values()) {
       if (s.drawLevel !== 0) continue;
       const hw = halfWidth(s.T) + 0.5;
       if (!bboxOverlap(bb, s.bbox)) continue;
       for (let t = 0; t <= s.len; t += 3) {
         const p = pointAt(s.pts, s.cum, t);
-        if (pointInPoly(p, geo.corners)) return '與道路重疊';
-        for (let i = 0; i < 4; i++) if (distToSeg(p, geo.corners[i], geo.corners[(i + 1) % 4]) < hw) return '與道路重疊';
+        if (pointInPoly(p, inset)) return '與道路重疊';
+        for (let i = 0; i < 4; i++) if (distToSeg(p, inset[i], inset[(i + 1) % 4]) < hw) return '與道路重疊';
       }
     }
     return null;
   }
 
-  addBuilding(zone, seg, u, side, level = 1) {
-    const geo = this.lotGeom(zone, seg, u, side);
+  // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
+  planStroke(zt, seg, side, u0, u1, rows) {
+    const Z = ZONE_TYPES[zt];
+    const a = Math.max(Math.min(u0, u1), seg.ra), b = Math.min(Math.max(u0, u1), seg.len - seg.rb);
+    const total = Math.floor((b - a) / CELL + 1e-6);
+    if (total < 1) return [];
+    const n = Math.ceil(total / Z.max), depth = clamp(rows, 1, Z.max), res = [];
+    let start = a;
+    for (let i = 0; i < n; i++) {
+      const cols = Math.floor(total / n) + (i < total % n ? 1 : 0);
+      const u = start + cols * CELL / 2;
+      let r = depth, reason = null;
+      for (; r >= 1; r--) { reason = this.canPlaceLot(seg, u, side, cols, r); if (!reason) break; }
+      const ok = r >= 1;
+      res.push({ zt, seg, u, side, cols, rows: ok ? r : depth, ok, reason, geo: this.lotGeom(seg, u, side, cols, ok ? r : depth) });
+      start += cols * CELL;
+    }
+    return res;
+  }
+
+  addLot(zt, seg, u, side, cols, rows) {
+    const geo = this.lotGeom(seg, u, side, cols, rows);
+    const l = { id: this.nextId++, built: false, zt, zone: ZONE_TYPES[zt].zone, seg: seg.id, u, side, ...geo, born: this.game.time };
+    this.lots.push(l);
+    this.game.terrain.clearTreesCircle(geo.x, geo.y, geo.rad * 0.6);
+    return l;
+  }
+  removeLot(l) { this.lots = this.lots.filter(x => x !== l); }
+  lotAt(x, y) {
+    const p = { x, y };
+    for (const l of this.lots) if (Math.abs(l.x - x) < l.rad && Math.abs(l.y - y) < l.rad && pointInPoly(p, l.corners)) return l;
+    return null;
+  }
+
+  // 地塊開始發展成建築（依分區與大小決定建築種類）
+  develop(l, level = 1) {
+    const seg = this.game.net.segs.get(l.seg);
+    if (!seg) { this.removeLot(l); return null; }
+    this.removeLot(l);
+    return this.addBuilding(l.zt, seg, l.u, l.side, l.cols, l.rows, level);
+  }
+
+  pickKind(zt, cols, rows) {
+    const rng = this.game.rng, zone = ZONE_TYPES[zt].zone;
+    if (zone === 'C') {
+      if (Math.min(cols, rows) >= SHOP_KINDS.bigbox.minCells) return rng.pick(['bigbox', 'bigbox', 'mall', 'market']);
+      return cols * rows >= 60 && rng.chance(0.4) ? 'market' : 'shops';
+    }
+    if (zone === 'I') return rng.pick(Object.keys(INDUSTRY_KINDS));
+    return null;
+  }
+
+  addBuilding(zt, seg, u, side, cols, rows, level = 1, kind = null) {
+    const geo = this.lotGeom(seg, u, side, cols, rows);
+    const zone = ZONE_TYPES[zt].zone;
     const b = {
-      id: this.nextId++, zone, seg: seg.id, u, side, level, ...geo,
+      id: this.nextId++, built: true, zone, zt, kind: kind || this.pickKind(zt, cols, rows), seg: seg.id, u, side, level, ...geo,
       happy: 0.7, workOK: 0.8, shopOK: 0.8, timeScore: 0.8, pollution: 0, noise: 0,
       workSat: 0.7, goodsSat: 1, custSat: 0.6, matSat: 1, stock: zone === 'R' ? 0 : 8, custLevel: 0, present: 0,
       // 起始累計量隨機，讓各棟建築的出發時間錯開
@@ -81,21 +142,41 @@ export class City {
     };
     this.buildings.push(b);
     this.byId.set(b.id, b);
-    this.game.terrain.clearTreesCircle(geo.x, geo.y, Math.max(geo.w, geo.d) * 0.75);
+    this.game.terrain.clearTreesCircle(geo.x, geo.y, geo.rad * 0.8);
     return b;
   }
 
-  removeBuilding(b) {
+  // keepZone：建築消失但分區保留（例如廢棄後拆除），之後可再發展
+  removeBuilding(b, keepZone = false) {
     if (b.dead) return;
     b.dead = true;
     this.buildings = this.buildings.filter(x => x !== b);
     this.byId.delete(b.id);
+    if (keepZone) {
+      const seg = this.game.net.segs.get(b.seg);
+      if (seg) this.addLot(b.zt, seg, b.u, b.side, b.cols, b.rows);
+    }
+  }
+
+  // 新道路經過的空地塊直接取消分區
+  onRoadBuilt(segs) {
+    for (const s of segs) {
+      if (s.drawLevel !== 0) continue;
+      const hw = halfWidth(s.T) + 0.5;
+      for (const l of [...this.lots]) {
+        if (!bboxOverlap(polyBBox(l.corners, hw), s.bbox)) continue;
+        for (let t = 0; t <= s.len; t += 3) {
+          const p = pointAt(s.pts, s.cum, t);
+          if (pointInPoly(p, l.corners) || [0, 1, 2, 3].some(i => distToSeg(p, l.corners[i], l.corners[(i + 1) % 4]) < hw)) { this.removeLot(l); break; }
+        }
+      }
+    }
   }
 
   buildingsNear(x, y, r) {
     const res = [], p = { x, y };
     for (const b of this.buildings) {
-      if (Math.abs(b.x - x) > r + 30 || Math.abs(b.y - y) > r + 30) continue;
+      if (Math.abs(b.x - x) > r + b.rad || Math.abs(b.y - y) > r + b.rad) continue;
       if (pointInPoly(p, b.corners)) { res.push(b); continue; }
       for (let i = 0; i < 4; i++) if (distToSeg(p, b.corners[i], b.corners[(i + 1) % 4]) < r) { res.push(b); break; }
     }
@@ -108,25 +189,30 @@ export class City {
     return null;
   }
 
-  cap(b) { return ZONES[b.zone].cap[b.level]; }
+  // 容量（住戶或工作）依地塊格數、密度與等級；商業 / 工業再乘上種類倍率
+  cap(b) {
+    const k = b.zone === 'C' ? SHOP_KINDS[b.kind]?.jobs : b.zone === 'I' ? INDUSTRY_KINDS[b.kind]?.jobs : 1;
+    return Math.max(2, Math.round(b.cols * b.rows * ZONE_TYPES[b.zt].per[b.level - 1] * (k || 1)));
+  }
 
   // ---------- 道路變更通知 ----------
   onSegmentSplit(old, s1, s2, u) {
-    for (const b of this.buildings) {
+    for (const b of [...this.buildings, ...this.lots]) {
       if (b.seg !== old.id) continue;
       if (b.u < u) b.seg = s1.id; else { b.seg = s2.id; b.u -= u; }
     }
   }
   onSegmentReplaced(old, ns, reverse, T) {
-    for (const b of [...this.buildings]) {
+    for (const b of [...this.buildings, ...this.lots]) {
       if (b.seg !== old.id) continue;
-      if (!T.access) { this.removeBuilding(b); continue; }
+      if (!T.access) { if (b.built) this.removeBuilding(b); else this.removeLot(b); continue; }
       b.seg = ns.id;
       if (reverse) { b.u = old.len - b.u; b.side = -b.side; }
     }
   }
   onSegmentRemoved(seg) {
     for (const b of [...this.buildings]) if (b.seg === seg.id) this.removeBuilding(b);
+    this.lots = this.lots.filter(l => l.seg !== seg.id);
   }
   afterRebuild() {
     const net = this.game.net;
@@ -138,6 +224,7 @@ export class City {
       o.u = s.a === n.id ? 3 : s.len - 3;
     }
     for (const b of [...this.buildings]) if (!net.segs.has(b.seg)) this.removeBuilding(b);
+    this.lots = this.lots.filter(l => net.segs.has(l.seg));
   }
 
   addOutside(node, name) {
@@ -163,7 +250,7 @@ export class City {
       x => this.cap(x) * this.near(b, x, 700) * (x.present < this.cap(x) * 0.5 ? 1.5 : 0.4));
   }
   pickShop(b) {
-    return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * this.near(b, x, 450));
+    return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * (SHOP_KINDS[x.kind]?.shop || 1) * this.near(b, x, x.kind === 'bigbox' || x.kind === 'mall' ? 900 : 450));
   }
   pickGoodsDest(b) {
     return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * (x.stock < 10 ? 2 : 0.4) * this.near(b, x, 1000));
@@ -285,7 +372,7 @@ export class City {
         }
       }
       if (b.zone === 'I') {
-        b.acc.goods += cap / 5 * pFreight * k * (0.3 + 0.7 * b.workSat);
+        b.acc.goods += cap / 5 * (INDUSTRY_KINDS[b.kind]?.goods || 1) * pFreight * k * (0.3 + 0.7 * b.workSat);
         while (b.acc.goods >= 1) {
           b.acc.goods -= 1;
           if (b.stock < 1) continue;
@@ -327,7 +414,10 @@ export class City {
     this.hourT += dt;
     if (this.hourT >= 60) { this.hourT -= 60; this.hourly(); }
     this.growT += dt;
-    if (this.growT >= 30) { this.growT = 0; if (g.autoGrow && (this.jam || 0) < 0.35) this.autoGrow(); }
+    if (this.growT >= 30) {
+      this.growT = 0;
+      if ((this.jam || 0) < 0.35) { this.developLots(); if (g.autoGrow) this.autoGrow(); }
+    }
   }
 
   spawnFrom(list, dt, cd) {
@@ -363,8 +453,8 @@ export class City {
       if (b.zone === 'R') {
         let pol = 0;
         for (const i of inds) {
-          const d = Math.hypot(i.x - b.x, i.y - b.y);
-          if (d < 220) pol += (1 - d / 220) * 0.35 * i.level;
+          const d = Math.max(0, Math.hypot(i.x - b.x, i.y - b.y) - i.rad * 0.7);
+          if (d < 220) pol += (1 - d / 220) * 0.35 * i.level * (INDUSTRY_KINDS[i.kind]?.pol ?? 1) * Math.min(2, Math.sqrt(i.cols * i.rows) / 6);
         }
         b.pollution = clamp(pol, 0, 1);
         let nz = 0;
@@ -394,7 +484,7 @@ export class City {
       }
       if (b.abandoned) {
         b.abT += 1;
-        if (b.abT > 24) this.removeBuilding(b);
+        if (b.abT > 24) this.removeBuilding(b, true);
         continue;
       }
       if (b.happy > 0.68 && b.level < 3 && this.demand[b.zone] > -0.2) {
@@ -481,9 +571,24 @@ export class City {
     return this._comp;
   }
 
+  // 已劃設的空地塊依需求發展成建築（不論是否開啟自動發展）
+  developLots() {
+    const g = this.game, net = g.net, rng = g.rng, comp = this.mainComponent();
+    for (const z of ['R', 'C', 'I']) {
+      const d = this.demand[z];
+      if (d <= 0.05) continue;
+      const cand = this.lots.filter(l => l.zone === z && net.segs.has(l.seg) && comp.has(net.segs.get(l.seg).a));
+      let n = d > 0.6 ? 3 : d > 0.3 ? 2 : 1;
+      while (n-- > 0 && cand.length) this.develop(cand.splice(rng.int(0, cand.length - 1), 1)[0]);
+    }
+    this.recount();
+  }
+
+  // 自動發展：需求高而且沒有空地塊時，自動在路旁劃設大小不一的分區
   autoGrow() {
     const g = this.game, net = g.net, rng = g.rng;
-    const zones = ['R', 'C', 'I'].filter(z => this.demand[z] > 0.12).sort((a, b) => this.demand[b] - this.demand[a]);
+    const zones = ['R', 'C', 'I'].filter(z => this.demand[z] > 0.12 && this.lots.filter(l => l.zone === z).length < 2)
+      .sort((a, b) => this.demand[b] - this.demand[a]);
     if (!zones.length) return;
     const comp = this.mainComponent();
     const segs = [...net.segs.values()].filter(s => s.T.access && s.drawLevel === 0 && net.nodes.get(s.a).level === 0 && net.nodes.get(s.b).level === 0 && s.len > 30 && comp.has(s.a));
@@ -498,28 +603,43 @@ export class City {
           const near = segs.filter(s => Math.abs((s.bbox.x0 + s.bbox.x1) / 2 - nb.x) < 260 && Math.abs((s.bbox.y0 + s.bbox.y1) / 2 - nb.y) < 260);
           seg = near.length ? rng.pick(near) : rng.pick(segs);
         } else seg = rng.pick(segs);
-        const Z = ZONES[zone];
-        const lo = seg.ra + Z.w / 2 + 1, hi = seg.len - seg.rb - Z.w / 2 - 1;
+        const { zt, cols, rows } = this.autoLotSize(zone, seg);
+        const lo = seg.ra + cols * CELL / 2, hi = seg.len - seg.rb - cols * CELL / 2;
         if (hi <= lo) continue;
-        const u = lo + rng.next() * (hi - lo);
+        // 對齊路段上的格線
+        const u = seg.ra + cols * CELL / 2 + Math.floor(rng.next() * (hi - lo) / CELL) * CELL;
         const side = rng.chance(0.5) ? 1 : -1;
-        if (this.canPlace(zone, seg, u, side)) continue;
-        const geo = this.lotGeom(zone, seg, u, side);
-        if (zone === 'R' && this.buildings.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 160)) continue;
-        if (zone === 'I' && this.buildings.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110)) continue;
-        if (seg.T.rank >= 2 && zone === 'R' && rng.chance(0.5)) continue;
-        this.addBuilding(zone, seg, u, side);
+        let r = rows;
+        while (r >= 2 && this.canPlaceLot(seg, u, side, cols, r)) r--;
+        if (r < 2) continue;
+        const geo = this.lotGeom(seg, u, side, cols, r);
+        if (zone === 'R' && this.buildings.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 160 + b.rad)) continue;
+        if (zone === 'I' && this.buildings.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110 + geo.rad)) continue;
+        if (seg.T.rank >= 2 && zone === 'R' && zt === 'R1' && rng.chance(0.5)) continue;
+        this.addLot(zt, seg, u, side, cols, r);
         placed++;
       }
     }
-    this.recount();
+  }
+
+  // 自動劃設的地塊大小：城市越大，住宅密度越高、偶爾出現大型商場
+  autoLotSize(zone, seg) {
+    const rng = this.game.rng, pop = this.pop;
+    const R = (a, b) => rng.int(a, b);
+    if (zone === 'R') {
+      const zt = pop > 2500 && seg.T.rank >= 2 && rng.chance(0.35) ? 'R3' : pop > 900 && rng.chance(0.45) ? 'R2' : 'R1';
+      return zt === 'R3' ? { zt, cols: R(4, 8), rows: R(4, 7) } : { zt, cols: R(3, 6), rows: R(3, 5) };
+    }
+    if (zone === 'C') return pop > 1800 && rng.chance(0.12) ? { zt: 'C', cols: R(15, 18), rows: 15 } : { zt: 'C', cols: R(3, 7), rows: R(3, 5) };
+    return { zt: 'I', cols: R(5, 10), rows: R(5, 9) };
   }
 
   // ---------- 序列化 ----------
   serialize() {
     return {
       nextId: this.nextId,
-      buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned })),
+      buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, zt: b.zt, kind: b.kind, cols: b.cols, rows: b.rows, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned })),
+      lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
       demand: this.demand, stats: this.stats, history: this.history,
     };
@@ -530,8 +650,15 @@ export class City {
     for (const s of d.buildings) {
       const seg = net.segs.get(s.seg);
       if (!seg) continue;
-      const b = this.addBuilding(s.zone, seg, s.u, s.side, s.level);
+      // 舊存檔沒有格數：依舊版固定尺寸換算
+      const zt = s.zt || (s.zone === 'R' ? 'R1' : s.zone);
+      const old = { R: [3, 3], C: [4, 4], I: [5, 5] }[s.zone];
+      const b = this.addBuilding(zt, seg, s.u, s.side, s.cols || old[0], s.rows || old[1], s.level, s.kind);
       b.happy = s.happy; b.stock = s.stock; b.abandoned = s.abandoned;
+    }
+    for (const l of d.lots || []) {
+      const seg = net.segs.get(l.seg);
+      if (seg) this.addLot(l.zt, seg, l.u, l.side, l.cols, l.rows);
     }
     this.nextId = Math.max(this.nextId, d.nextId);
     Object.assign(this.demand, d.demand);

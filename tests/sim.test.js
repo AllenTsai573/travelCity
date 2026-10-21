@@ -111,6 +111,49 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   assert(slow === 0, '苜蓿葉交流道沒有異常繞路');
 }
 
+// 分區格子：一次拖曳依最大地塊切塊、深度上限、免費、有需求才發展、15×15 以上的商業可出現大型量販店、存讀檔
+{
+  // 找一段遠離市區、不跨水域的空地鋪一條直路（兩側各留 200 m 空間）
+  let gz, net, c, S, y = 0, x0 = 0, p = null, seed = 0;
+  const dry = (g, xx, yy) => { for (let x = xx; x <= xx + 800; x += 20) for (let d = -200; d <= 200; d += 20) if (g.terrain.isWater(x, yy + d)) return false; return true; };
+  for (seed = 1; seed < 30 && !p; seed++) {
+    gz = makeGame(seed, 'temperate', 'normal'); gz.autoGrow = false;
+    net = gz.net; c = gz.city; S = gz.terrain.size / 2;
+    for (const yy of [S + 500, S - 500, S + 800, S - 800]) for (const xx of [S - 1000, S - 400, S + 200]) {
+      if (p || !dry(gz, xx, yy)) continue;
+      const q = net.planRoad({ x: xx, y: yy }, { x: xx + 800, y: yy }, null, 'avenue', 0);
+      if (q.ok && !q.crossings.length) { p = q; y = yy; x0 = xx; }
+    }
+  }
+  net.executeRoad(p); net.rebuild();
+  const seg = [...net.segs.values()].find(s => s.type === 'avenue' && Math.abs(s.pts[0].y - y) < 1 && s.len > 600);
+  const money = gz.money;
+  const r1 = c.planStroke('R1', seg, 1, seg.ra, seg.ra + 30 * 6, 20);
+  assert(r1.length === 3 && r1.every(l => l.cols === 10 && l.rows <= 12), `低密度住宅：30 格切成 3 塊 10 格、深度不超過 12（${r1.map(l => l.cols + '×' + l.rows).join(' ')}）`);
+  const r3 = c.planStroke('R3', seg, 1, seg.ra, seg.ra + 30 * 6, 30);
+  assert(r3.length === 2 && r3.every(l => l.rows <= 24), `高密度住宅：最大 24×24（${r3.map(l => l.cols + '×' + l.rows).join(' ')}）`);
+  for (const l of c.planStroke('C', seg, -1, seg.ra, seg.ra + 18 * 6, 16)) if (l.ok) c.addLot(l.zt, seg, l.u, l.side, l.cols, l.rows);
+  for (const l of r1) if (l.ok) c.addLot(l.zt, seg, l.u, l.side, l.cols, l.rows);
+  assert(gz.money === money, '劃設分區不用錢');
+  assert(c.lots.length === 4, `空地塊（${c.lots.length}）`);
+  const big = c.lots.find(l => l.zone === 'C');
+  assert(big.cols === 18 && big.rows === 16 && c.pickKind('C', 18, 16) !== 'shops', '15×15 以上的商業區可出現大型店');
+  assert(['shops', 'market'].includes(c.pickKind('C', 14, 20)), '小於 15×15 的商業區不會出現大型店');
+  const ik = new Set(); for (let i = 0; i < 40; i++) ik.add(c.pickKind('I', 20, 20));
+  assert(ik.size >= 3, `工業區功能隨機（${[...ik].join('、')}）`);
+  const dz = JSON.parse(JSON.stringify({ net: net.serialize(), city: c.serialize() }));
+  const g3 = makeGame(seed - 1, 'temperate', 'normal', false);
+  g3.net.load(dz.net); g3.city.load(dz.city);
+  assert(g3.city.lots.length === c.lots.length, '存讀檔：分區地塊');
+  c.demand.R = 0.8; c.demand.C = 0.8;
+  const before = c.buildings.length;
+  c._comp = new Set(net.nodes.keys()); c._compVer = net.version;
+  c.developLots();
+  assert(c.buildings.length > before && c.lots.length < 4, `有需求時空地塊會發展成建築（${c.buildings.length - before} 棟）`);
+  const hb = c.buildings.find(b => b.zt === 'R1' && b.cols === 10 && b.rows === 12);
+  assert(!hb || c.cap(hb) >= 20, `10×12 低密度住宅的住戶數（${hb && c.cap(hb)}）`);
+}
+
 for (const b of ['desert', 'snow', 'tropical']) {
   const gb = makeGame(777, b, 'normal');
   assert(gb.net.segs.size > 3 && gb.city.buildings.length > 3, `生態系 ${b}（${gb.city.outside.length} 個外部連線）`);

@@ -81,4 +81,29 @@ export const ZONES = {
   I: { name: '工業', w: 30, d: 30, cap: [0, 8, 18, 32], color: ['#e0b24f', '#cf9a35', '#b5801f'], roof: ['#b8b2a6', '#a39c90', '#8c857a'] },
 };
 
+// 分區格子：每格 6 m × 6 m，沿道路排列；玩家一次拖曳的範圍會依各分區的最大地塊切成數塊
+export const CELL = 6;
+export const ZONE_TYPES = {
+  R1: { zone: 'R', name: '低密度住宅', short: '低密度', max: 12, per: [0.3, 0.45, 0.6] },
+  R2: { zone: 'R', name: '中密度住宅', short: '中密度', max: 12, per: [0.55, 0.8, 1.05] },
+  R3: { zone: 'R', name: '高密度住宅', short: '高密度', max: 24, per: [0.75, 1.1, 1.5] },
+  C:  { zone: 'C', name: '商業區', short: '商業', max: 30, per: [0.22, 0.38, 0.55] },
+  I:  { zone: 'I', name: '工業區', short: '工業', max: 32, per: [0.16, 0.26, 0.38] },
+};
+export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I'];
+// 商業：15×15 格以上才有機會出現大型量販店 / 購物中心；工業的功能隨機
+export const SHOP_KINDS = {
+  shops:  { name: '商店街', jobs: 1, shop: 1 },
+  market: { name: '超級市場', jobs: 0.9, shop: 1.3 },
+  bigbox: { name: '大型量販店', jobs: 0.8, shop: 2.2, minCells: 15 },
+  mall:   { name: '購物中心', jobs: 1.2, shop: 1.8, minCells: 15 },
+};
+export const INDUSTRY_KINDS = {
+  factory:   { name: '製造工廠', jobs: 1, goods: 1, pol: 1 },
+  logistics: { name: '物流倉儲', jobs: 0.7, goods: 1.6, pol: 0.5 },
+  food:      { name: '食品加工', jobs: 1.1, goods: 0.9, pol: 0.6 },
+  chemical:  { name: '化工廠', jobs: 0.8, goods: 1.2, pol: 1.8 },
+  tech:      { name: '科技園區', jobs: 1.4, goods: 0.6, pol: 0.3 },
+};
+
 export const VEHICLE_COLORS = ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7d3c98', '#d35400', '#5d6d7e', '#ecf0f1', '#a93226'];

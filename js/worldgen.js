@@ -1,5 +1,6 @@
 // 初始世界：外部連線（地圖邊緣）與市中心的小聚落
 import { RNG } from './util.js';
+import { CELL } from './config.js';
 
 export function snapAt(net, p) {
   const n = net.nodeNear(p.x, p.y, 3);
@@ -60,24 +61,29 @@ export function generateWorld(g) {
   // 初始建築
   const city = g.city;
   const segs = () => [...net.segs.values()].filter(s => s.T.access && s.drawLevel === 0 && s.len > 30 && Math.hypot((s.bbox.x0 + s.bbox.x1) / 2 - c, (s.bbox.y0 + s.bbox.y1) / 2 - c) < 400);
-  const place = (zone, count) => {
+  const place = (zt, count, size) => {
     let n = 0;
-    for (let tries = 0; tries < 300 && n < count; tries++) {
+    for (let tries = 0; tries < 900 && n < count; tries++) {
       const list = segs();
       if (!list.length) return;
       const s = rng.pick(list);
-      const uu = rng.range(0, s.len), side = rng.chance(0.5) ? 1 : -1;
-      if (city.canPlace(zone, s, uu, side)) continue;
-      const geo = city.lotGeom(zone, s, uu, side);
-      if (zone === 'I' && city.buildings.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110)) continue;
-      if (zone === 'R' && city.buildings.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 140)) continue;
-      city.addBuilding(zone, s, uu, side);
+      const { cols, rows } = size();
+      const lo = s.ra + cols * CELL / 2, hi = s.len - s.rb - cols * CELL / 2;
+      if (hi <= lo) continue;
+      const uu = lo + Math.floor(rng.next() * (hi - lo) / CELL) * CELL, side = rng.chance(0.5) ? 1 : -1;
+      if (city.canPlaceLot(s, uu, side, cols, rows)) continue;
+      const geo = city.lotGeom(s, uu, side, cols, rows);
+      // 工業放在小鎮外圍，住宅與工業保持距離
+      if (zt === 'I' && Math.hypot(geo.x - c, geo.y - c) < 190) continue;
+      if (zt === 'I' && city.buildings.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110 + geo.rad)) continue;
+      if (zt !== 'I' && zt !== 'C' && city.buildings.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 90 + b.rad)) continue;
+      city.develop(city.addLot(zt, s, uu, side, cols, rows));
       n++;
     }
   };
-  place('I', 2);
-  place('C', 4);
-  place('R', 22);
+  place('I', 2, () => ({ cols: rng.int(6, 8), rows: rng.int(5, 7) }));
+  place('C', 4, () => ({ cols: rng.int(3, 5), rows: rng.int(3, 4) }));
+  place('R1', 20, () => ({ cols: rng.int(2, 3) * 2, rows: 4 }));
   city.recount();
   g.money = savedMoney;
 }

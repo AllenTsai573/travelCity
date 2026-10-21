@@ -47,7 +47,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 | `routing.js` | 以有向路段為節點的 Dijkstra，成本為即時壅塞下的行駛時間。`findRoute(net, starts, dest, allow)`：設有閘門（`seg.gate = 建築 id`）的場內道路只讓 `allow` 名單內（起訖建築）的車通過 |
 | `traffic.js` | 車輛代理人：IDM 跟車、MOBIL 式換道（必須換道時請目標車道後車禮讓：`v.yieldTo`）、路口通行判斷（交叉車輛用時間窗 `crossBlocks` / `tReach`）、重新選路；停車（見下方「停車系統」）；`fx` 為停車 / 出車動畫清單 |
 | `city.js` | 地塊與建築、行程產生、滿意度、需求、成長（`developLots`、`autoGrow`）、財務、場內道路（`driveway`、`buildParkRoads`、`connectPark`、閘門）、停車位（`slotsOf`、`slotOcc`、`slotRes`）、存讀檔 |
-| `lotart.js` | 地塊上的建築圖形（歐洲風格；純函式 `lotArt(b)` → `{ base, items, slots }`，以地塊區域座標 u/v 產生），city 與 render 都會用；停車位順序（`it.rank`）兩邊一致。rect 的 `roof`（gable / hip / mansard / saw，沒有就是平屋頂）、`ridge`、`wall`、`win`、`shop`、`chimney`、`solar`、`sky` 由 `render.js` 的 `pitchedRoof` / `sawRoof` / `wallWindows` 畫出；`deco`（樹籬、陽傘）不算建物 |
+| `lotart.js` | 地塊上的建築圖形（日式風格，車輛仍靠右行駛；純函式 `lotArt(b)` → `{ base, items, slots }`，以地塊區域座標 u/v 產生），city 與 render 都會用；停車位順序（`it.rank`）兩邊一致。rect 的 `roof`（gable / hip / mansard / saw，沒有就是平屋頂）、`ridge`、`wall`、`win`、`shop`、`chimney`、`solar`、`sky`、`balc`（每層陽台 / 外走廊）由 `render.js` 的 `pitchedRoof`（屋簷外伸 0.5 m、坡度較緩）/ `sawRoof` / `wallWindows` 畫出；`{ t: 'sign', vert: true, host }` 為商店街的直立看板（依 host 建物排序前後）；`deco`（樹籬、水泥磚圍牆）不算建物 |
 | `render.js` | Canvas 2D：可旋轉視角（`cam.rot`；`worldTf` / `localTf`、`toWorld` / `toScreen` / `screenDelta` 都含旋轉；高度一律用 `lift(p, h)` 沿畫面上方抬高、`depth(p)` 決定前後順序、`so()` 沿畫面方向位移，不要再寫 `p.y - H`）。繪製順序：`drawBuildings(v, 'ground')` 地塊鋪面與停著的車 → 地面 / 地下道路與車 → `drawBuildings(v, 'tall')` 建物立體部分 → 高架道路（道路不會蓋到建物）。建築（斜投影立體：牆面、斜屋頂、陰影從底部投射、樹）、多層道路（路面切成高度段、路肩漸層、標線、路口幾何 `jointGeom`）、車輛（`carBody`）、停車動畫 `drawArrivals`、閘門、號誌、熱圖、路口編輯器 |
 | `interchange.js` | 16 種交流道模板（`TEMPLATES`、`TEMPLATE_ORDER`）：以「主線沿 +x、橫交道路沿 y」的區域座標設計（靠右行駛），`Path` 烏龜式路徑、`fitCornerRamp` 自動貼合外側匝道、高度剖面 `prof`；先在複製路網試建再正式建造；整組價格 `interchangePrice()` 介於 $45,000～$60,000 |
 | `thumbs.js` | 工具列縮圖 SVG（道路斷面含行車方向、圓環、交流道平面） |
@@ -62,7 +62,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 - **座標**：世界座標公尺，y 向下。靠右行駛：沿 +x 行駛的車在 +y 側。
 - **路段方向**：每條路段有 `links[1]`（a→b）與 `links[-1]`（b→a）；`laneOffset` 正值為行進方向右側。
 - **地塊幾何**（`city.lotGeom`）：沿路段 `seg` 在 `u`、`side` 側，寬 `cols` 格、深 `rows` 格。`corners[0]` 臨路左、`[1]` 臨路右、`[2]` 後方右、`[3]` 後方左；`tx,ty` 沿路方向，`nx,ny` 往地塊內。地塊外緣距道路中心線 `halfWidth + 1.5`（1.5 m 人行道）。
-- **分區**：每格 6 m；一次拖曳的範圍依該分區最大地塊（低/中密度 12、高密度 24、商業 30、工業 32 格）平均切塊；最小 2×2；劃設免費；空地塊在需求 > 0.05 時才發展。
+- **分區**：每格 6 m；一次拖曳的範圍依該分區最大地塊（低密度 12、中密度 18、高密度 24、商業 30、工業 32 格）平均切塊；最小 2×2；劃設免費；空地塊在需求 > 0.05 時才發展。
 - **建築種類**：商業依大小隨機（商店街、超市、加油站、停車場、辦公大樓、飯店；15×15 格以上可能是量販店、購物中心）；工業隨機（製造、物流、食品、化工、科技），各有不同工作數、貨運量、污染。
 - **場內道路**（`ROAD_TYPES.service`，`internal: true`）：工業園區（≥ 8 格寬）、附停車場的商業、住宅巷道（低密度 ≥ 6×6、中密度 ≥ 6×6、高密度 ≥ 8 格寬 × 7 格深；盡頭不畫迴車圓）自動開路；不畫路肩與標線、顏色與停車場相同。**一律 `seg.gate = 建築 id`**（`city.markGate`）：尋路時只有起訖是該建築的車能走，不會被當成迴轉道或捷徑。地塊後方或側邊緊鄰其他道路時打通，對外出入口畫柵欄（`b.gates`）。之後新增的鄰近道路會在下一步（`city.update` 的 `_newRoads`）自動接上。
 - **停車系統**：每個車位記錄停著的車顏色（`b.slotOcc[i]`）與預約（`b.slotRes[i]`）。車位接到哪條道路由 `city.slotRoad(b, i)` 決定：建築自己的場內道路＋地塊附近的一般地面道路中，最近、車頭方向對齊、而且直直開過去不穿過建物牆面（`b._slots.walls`）的那條。出發：最多試 4 輛停著的車（`pickParked(b, 4)`），從車位開出到路邊（車輛 `hold` 等動畫結束）；沒有停著的車才從建物入口開出。抵達：出發時預約空車位，目的地是 `traffic.destOf(v)`（= `slotRoad`），到了沿貝茲曲線開進車位；沒有空位就開進建物（淡出）。住宅全部是室外車位；只有辦公大樓 / 飯店有 `indoor` 地下停車場。等待出發的行程上限依建築容量（大飯店可排比較長）。
@@ -98,8 +98,10 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 4. 分區格子（6 m）、低 / 中 / 高密度住宅、商業與工業種類、建築立體圖形、停車場與停車格、場內道路與閘門
 5. 停車系統（車位逐格記錄、停車 / 出車動畫；住宅全室外停車，各類建築都有停車位，車位接車頭前方的道路）
 6. 3.6 km 地圖、開局小鎮接上高速公路、時間加快 3 倍、地表高解析度
-7. 歐洲風格建築（雙坡 / 四坡 / 折線 / 鋸齒屋頂、窗、店面）、可旋轉視角（Q / E、中鍵拖曳）
+7. 可旋轉視角（Q / E、中鍵拖曳）；建築原為歐洲風格，之後改為日式（見第 10 項）
 8. 公車總站與自動規劃的公車路線、55° 視角、摩天大樓、斑馬線、需求門檻、空白地圖開局、更大的開局小鎮、工業遠離住宅、鋪路垂直吸附
+9. 路口交叉車輛的時間窗判斷、換道禮讓、商業顧客依份額計算（含走路顧客）、公車轉乘與站牌固定
+10. 日式建築：透天、アパート / 公寓大樓（陽台）、團地與塔式住宅、商店街直立看板、便利商店、櫻花；中密度最大 18×18
 
 ## 已知問題 / 可以繼續的方向
 

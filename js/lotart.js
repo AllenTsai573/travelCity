@@ -1,4 +1,4 @@
-// 地塊上的建築圖形（歐洲風格；以地塊區域座標 u：沿路方向 0~w、v：離路方向 0~d 產生，渲染時再轉成世界座標）
+// 地塊上的建築圖形（日式風格；以地塊區域座標 u：沿路方向 0~w、v：離路方向 0~d 產生，渲染時再轉成世界座標）
 import { CELL } from './config.js';
 
 function rng(seed) {
@@ -8,15 +8,19 @@ function rng(seed) {
 const pick = (r, a) => a[Math.floor(r() * a.length)];
 const shadeHex = (hex, f) => '#' + [1, 3, 5].map(i => Math.round(Math.min(255, parseInt(hex.slice(i, i + 2), 16) * f)).toString(16).padStart(2, '0')).join('');
 const CARS = ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d'];
-// 紅陶瓦、石板瓦（巴黎式折線屋頂）、灰泥牆、粉彩與鮮豔立面（北歐港口 / 義大利漁村）、紅磚
-const TILE = ['#b5523b', '#c0643f', '#a9472f', '#9c4a36', '#c97a52', '#b86a4b', '#a65a3e', '#8a4a38', '#d08a5a', '#7c5a48'];
-const SLATE = ['#6a737d', '#78808a', '#646b74', '#7f868f', '#5a6068', '#6f9a8d'];
-const STUCCO = ['#f1e6d2', '#ecdcc0', '#e8d3b0', '#f4efe6', '#e5c9a8', '#efe0c9', '#e3d6c6', '#e9e4da', '#f3ead8', '#dccbb4'];
-const PASTEL = ['#e8cfb8', '#d9c7a0', '#cfd8cf', '#e6d2c8', '#d6dbe0', '#ecd9a8', '#e0c2b0', '#f0e2c4', '#bcd4e6', '#a9c9a4', '#e9b8a8', '#d8c6e0'];
-const BOLD = ['#e0a040', '#c8553d', '#4f7cac', '#7aa874', '#d98fa0', '#f2d06b', '#9b8bb4', '#e8a86b', '#5f9ea0', '#b5654a', '#f0c27a', '#8fb8c9'];
-const BRICK = ['#a8573f', '#9a5a46', '#b0644a', '#8e4f3c', '#b87358'];
+// 日式：黑灰 / 銀灰的日本瓦、藍灰釉瓦、褐色瓦；彩色鋼板屋頂；白、米、淺灰的外牆（窯業系外牆板）、木色與深色的現代住宅；
+// 公寓 / 大樓的磁磚外牆
+const KAWARA = ['#4a4f57', '#3f444c', '#565c64', '#5d636b', '#4c5d73', '#465566', '#6a5446', '#7a5a44', '#505860', '#62686f'];
+const METAL = ['#6f7a83', '#5e7a62', '#8a4b3a', '#3f6a8a', '#7d8a8f', '#9a4f3e', '#4f5a62', '#6b5a4a'];
+const JWALL = ['#f2efe8', '#ebe6db', '#e2ddd2', '#f5f2ec', '#e8e0d0', '#d9d4ca', '#ece4d6', '#cfc9be', '#e6dccb', '#f0ebe0', '#ddd6c8', '#e9e2d2'];
+const JWOOD = ['#8a6a4a', '#7a5c40', '#9c7a56', '#6e5440'];
+const JDARK = ['#4f4c48', '#5a5752', '#45484c', '#6b6862'];
+const TILEWALL = ['#f1ede4', '#e7e1d4', '#d9d3c6', '#e9dfd0', '#cfc8bb', '#e3d6c3', '#c9c4bb', '#d8cdbd', '#bfb5a6', '#e0dcd5'];
+const METALWALL = ['#c9d0d6', '#b8c4cc', '#d6d3cc', '#a9b6c0', '#d2d6d0', '#bcc6c2'];
 const AWN = ['#8c2f2f', '#2f5d3a', '#24476b', '#b5823a', '#5a3d6b', '#3d6b6b', '#c0392b', '#e0b040'];
-const UMB = ['#f2efe6', '#c0392b', '#2f5d3a', '#e8c547', '#24476b'];
+// 商店街的直立看板（文字為一般店種）
+const KANBAN = [['#c0392b', '#fff'], ['#f4f1e8', '#b03a2e'], ['#f2c230', '#2b2b2b'], ['#24476b', '#fff'], ['#2f5d3a', '#fff'], ['#1f1f1f', '#f2c230']];
+const KANJI = ['ラーメン', '居酒屋', '薬局', '書店', '喫茶', '寿司', '花屋', 'そば', '酒', '本', '洋品店', '焼肉', '歯科', '不動産', '珈琲', '定食'];
 const BOX = ['#b5523b', '#2e6fb7', '#1e8449', '#d8a13a', '#8e9aa6', '#7d3c98', '#c0392b'];
 
 // 大型停車場除了中央主車道以外的其他車道位置（每 19 m 一條；每條車道兩側各一排停車格），city.driveway 依此開出真的場內道路
@@ -42,13 +46,16 @@ export function lotParkArea(kind, w, d) {
 export function lotArt(b) {
   const r = rng(b.id * 97 + b.cols * 13 + b.rows), w = b.cols * CELL, d = b.rows * CELL, lv = b.level, items = [];
   const rect = (u0, v0, u1, v1, c, h = 0, extra = {}) => items.push({ t: 'rect', u0, v0, u1, v1, c, h, ...extra });
-  const tree = (u, v, s = 1) => items.push({ t: 'circle', u, v, r: (2 + r() * 1.4) * s, c: pick(r, ['#4f8a3c', '#5d9a47', '#467d36', '#3f7a35', '#6a9a4a']), h: 4 + r() * 3, tree: true });
+  // 樹：一成是櫻花，其餘是較深的綠（松、樟等常綠樹）
+  const tree = (u, v, s = 1) => items.push({ t: 'circle', u, v, r: (2 + r() * 1.4) * s, c: r() < 0.1 ? pick(r, ['#f2b8c8', '#efc3d0', '#f4cad6']) : pick(r, ['#3f7a3a', '#4f8a3c', '#35683a', '#2f5d3a', '#5d8f47']), h: 4 + r() * 3, tree: true });
   const hedge = (u0, v0, u1, v1) => { if (u1 - u0 > 0.8 && v1 - v0 > 0.4) rect(u0, v0, u1, v1, '#4c7a39', 1.3, { wall: '#43703a', deco: true }); };
+  // 水泥磚圍牆（日本住宅常見的低牆）
+  const blockWall = (u0, v0, u1, v1) => { if (u1 - u0 > 0.8 || v1 - v0 > 0.8) rect(u0, v0, u1, v1, '#c3bfb5', 1.4, { wall: '#b9b5ab', deco: true }); };
   const road = (pts, wd = 5) => items.push({ t: 'line', pts, c: '#5b5f64', w: wd });
   const line = (pts, c, wd, dash) => items.push({ t: 'line', pts, c, w: wd, dash });
   const car = (u0, v0, du, dv, extra = {}) => items.push({ t: 'rect', u0, v0, du, dv, c: pick(r, CARS), h: 0.4, car: true, slot: r(), ...extra });
-  const tileOrSlate = (p = 0.8) => (r() < p ? pick(r, TILE) : pick(r, SLATE));
-  const facadeCol = () => { const x = r(); return pick(r, x < 0.35 ? STUCCO : x < 0.7 ? PASTEL : BOLD); };
+  const roofCol = (p = 0.7) => (r() < p ? pick(r, KAWARA) : pick(r, METAL));
+  const facadeCol = () => { const x = r(); return pick(r, x < 0.72 ? JWALL : x < 0.88 ? JWOOD : JDARK); };
   // 臨路的一排垂直停車格（直接從道路進出），u0~u1、深 5.6 m
   const frontBays = (u0, u1, v0 = 0.4) => {
     if (u1 - u0 < 3) return;
@@ -112,49 +119,42 @@ export function lotArt(b) {
     rect(u0 + 0.6, 5.5, u1 - 0.6, 9, '#2b2e33');
     for (let i = 0; i < n; i++) items.push({ t: 'rect', u0: u0 + 1.8, v0: 6, du: 1.8, dv: 3, c: pick(r, CARS), h: 0.4, car: true, slot: 0.5 + r() * 0.5, indoor: true });
   };
-  // 一排沿 axis 方向（u 或 v）排列的立面：每段 9~18 m，顏色、高度略有不同（歐洲街廓每棟都不一樣）
-  const facade = (axis, a0, a1, c0, c1, H0, mans, rc) => {
-    let a = a0;
-    while (a < a1 - 0.5) {
-      let L = Math.min(a1 - a, 9 + r() * 9);
-      if (a1 - a - L < 6) L = a1 - a;
-      if (L >= 3) {
-        const h = H0 + (r() - 0.5) * 4, roofC = r() < 0.8 ? rc : (mans ? pick(r, SLATE) : pick(r, TILE));
-        const ex = { roof: mans ? 'mansard' : 'gable', ridge: axis, wall: facadeCol(), win: true, chimney: !mans && r() < 0.5 ? 0.15 + r() * 0.7 : undefined };
-        if (axis === 'u') rect(a, c0, a + L, c1, roofC, h, ex); else rect(c0, a, c1, a + L, roofC, h, ex);
-      }
-      a += L;
-    }
-  };
-  // 周邊式街廓：建物沿範圍四周圍成一圈，中間是中庭花園；太小的就是一棟實心建物
-  const perimeterBlock = (U0, V0, U1, V1) => {
-    const W = U1 - U0, D = V1 - V0, wd = Math.min(12, Math.max(8, Math.min(W, D) * 0.3));
-    if (W < 3 || D < 3) return;
-    const mans = r() < 0.4, rc = mans ? pick(r, SLATE) : pick(r, TILE), H0 = 11 + lv * 3 + r() * 3;
-    if (Math.min(W, D) < wd * 2 + 6) { facade(W >= D ? 'u' : 'v', W >= D ? U0 : V0, W >= D ? U1 : V1, W >= D ? V0 : U0, W >= D ? V1 : U1, H0, mans, rc); return; }
-    facade('u', U0, U1, V0, V0 + wd, H0, mans, rc);
-    facade('u', U0, U1, V1 - wd, V1, H0, mans, rc);
-    facade('v', V0 + wd, V1 - wd, U0, U0 + wd, H0, mans, rc);
-    facade('v', V0 + wd, V1 - wd, U1 - wd, U1, H0, mans, rc);
-    rect(U0 + wd, V0 + wd, U1 - wd, V1 - wd, '#9fbf86');
-    const iw = W - wd * 2, id = D - wd * 2, n = Math.max(1, Math.round(iw * id / 120));
-    for (let i = 0; i < n; i++) tree(U0 + wd + 2.5 + r() * (iw - 5), V0 + wd + 2.5 + r() * (id - 5), 0.9);
-  };
   // 把 a~b 平均切成長度不超過 max 的幾段
   const split = (a, b, max = 48) => { const k = Math.max(1, Math.ceil((b - a) / max - 1e-6)), L = (b - a) / k, out = []; for (let i = 0; i < k; i++) out.push([a + L * i, a + L * (i + 1)]); return out; };
-  // 一排連棟住宅（u0~u1、v0~v1）：同一片屋頂（偶爾換色），每戶 5.5~7.5 m 寬、立面不同顏色；三成是山牆朝街的荷蘭式
-  // pads：每戶門前一個停車位（淺的地塊用）
-  const terrace = (u0, u1, v0, v1, pads = false) => {
-    const rc = tileOrSlate(0.85), dutch = r() < 0.3;
-    let u = u0;
-    while (u < u1 - 0.5) {
-      let uw = Math.min(u1 - u, 5.5 + r() * 2);
-      if (u1 - u - uw < 4) uw = u1 - u;
-      if (uw >= 3) {
-        rect(u, v0, u + uw, v1, r() < 0.8 ? rc : tileOrSlate(), 8 + lv * 2 + (r() - 0.5) * 1.5, { roof: 'gable', ridge: dutch ? 'v' : 'u', wall: facadeCol(), win: true, door: true, chimney: !dutch && r() < 0.3 ? r() : undefined });
-        if (pads && uw >= 3.2) { rect(u + uw / 2 - 1.4, 0.3, u + uw / 2 + 1.4, v0 - 0.4, '#bdb8ae'); car(u + uw / 2 - 0.95, 0.6, 1.9, Math.min(4.6, v0 - 1.2)); }
+  // 一棟日式集合住宅（u0~u1、v0~v1，長邊沿 u）：
+  // - アパート（木造 / 輕鋼構兩層公寓）：低斜度鋼板雙坡屋頂、外走廊
+  // - マンション（三～五層）：平屋頂、磁磚外牆、每層陽台
+  const apartment = (u0, u1, v0, v1, mansion) => {
+    if (mansion) rect(u0, v0, u1, v1, '#b9b6ae', 9 + lv * 2.5 + Math.floor(r() * 2) * 3, { wall: pick(r, TILEWALL), win: true, balc: true, door: true, units: 1 });
+    else rect(u0, v0, u1, v1, pick(r, METAL), 6.8, { roof: 'gable', ridge: 'u', wall: pick(r, JWALL), win: true, balc: pick(r, ['#e8e6e0', '#8a8f94', '#c9c4b8']), balc0: 1, door: true });
+  };
+  // 團地式的板狀大樓（沿 u），8～15 層，每層陽台
+  const slab = (u0, u1, v0, v1, H) => rect(u0, v0, u1, v1, '#b3b0a8', H, { wall: pick(r, TILEWALL), win: true, balc: true, units: Math.max(1, Math.round((u1 - u0) / 20)) });
+  // 高密度街區：一塊範圍內放塔式住宅（タワーマンション，夠大才有）或平行排列的板狀大樓，大樓之間是綠地
+  const housingBlock = (U0, V0, U1, V1) => {
+    const W = U1 - U0, D = V1 - V0;
+    if (W < 6 || D < 6) return;
+    if (Math.min(W, D) >= 30 && r() < 0.3 + lv * 0.12) {
+      // 塔式住宅：方形塔樓＋低層裙樓，周圍植栽
+      const s0 = Math.min(W, D) * 0.55, cu = (U0 + U1) / 2, cv = (V0 + V1) / 2;
+      rect(cu - s0 / 2 - 3, cv - s0 / 2 - 3, cu + s0 / 2 + 3, cv + s0 / 2 + 3, '#b9b6ae', 7, { wall: pick(r, TILEWALL), win: true, shop: lv > 1 ? pick(r, AWN) : undefined });
+      const H = 50 + lv * 22 + Math.min(30, s0) + r() * 15;
+      rect(cu - s0 / 2, cv - s0 / 2, cu + s0 / 2, cv + s0 / 2, '#c9c6be', H, { wall: pick(r, TILEWALL), win: true, balc: true, units: 3, tier: 1, base: [cu - s0 / 2 - 3, cv - s0 / 2 - 3, cu + s0 / 2 + 3, cv + s0 / 2 + 3] });
+      items[items.length - 2].tier = 0; items[items.length - 2].base = items[items.length - 1].base;
+      tree(U0 + 2.5, V0 + 2.5, 0.9); tree(U1 - 2.5, V1 - 2.5, 0.9); tree(U0 + 2.5, V1 - 2.5, 0.8);
+      return;
+    }
+    // 板狀大樓：每排深 11 m，排與排之間留 13 m 綠地
+    const H = 22 + lv * 7 + r() * 6;
+    let n = 0;
+    for (let v = V0 + 1; v + 9 <= V1 - 1; v += 24) {
+      const v1 = Math.min(v + 11, V1 - 1);
+      for (const [a, e] of split(U0 + 1, U1 - 1, 60)) {
+        if (e - a < 6) continue;
+        if (n++ > 0 && r() > fill + 0.15) { tree((a + e) / 2, (v + v1) / 2); continue; }
+        slab(a, e, v, v1, H + (r() - 0.5) * 4);
       }
-      u += uw;
+      if (v1 + 13 <= V1) { rect(U0 + 1, v1 + 1.5, U1 - 1, Math.min(V1 - 1, v1 + 11.5), '#9fbf86'); for (let u = U0 + 5; u < U1 - 4; u += 11) if (r() < 0.6) tree(u, v1 + 6.5, 0.9); }
     }
   };
   // 工業區的露天堆場：一排排貨櫃（部分疊兩層），取代空地
@@ -184,24 +184,26 @@ export function lotArt(b) {
       const alongT = tu ? 'u' : 'v', alongN = tu ? 'v' : 'u';
       if (homes > 0 && r() > fill + 0.1) { const c = P(W / 2, D / 2); tree(c.u, c.v); if (r() < 0.6) { const c2 = P(W * 0.25, D * 0.3); tree(c2.u, c2.v, 0.8); } return; }
       homes++;
-      const setback = 5.8, pw = 8.1, hw = Math.min(W - 2.2, 6.5 + r() * 2), hd = Math.min(D - 7, 7 + r() * 2.5);
+      // 日式透天：兩層樓、外牆板；七成是寄棟（四坡）或切妻（雙坡）的日本瓦 / 鋼板屋頂，三成是平屋頂的現代箱型住宅
+      const setback = 5.8, pw = 8.1, hw = Math.min(W - 2.2, 6.2 + r() * 1.8), hd = Math.min(D - 7, 6.8 + r() * 2);
       const left = r() < 0.5, ha = left ? W - 1 - hw : 1, pa = left ? 0.6 : W - 0.6 - pw;
-      const roofC = tileOrSlate(0.85), wall = r() < 0.15 ? pick(r, BRICK) : facadeCol(), hh = 5 + lv * 0.7 + r();
-      R(ha, setback, ha + hw, setback + hd, roofC, hh, {
-        roof: r() < 0.45 ? 'hip' : 'gable', ridge: r() < 0.75 ? alongT : alongN, wall, win: true, door: true,
-        chimney: r() < 0.6 ? 0.15 + r() * 0.7 : undefined, solar: r() < 0.25,
-      });
-      // L 型：後方加一翼（屋脊與主屋垂直）
-      if (r() < 0.35 && setback + hd + 4.5 <= D - 1) {
+      const box = r() < 0.3, roofC = roofCol(0.75), wall = facadeCol(), hh = 6.6 + lv * 0.4 + r() * 0.8;
+      if (box) R(ha, setback, ha + hw, setback + hd, '#b9b6ae', hh + 0.6, { wall: r() < 0.5 ? pick(r, JDARK) : pick(r, JWALL), win: true, door: true, units: r() < 0.5 ? 1 : 0 });
+      else R(ha, setback, ha + hw, setback + hd, roofC, hh, { roof: r() < 0.55 ? 'hip' : 'gable', ridge: r() < 0.7 ? alongT : alongN, wall, win: true, door: true, solar: r() < 0.3 });
+      // 一樓突出的和室 / 客廳（平屋頂或單坡）
+      if (r() < 0.4 && setback + hd + 3.5 <= D - 1) {
         const wa = left ? ha : ha + hw * 0.45;
-        R(wa, setback + hd - 0.5, wa + hw * 0.55, setback + hd + 4, roofC, hh * 0.9, { roof: 'gable', ridge: alongN, wall, win: true });
+        R(wa, setback + hd - 0.3, wa + hw * 0.55, setback + hd + 3.2, box ? '#b9b6ae' : roofC, 3.4, box ? { wall } : { roof: 'hip', ridge: alongT, wall, win: true });
       }
-      // 前院並排三個停車位（不再有車庫，也不會前後擋住）
-      R(pa, 0, pa + pw, setback - 0.4, '#bdb8ae');
+      // 前院並排三個停車位（碎石 / 水泥地）
+      R(pa, 0, pa + pw, setback - 0.4, r() < 0.5 ? '#bdb8ae' : '#c9c4b8');
       for (let k = 0; k < 3; k++) C(pa + 0.35 + k * 2.7, 0.4, pa + 2.35 + k * 2.7, 5.0);
-      // 前院樹籬（停車位處留開口）
-      if (r() < 0.75) { R(0.3, 0.2, pa - 0.3, 1, '#4c7a39', 1.3, { wall: '#43703a', deco: true }); R(pa + pw + 0.3, 0.2, W - 0.3, 1, '#4c7a39', 1.3, { wall: '#43703a', deco: true }); }
-      if (r() < 0.8) { const c = P(ha + hw / 2, Math.min(D - 2, setback + hd + 2.5)); tree(c.u, c.v, 0.8); }
+      // 前院：水泥磚圍牆或綠籬（停車位處留開口），庭院樹
+      const fence = r() < 0.6 ? blockWall : r() < 0.6 ? hedge : null;
+      if (fence) { const a = P(0.3, 0.2), e = P(pa - 0.3, 1), a2 = P(pa + pw + 0.3, 0.2), e2 = P(W - 0.3, 1);
+        fence(Math.min(a.u, e.u), Math.min(a.v, e.v), Math.max(a.u, e.u), Math.max(a.v, e.v)); fence(Math.min(a2.u, e2.u), Math.min(a2.v, e2.v), Math.max(a2.u, e2.u), Math.max(a2.v, e2.v)); }
+      if (r() < 0.8) { const c = P(ha + hw / 2, Math.min(D - 2, setback + hd + 2.5)); tree(c.u, c.v, 0.7); }
+      if (r() < 0.4) { const c = P(left ? 1.8 : W - 1.8, Math.min(D - 2, setback + 1.5)); tree(c.u, c.v, 0.55); }
     };
     const lane = b.rows >= 6 && b.cols >= 6;
     if (!lane) {
@@ -222,7 +224,7 @@ export function lotArt(b) {
     }
   } else if (b.zt === 'R2') {
     base = '#a9c48f';
-    // 連棟住宅：一排排沿街，排與排之間是後院（樹籬分隔）
+    // 日式集合住宅：一排排沿街的アパート（兩層、外走廊）與低層マンション（三～五層、陽台），排與排之間是綠地與圍牆
     // 停車：有巷道時沿巷道兩側；夠深（≥ 17 m）的臨路一排停車格；淺的地塊每戶門前一個車位
     const lu = w / 2, lane = !!b.roads;
     const parts = lane ? [[1.5, lu - 10], [lu + 10, w - 1.5]] : [[1.5, w - 1.5]];
@@ -240,27 +242,29 @@ export function lotArt(b) {
         for (const [s0, s1] of split(a, e, 24)) {
           if (nb > 0 && r() > fill + 0.15) { tree((s0 + s1) / 2, v + 4.5); continue; }
           nb++;
-          terrace(s0, s1, v, v1, !front && v < 6);
+          apartment(s0 + 0.5, s1 - 0.5, v, v1, r() < 0.35 + lv * 0.2);
+          // 淺的地塊：每 6 m 一個門前車位
+          if (!front && v < 6) for (let u = s0 + 1.2; u + 2 <= s1 - 1; u += 6) { rect(u - 0.3, 0.3, u + 2.3, v - 0.4, '#bdb8ae'); car(u, 0.6, 1.9, Math.min(4.6, v - 1.2)); }
         }
-        // 後院：樹籬分隔與樹
+        // 後院：水泥磚圍牆與樹
         if (v1 + 6 <= d) {
-          hedge(a, v1 + 5.5, e, v1 + 6.2);
+          blockWall(a, v1 + 5.5, e, v1 + 6.1);
           for (let u = a + 4; u < e - 2; u += 12) if (r() < 0.5) tree(u, v1 + 3, 0.8);
         }
       }
     }
   } else if (b.zt === 'R3') {
-    base = '#c9c3b5';
-    // 周邊式街廓：大地塊切成邊長最多 48 m 的街廓，各自圍出中庭
+    base = '#bfc6b2';
+    // 日式高密度住宅：大地塊切成邊長最多 48 m 的街區，放塔式住宅或平行的板狀大樓（團地）
     // 停車：有巷道時巷道兩側是停車格（巷道左右各一組街廓）；沒有時臨路一排停車格，建物退縮在後面
     const lu = w / 2;
     if (b.roads) {
       laneBays(lu, 2, d - 7.5);
-      for (const [a, e] of [[0, lu - 9.8], [lu + 9.8, w]]) for (const [U0, U1] of split(a, e)) for (const [V0, V1] of split(0, d)) perimeterBlock(U0, V0, U1, V1);
+      for (const [a, e] of [[0, lu - 9.8], [lu + 9.8, w]]) for (const [U0, U1] of split(a, e)) for (const [V0, V1] of split(0, d)) housingBlock(U0, V0, U1, V1);
     } else {
       const v0 = b.rows >= 3 ? 7 : 0;
       if (v0) frontBays(0.5, w - 0.5);
-      for (const [U0, U1] of split(0, w)) for (const [V0, V1] of split(v0, d)) perimeterBlock(U0, V0, U1, V1);
+      for (const [U0, U1] of split(0, w)) for (const [V0, V1] of split(v0, d)) housingBlock(U0, V0, U1, V1);
     }
   } else if (b.zt === 'T') {
     // 公車總站：中央場內車道，兩側是垂直的公車停車格（每格 4.2 m 寬、13.5 m 深，車頭朝車道），後方是鋸齒屋頂的維修廠，臨路有站務辦公室
@@ -323,17 +327,17 @@ export function lotArt(b) {
       }
       tree(1.5, d - 1.5, 0.7); tree(w - 1.5, d - 1.5, 0.7);
     } else if (k === 'hotel') {
-      // 大飯店：折線屋頂的 U 型主樓（夠寬才有兩側翼），前庭落客車道與花壇，臨路停車格與地下停車場，後方花園與泳池
+      // 飯店：平屋頂的板狀主樓（商務飯店，每層一排客房窗），夠寬的有兩側低層翼樓；前庭落客車道與花壇，臨路停車格與地下停車場，後方日式庭園與池塘
       const s = Math.min(w, d), fv = Math.max(d * 0.26, 8.5), md = Math.min(16, d * 0.3);
-      const hh = 15 + lv * 3 + Math.min(9, s * 0.1), rc = pick(r, SLATE), wall = pick(r, ['#efe6d6', '#f1ead9', '#e9dcc4', '#e8d5c4', '#dfe3e6']);
+      const hh = 22 + lv * 6 + Math.min(14, s * 0.15), rc = '#b3b0a8', wall = pick(r, TILEWALL);
       garageRamp(Math.round(b.cols * b.rows * 0.4));
       loadingBay(0.6);
       frontBays(4.4, w * 0.3 - 3.2); frontBays(w * 0.7 + 3.2, w - 6.5);
-      rect(w * 0.1, fv, w * 0.9, fv + md, rc, hh, { roof: 'mansard', ridge: 'u', wall, win: true, units: 2 });
+      rect(w * 0.1, fv, w * 0.9, fv + md, rc, hh, { wall, win: true, units: 3 });
       const ww = Math.min(12, w * 0.2 - 3);
-      if (ww >= 6 && fv > 12) for (const u0 of [w * 0.1, w * 0.9 - ww]) rect(u0, 7, u0 + ww, fv, rc, hh - 3, { roof: 'mansard', ridge: 'v', wall, win: true });
-      rect(w * 0.42, fv - 2, w * 0.58, fv, '#d7c9a7', 4);
-      rect(w * 0.3, d * 0.72, w * 0.6, d * 0.72 + Math.min(8, s * 0.18), '#5fc4e8', 0);
+      if (ww >= 6 && fv > 12) for (const u0 of [w * 0.1, w * 0.9 - ww]) rect(u0, 7, u0 + ww, fv, rc, 8 + lv * 2, { wall, win: true, units: 1 });
+      rect(w * 0.42, fv - 2, w * 0.58, fv, '#8a6a4a', 4);
+      rect(w * 0.3, d * 0.72, w * 0.6, d * 0.72 + Math.min(8, s * 0.18), '#6f9fb0', 0);
       road([{ u: w * 0.3, v: 0 }, { u: w * 0.3, v: fv - 3 }, { u: w * 0.7, v: fv - 3 }, { u: w * 0.7, v: 0 }], 4.5);
       rect(w * 0.36, 1, w * 0.64, fv - 5.5, '#7fb069');
       hedge(w * 0.36, 1, w * 0.64, 1.7);
@@ -388,19 +392,26 @@ export function lotArt(b) {
         sv = 7.2;
       }
       const back = real ? Math.min(b.rows, 2) * CELL - 1 : Math.min(d - 1, sv + Math.max(5, Math.min(12, d - sv - 1)));
-      const gap = real, rc = pick(r, TILE);
-      let u = 1, nShop = 0;
-      while (u < we - 4) {
-        let sw = Math.min(we - u, 7 + r() * 9);
-        if (gap && u < w / 2 + 4 && u + sw > w / 2 - 4) { if (u < w / 2 - 6) sw = w / 2 - 4 - u; else { u = w / 2 + 4; continue; } }
-        if (nShop++ === 0 || r() < fill + 0.15) {
-          const mans = r() < 0.3;
-          rect(u, sv, u + sw, back, mans ? pick(r, SLATE) : r() < 0.6 ? rc : pick(r, TILE), 7 + lv * 2.5 + r() * 2,
-            { roof: mans ? 'mansard' : 'gable', ridge: 'u', wall: facadeCol(), win: true, shop: pick(r, AWN), chimney: !mans && r() < 0.4 ? r() : undefined });
-          // 人行道咖啡座（店面前沒有停車格時）
-          if (real && r() < 0.4 && sw > 5) for (let k2 = 0; k2 * 2.6 + 2.4 < sw - 1; k2++) items.push({ t: 'circle', u: u + 1.6 + k2 * 2.6, v: 1.2, r: 0.95, c: pick(r, UMB), h: 2.2, umb: true, deco: true });
-        } else tree(u + sw / 2, (sv + back) / 2, 0.9);
-        u += sw;
+      const gap = real;
+      // 便利商店：小的商業地塊（前面是停車格）有一成半是一層樓的便利商店（白色店面、彩色招牌帶）
+      if (!real && !forecourt && b.cols <= 5 && b.cols >= 3 && r() < 0.5) {
+        rect(1.5, sv, we - 0.5, Math.min(back, sv + 12), '#e9e7e2', 4.6, { wall: '#f4f3f0', win: true, shop: pick(r, ['#2a9d3f', '#1d6fb8', '#e8743b', '#c8102e']), units: 2 });
+      } else {
+        let u = 1, nShop = 0;
+        while (u < we - 3) {
+          // 日式商店街：每間 4.5～9 m 寬的店舖兼住宅，兩～四層，平屋頂或日本瓦，一樓店面，部分掛直立看板
+          let sw = Math.min(we - u, 4.5 + r() * 4.5);
+          if (gap && u < w / 2 + 4 && u + sw > w / 2 - 4) { if (u < w / 2 - 6) sw = w / 2 - 4 - u; else { u = w / 2 + 4; continue; } }
+          if (nShop++ === 0 || r() < fill + 0.15) {
+            const flat = r() < 0.6, bh = 7 + lv * 2.5 + Math.floor(r() * 3) * 2.5;
+            rect(u, sv, u + sw, back, flat ? '#b5b2aa' : pick(r, KAWARA), bh, flat ? { wall: pick(r, r() < 0.7 ? JWALL : TILEWALL), win: true, shop: pick(r, AWN) } : { roof: 'gable', ridge: 'u', wall: facadeCol(), win: true, shop: pick(r, AWN) });
+            if (bh >= 11.5 && sw >= 3.5 && r() < 0.55) {
+              const [kc, tc] = pick(r, KANBAN);
+              items.push({ t: 'sign', vert: true, host: [u, sv, u + sw, back], u: u + 0.9 + r() * Math.max(0, sw - 1.8), v: sv - 0.15, h0: 3.4, h: Math.min(bh - 0.6, 3.4 + 6 + r() * 3), c: kc, tc, text: pick(r, KANJI) });
+            }
+          } else tree(u + sw / 2, (sv + back) / 2, 0.9);
+          u += sw;
+        }
       }
       if (real && d - back > 12) {
         // 後方停車場：只沿實際車道兩側，其餘是植栽
@@ -476,9 +487,11 @@ export function lotArt(b) {
         rect(u0 + 2, v0 + 2, u1 - 2, v1 - 2, '#8fae6a', 4 + lv * 2, { wall: pick(r, ['#a9c0d2', '#b8c8c0', '#c2c9d6']), glass: true });
         tree(u0 + 1, v0 + 1, 0.8); tree(u1 - 1, v1 - 1, 0.8);
       } else {
-        // 製造工廠：紅磚廠房、鋸齒屋頂（北向採光窗）、磚造煙囪
-        rect(u0, v0, u1, v1, '#9b958c', 6 + lv * 1.5, { roof: 'saw', wall: pick(r, BRICK), win: true });
-        items.push({ t: 'circle', u: u1 - 3, v: v0 + 3, r: 1.4, c: '#8e4f3c', h: 18, stack: true });
+        // 製造工廠：鋼板外牆的廠房、鋸齒屋頂（北向採光窗）或低斜度鋼板屋頂、紅白相間的煙囪
+        if (r() < 0.5) rect(u0, v0, u1, v1, '#9b958c', 6 + lv * 1.5, { roof: 'saw', wall: pick(r, METALWALL), win: true });
+        else rect(u0, v0, u1, v1, pick(r, ['#7d8a8f', '#6f8496', '#8e989c']), 6 + lv * 1.5, { roof: 'gable', ridge: (u1 - u0) >= (v1 - v0) ? 'u' : 'v', wall: pick(r, METALWALL), win: true });
+        items.push({ t: 'circle', u: u1 - 3, v: v0 + 3, r: 1.2, c: '#d8d4cc', h: 18, stack: true });
+        items.push({ t: 'circle', u: u1 - 3, v: v0 + 3, r: 1.25, c: '#c0392b', h: 16, deco: true });
       }
     }
   }

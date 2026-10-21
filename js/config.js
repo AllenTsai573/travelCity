@@ -98,7 +98,7 @@ export const SEP_RI = 250;
 export const DEMAND_BUILD = 0.2, DEMAND_ZONE = 0.35;
 export const ZONE_TYPES = {
   R1: { zone: 'R', name: '低密度住宅', short: '低密度', max: 12, per: [0.45, 0.65, 0.85] },
-  R2: { zone: 'R', name: '中密度住宅', short: '中密度', max: 12, per: [0.8, 1.15, 1.5] },
+  R2: { zone: 'R', name: '中密度住宅', short: '中密度', max: 18, per: [0.8, 1.15, 1.5] },
   R3: { zone: 'R', name: '高密度住宅', short: '高密度', max: 24, per: [1.0, 1.5, 2.0] },
   C:  { zone: 'C', name: '商業區', short: '商業', max: 30, per: [0.22, 0.38, 0.55] },
   I:  { zone: 'I', name: '工業區', short: '工業', max: 32, per: [0.16, 0.26, 0.38] },

@@ -117,7 +117,7 @@ export class UI {
         html += `<div class="hint">左鍵連續鋪路 · 右鍵/Esc 結束 · 接近平行 / 45° / 垂直會自動對齊起點道路 · Shift 每 15° 吸附 · Alt 不吸附 · [ ] 切換高度</div>`;
       } else html += `<div class="hint">點擊道路以變更類型（同類單行道則反轉方向）</div>`;
     } else if (t.tool === 'zone') {
-      const zdesc = { R1: '透天、獨棟', R2: '公寓、連棟', R3: '大樓', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車' };
+      const zdesc = { R1: '透天、獨棟', R2: 'アパート、低層公寓大樓', R3: '板狀大樓、塔式住宅', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車' };
       html += `<div class="grp">` + ZONE_ORDER.map(k => { const Z = ZONE_TYPES[k]; return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''}" title="${Z.name}：最大 ${Z.max}×${Z.max} 格（每格 6 m）｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>最大 ${Z.max}×${Z.max} · 免費</small></button>`; }).join('')
         + `<button data-sub="zone" data-v="X" class="${t.zone === 'X' ? 'on' : ''}" title="拖曳範圍內的空分區取消"><b>✕ 取消分區</b><small>僅空地</small></button></div>`;
       html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕工業污染與高速公路噪音。</div>`;

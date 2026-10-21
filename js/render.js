@@ -325,7 +325,10 @@ export class Renderer {
       // 依離鏡頭最近的一點排序，讓同一地塊內的建物也能正確前後遮擋（旋轉視角時重排）
       if (!b._art.sorted || b._art.rot !== rot) {
         // 疊在一起的塔樓段（摩天大樓的退縮）以底座排序、由下往上畫，上一段不會被下一段的屋頂蓋住
-        const low = it => it.tier !== undefined ? Math.max(...box(...it.base).map(p => this.depth(p))) + it.tier * 1e-3 : (it.t === 'circle' || it.t === 'sign' ? this.depth(P(it.u, it.v)) + (it.r || 0) : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => this.depth(p))));
+        // 直立看板貼在店面上：店面朝鏡頭時畫在該建物之後，背向鏡頭時畫在之前（被建物擋住）
+        const signLow = it => { const h = it.host, front = this.depth(P((h[0] + h[2]) / 2, h[1])) > this.depth(P((h[0] + h[2]) / 2, h[3]));
+          return front ? Math.max(...box(...h).map(p => this.depth(p))) + 1e-3 : this.depth(P(it.u, it.v)) - 50; };
+        const low = it => it.vert && it.host ? signLow(it) : it.tier !== undefined ? Math.max(...box(...it.base).map(p => this.depth(p))) + it.tier * 1e-3 : (it.t === 'circle' || it.t === 'sign' ? this.depth(P(it.u, it.v)) + (it.r || 0) : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => this.depth(p))));
         // 地面上的東西（鋪面、標線）照產生順序，再畫車，最後是由遠到近排序的建物
         const flat = b._art.items.filter(it => !(it.h >= 1) && !it.car), cars = b._art.items.filter(it => it.car);
         const tall = b._art.items.filter(it => it.h >= 1 && !it.car).map(it => [low(it), it]).sort((p, q) => p[0] - q[0]).map(x => x[1]);
@@ -374,6 +377,23 @@ export class Renderer {
           ctx.setLineDash(it.dash || []);
           ctx.beginPath(); it.pts.forEach((q, i) => { const p = P(q.u, q.v); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }); ctx.stroke();
           ctx.setLineDash([]); ctx.lineCap = 'round';
+          continue;
+        }
+        if (it.t === 'sign' && it.vert) {
+          // 直立看板（商店街）：貼在店面上、底部離地 it.h0，牌面與直書文字永遠正對畫面
+          if (!detail || b.abandoned) continue;
+          const p = P(it.u, it.v), H0 = it.h0 * 0.5, H1 = it.h * 0.5, n = it.text.length;
+          const a = this.lift(p, H0), e = this.lift(p, H1);
+          ctx.fillStyle = it.c; quad([this.so(a, -0.8, 0), this.so(a, 0.8, 0), this.so(e, 0.8, 0), this.so(e, -0.8, 0)]); ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 0.1; ctx.stroke();
+          if (z > 2) {
+            ctx.fillStyle = it.tc || '#fff'; ctx.font = `bold ${Math.min(1.25, (H1 - H0) * this.hs / n * 0.85).toFixed(2)}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            for (let k = 0; k < n; k++) {
+              const q = this.lift(p, H1 - (H1 - H0) * (k + 0.5) / n);
+              this.localTf(q.x, q.y, R.x, R.y); ctx.fillText(it.text[k], 0, 0); this.worldTf();
+            }
+            ctx.textBaseline = 'alphabetic';
+          }
           continue;
         }
         if (it.t === 'sign') {
@@ -524,6 +544,23 @@ export class Renderer {
     if (!it.win || abandoned) return;
     const L = Math.hypot(q.x - p.x, q.y - p.y), n = Math.floor(L / 2.6);
     if (n < 1) return;
+    if (it.balc) {
+      // 日式公寓 / 大樓：每層一排落地窗＋陽台（或外走廊）的欄杆，每戶之間有隔板
+      const floors = Math.max(1, Math.floor((H - 0.3) / 1.5)), nu = Math.max(1, Math.floor(L / 6));
+      ctx.fillStyle = 'rgba(52,66,86,0.55)'; ctx.beginPath();
+      for (let f = 0; f < floors; f++) for (let k = 0; k < nu; k++) pg((k + 0.12) / nu, (k + 0.88) / nu, 0.25 + f * 1.5, 1.3 + f * 1.5);
+      ctx.fill();
+      ctx.fillStyle = it.balc === true ? 'rgba(245,245,240,0.85)' : it.balc; ctx.beginPath();
+      for (let f = it.balc0 ?? 1; f < floors; f++) pg(0.01, 0.99, f * 1.5, f * 1.5 + 0.55);
+      ctx.fill();
+      if (z > 2.2) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 0.12; ctx.beginPath();
+        for (let k = 1; k < nu; k++) { const a = W(k / nu, 1.5), e = W(k / nu, floors * 1.5); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
+        ctx.stroke();
+      }
+      if (it.door && facing > 0.5 && z > 2) { ctx.fillStyle = '#6e4f3a'; ctx.beginPath(); pg(0.46, 0.46 + Math.min(0.2, 1.1 / L), 0, 1.0); ctx.fill(); }
+      return;
+    }
     // 每層樓約 3 m，畫面上壓縮成 1.5 m
     const floors = Math.max(1, Math.floor((H - 0.3) / 1.5)), shop = it.shop && front;
     ctx.fillStyle = 'rgba(52,66,86,0.6)';
@@ -538,6 +575,8 @@ export class Renderer {
   // 斜屋頂：簷口（外框，高度 H）往內收到屋脊 / 屋頂平台（高度 H + rH）
   // gable 雙坡（兩端是山牆）、hip 四坡、mansard 折線屋頂（陡坡＋平頂）；煙囪與太陽能板畫在屋面上
   pitchedRoof(it, col, H, P, b, quad, z) {
+    // 日式屋頂：屋簷外伸約 0.5 m、坡度較緩
+    if (it.roof !== 'mansard') { const ov = it.eave ?? 0.5; it = { ...it, u0: it.u0 - ov, v0: it.v0 - ov, u1: it.u1 + ov, v1: it.v1 + ov }; }
     const ctx = this.ctx, du = it.u1 - it.u0, dv = it.v1 - it.v0, R = this.right, Dn = this.down;
     const along = it.ridge || (du >= dv ? 'u' : 'v'), s = along === 'u' ? dv : du;
     let ku, kv, rH;
@@ -546,7 +585,7 @@ export class Renderer {
       const k = it.roof === 'hip' ? s / 2 : 0;
       ku = along === 'u' ? Math.min(k, du / 2) : du / 2;
       kv = along === 'u' ? dv / 2 : Math.min(k, dv / 2);
-      rH = Math.min(4.5, s * 0.3);
+      rH = Math.min(3, s * 0.2);
     }
     const o = [[it.u0, it.v0], [it.u1, it.v0], [it.u1, it.v1], [it.u0, it.v1]];
     const ii = [[it.u0 + ku, it.v0 + kv], [it.u1 - ku, it.v0 + kv], [it.u1 - ku, it.v1 - kv], [it.u0 + ku, it.v1 - kv]];

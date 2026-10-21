@@ -6,6 +6,8 @@ import { halfWidth, laneOffset } from './network.js';
 import { fxAt } from './traffic.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
+// 斜看的俯角 55°：畫面上下方向壓縮成 sin 55°；建物高度（以俯視的 0.5 倍為準）乘上 2 / tan 55°，畫面上的高度 = 實際高度 × cos 55°
+const PITCH = 55 * Math.PI / 180, TILT_SY = Math.sin(PITCH), TILT_HS = 2 / Math.tan(PITCH);
 const SHOW_WILD_TREES = false;
 // 顏色明暗（建物牆面與斜屋頂用），結果快取
 const shadeCache = new Map();
@@ -46,7 +48,7 @@ export class Renderer {
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.bake = null;
     // rot：視角旋轉（弧度）；畫面 = S(tilt) × R(rot) ×（世界 − 鏡頭）× z
-    // tilt：俯角，0 = 正上方俯視（地面不壓縮、建物畫成實際高度的一半，約 63° 斜投影）、1 = 45° 斜看（地面壓縮成 0.71 倍、建物較高）
+    // tilt：俯角，0 = 正上方俯視（地面不壓縮、建物畫成實際高度的一半，約 63° 斜投影）、1 = 55° 斜看（地面壓縮成 0.82 倍、建物較高）
     this.cam = { x: 1200, y: 1200, z: 1, rot: 0, tilt: 1 };
     this.rotTarget = null;
     this.tiltTarget = null;
@@ -64,11 +66,11 @@ export class Renderer {
     this.right = { x: c, y: -s }; this.down = { x: s, y: c }; this.up = { x: -s, y: -c };
     // 俯角：sy 為畫面上下方向的壓縮比例，hs 為高度倍率（建物的高度常數以俯視為準：hs = 1）
     const t = this.tilt();
-    this.sy = 1 + (Math.SQRT1_2 - 1) * t;
-    this.hs = 1 + t;
+    this.sy = 1 + (TILT_SY - 1) * t;
+    this.hs = 1 + (TILT_HS - 1) * t;
   }
   tilt() { return this.cam.tilt ?? 0; }
-  // 切換俯視 / 45° 斜看（平滑過渡）
+  // 切換俯視 / 55° 斜看（平滑過渡）
   toggleTilt() { this.tiltTarget = (this.tiltTarget ?? this.tilt()) > 0.5 ? 0 : 1; }
   stepTilt(dt) {
     if (this.tiltTarget === null) return;
@@ -102,22 +104,22 @@ export class Renderer {
   }
 
   toWorld(sx, sy) {
-    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), k = 1 + (Math.SQRT1_2 - 1) * this.tilt();
+    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), k = 1 + (TILT_SY - 1) * this.tilt();
     const dx = (sx - this.W / 2) / c.z, dy = (sy - this.H / 2) / (c.z * k);
     return { x: c.x + cs * dx + sn * dy, y: c.y - sn * dx + cs * dy };
   }
   toScreen(wx, wy) {
-    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), dx = wx - c.x, dy = wy - c.y, k = 1 + (Math.SQRT1_2 - 1) * this.tilt();
+    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), dx = wx - c.x, dy = wy - c.y, k = 1 + (TILT_SY - 1) * this.tilt();
     return { x: (cs * dx - sn * dy) * c.z + this.W / 2, y: (sn * dx + cs * dy) * c.z * k + this.H / 2 };
   }
   // 螢幕位移換成世界位移（拖曳平移、WASD 用）
   screenDelta(dx, dy) {
     const r = this.cam.rot || 0, cs = Math.cos(r), sn = Math.sin(r);
-    dy /= 1 + (Math.SQRT1_2 - 1) * this.tilt();
+    dy /= 1 + (TILT_SY - 1) * this.tilt();
     return { x: cs * dx + sn * dy, y: -sn * dx + cs * dy };
   }
   worldTf() {
-    const c = this.cam, d = this.dpr, k = d * c.z, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), q = 1 + (Math.SQRT1_2 - 1) * this.tilt();
+    const c = this.cam, d = this.dpr, k = d * c.z, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), q = 1 + (TILT_SY - 1) * this.tilt();
     const A = k * cs, B = k * sn * q, C = -k * sn, D = k * cs * q;
     const E = d * this.W / 2 - (A * c.x + C * c.y), F = d * this.H / 2 - (B * c.x + D * c.y);
     this.M = [A, B, C, D, E, F];
@@ -166,6 +168,7 @@ export class Renderer {
     this.drawNetwork(v, L => L <= 0);
     this.drawArrivals(v);
     this.drawGates(v);
+    this.drawStops(v);
     this.drawBuildings(v, 'tall');
     this.drawNetwork(v, L => L > 0);
     if (g.heatmap) this.drawHeatmap(v);
@@ -248,6 +251,27 @@ export class Renderer {
     }
   }
 
+  // 公車站牌：道路兩側路邊的站牌（藍底，上方一排路線顏色）；縮小時畫成小圓點
+  drawStops(v) {
+    const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit;
+    if (!tr || !tr.stops.length || z < 0.35) return;
+    for (const st of tr.stops) {
+      if (st.x < v.x0 || st.x > v.x1 || st.y < v.y0 || st.y > v.y1) continue;
+      const s = g.net.segs.get(st.seg);
+      if (!s) continue;
+      const off = halfWidth(s.T) + 0.9;
+      for (const sd of [1, -1]) {
+        const p = { x: st.x - st.dy * off * sd, y: st.y + st.dx * off * sd };
+        if (z < 1.5) { ctx.fillStyle = '#1f6fb5'; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.2, 3 / z), 0, Math.PI * 2); ctx.fill(); continue; }
+        const top = this.lift(p, 1.6);
+        ctx.strokeStyle = '#5b5f64'; ctx.lineWidth = 0.15; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(top.x, top.y); ctx.stroke();
+        ctx.fillStyle = '#1f6fb5'; ctx.beginPath(); ctx.ellipse(top.x, top.y, 0.7, 0.7 / this.sy, Math.atan2(this.right.y, this.right.x), 0, Math.PI * 2); ctx.fill();
+        st.lines.forEach((id, k) => { const ln = tr.line(id); if (!ln) return; const q = this.so(this.lift(p, 0.7), (k - (st.lines.length - 1) / 2) * 0.5, 0); ctx.fillStyle = ln.color; ctx.fillRect(q.x - 0.22, q.y - 0.22, 0.44, 0.44); });
+        if (st.queue.length && z > 2.5) { ctx.fillStyle = '#333'; for (let k = 0; k < Math.min(6, st.queue.length); k++) { const q = this.so(p, 0.9 + k * 0.45, 0.4); ctx.beginPath(); ctx.arc(q.x, q.y, 0.2, 0, Math.PI * 2); ctx.fill(); } }
+      }
+    }
+  }
+
   // 停車場 / 園區對外出入口的柵欄機（紅白相間的橫桿）
   drawGates(v) {
     const ctx = this.ctx, z = this.cam.z;
@@ -300,7 +324,8 @@ export class Renderer {
       if (pass === 'ground') { quad(b.corners); ctx.fillStyle = b.abandoned ? '#8f8c84' : b._art.base; ctx.fill(); }
       // 依離鏡頭最近的一點排序，讓同一地塊內的建物也能正確前後遮擋（旋轉視角時重排）
       if (!b._art.sorted || b._art.rot !== rot) {
-        const low = it => (it.t === 'circle' || it.t === 'sign' ? this.depth(P(it.u, it.v)) + (it.r || 0) : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => this.depth(p))));
+        // 疊在一起的塔樓段（摩天大樓的退縮）以底座排序、由下往上畫，上一段不會被下一段的屋頂蓋住
+        const low = it => it.tier !== undefined ? Math.max(...box(...it.base).map(p => this.depth(p))) + it.tier * 1e-3 : (it.t === 'circle' || it.t === 'sign' ? this.depth(P(it.u, it.v)) + (it.r || 0) : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => this.depth(p))));
         // 地面上的東西（鋪面、標線）照產生順序，再畫車，最後是由遠到近排序的建物
         const flat = b._art.items.filter(it => !(it.h >= 1) && !it.car), cars = b._art.items.filter(it => it.car);
         const tall = b._art.items.filter(it => it.h >= 1 && !it.car).map(it => [low(it), it]).sort((p, q) => p[0] - q[0]).map(x => x[1]);
@@ -313,11 +338,12 @@ export class Renderer {
       const occ = b.abandoned ? 0 : b.zone === 'R' ? (hour >= 8 && hour < 17 ? 0.35 : 0.85)
         : clamp((b.present + b.custLevel * 1.5) / Math.max(1, city.cap(b) * 0.5), 0.08, 1);
       // 陰影從建物底部往右下方投射（與底部相連，不會看起來浮在空中）；太陽固定在世界座標，旋轉視角時陰影跟著轉
-      if (detail && pass === 'tall') {
-        ctx.fillStyle = 'rgba(20,24,30,0.24)';
+      // 兩層：整段淡、靠近建物的一半再疊一層（接地處較深，像真的軟陰影）
+      if (detail && pass === 'tall') for (const [alpha, frac] of [[0.15, 1], [0.12, 0.5]]) {
+        ctx.fillStyle = `rgba(20,24,30,${alpha})`;
         for (const it of items) {
           if (!it.h || it.t === 'line' || it.t === 'sign' || it.umb) continue;
-          const o = it.h * 0.55;
+          const o = it.h * 0.55 * frac;
           if (it.t === 'circle') {
             const p = P(it.u, it.v);
             ctx.lineCap = 'round'; ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = it.r * 2;
@@ -338,7 +364,7 @@ export class Renderer {
           const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv, pc = P(cu, cv);
           this.localTf(pc.x, pc.y, alongU ? tx : nx, alongU ? ty : ny);
           const L = Math.max(it.du, it.dv) + 0.2, W = Math.min(it.du, it.dv) + 0.1;
-          this.carBody(it.rank !== undefined ? b.slotOcc[it.rank] : it.trank !== undefined ? b.tOcc[it.trank] : it.c, it.truck ? 7.5 : Math.min(L, 4.6), it.truck ? 2.5 : Math.min(W, 1.85), !!it.truck, z > 2.2);
+          this.carBody(it.rank !== undefined ? b.slotOcc[it.rank] : it.trank !== undefined ? b.tOcc[it.trank] : it.c, it.bus ? 12 : it.truck ? 7.5 : Math.min(L, 4.6), it.bus ? 2.6 : it.truck ? 2.5 : Math.min(W, 1.85), it.bus ? 'bus' : !!it.truck, z > 2.2, alongU ? tx : nx, alongU ? ty : ny);
           this.worldTf();
           continue;
         }
@@ -373,17 +399,19 @@ export class Renderer {
         if (it.t === 'circle' && it.tree) {
           // 樹：樹冠離地（往上抬），下緣較暗、左上方受光
           const p = P(it.u, it.v), H = detail ? it.h * 0.35 : 0, rr = it.r, t = this.lift(p, H);
+          // 樹冠是球體：在畫面上畫成正圓（世界座標中沿畫面上下方向拉長 1 / sy 抵銷斜看的壓縮）
+          const ra = Math.atan2(R.y, R.x), ball = (q, r) => { ctx.beginPath(); ctx.ellipse(q.x, q.y, r, r / this.sy, ra, 0, Math.PI * 2); ctx.fill(); };
           if (detail) {
             const tk = this.lift(p, H * 0.8);
             ctx.strokeStyle = '#5a4632'; ctx.lineWidth = 0.5; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tk.x, tk.y); ctx.stroke();
             const a = this.so(t, rr * 0.08, rr * 0.1);
-            ctx.fillStyle = shade(it.c, 0.72); ctx.beginPath(); ctx.arc(a.x, a.y, rr, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = shade(it.c, 0.72); ball(a, rr);
           }
           const m = this.so(t, -rr * 0.06, -rr * 0.06);
-          ctx.fillStyle = it.c; ctx.beginPath(); ctx.arc(m.x, m.y, rr * 0.9, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = it.c; ball(m, rr * 0.9);
           if (detail) {
             const hl = this.so(t, -rr * 0.32, -rr * 0.34);
-            ctx.fillStyle = shade(it.c, 1.25); ctx.beginPath(); ctx.arc(hl.x, hl.y, rr * 0.45, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = shade(it.c, 1.25); ball(hl, rr * 0.45);
           }
           continue;
         }
@@ -427,7 +455,8 @@ export class Renderer {
             ctx.fillStyle = shade(it.wall || col, (it.wall ? 0.9 : 0.74) - 0.14 * fr);
             quad([p, q, this.lift(q, H), this.lift(p, H)]); ctx.fill();
             if (z > 1.6 && H > 1.4) this.wallWindows(it, p, q, H, fd, b.abandoned, i === 0);
-            // 牆腳的暗線，讓建物「站」在地上
+            // 牆腳接地處的暗帶（環境光遮蔽）與暗線，讓建物「站」在地上
+            ctx.fillStyle = 'rgba(0,0,0,0.13)'; quad([p, q, this.lift(q, Math.min(0.7, H * 0.2)), this.lift(p, Math.min(0.7, H * 0.2))]); ctx.fill();
             ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.35;
             ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
           }
@@ -482,6 +511,14 @@ export class Renderer {
       ctx.beginPath();
       for (let f = 1.0; f < H - 0.4; f += 1.5) { const a = W(0.06, f), e = W(0.94, f); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
       ctx.stroke();
+      // 帷幕牆的直向窗框（每 3 m 一條）與受光的反光帶
+      if (it.mull && z > 1.2) {
+        const L = Math.hypot(q.x - p.x, q.y - p.y), n = Math.floor(L / 3);
+        ctx.strokeStyle = 'rgba(40,55,70,0.35)'; ctx.lineWidth = 0.18; ctx.beginPath();
+        for (let k = 1; k < n; k++) { const a = W(k / n, 0.3), e = W(k / n, H); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.beginPath(); pg(0.08, 0.3, 0, H); ctx.fill();
+      }
       return;
     }
     if (!it.win || abandoned) return;
@@ -1086,6 +1123,27 @@ export class Renderer {
           }
         }
         ctx.setLineDash([]);
+        // 斑馬線：一般道路的每個路口進口（停止線 / 讓路線的路口側），高速公路、匝道、圓環、場內道路不畫
+        if (z > 1.2) {
+          ctx.fillStyle = 'rgba(255,255,255,0.78)';
+          for (const n of nodes) {
+            if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring))) continue;
+            for (const sid of n.segs) {
+              const sg = net.segs.get(sid);
+              if (!sg || sg.T.internal || !sg.T.access) continue;
+              const atA = sg.a === n.id, trim = atA ? sg.ra : sg.rb, hw = halfWidth(sg.T) - 0.9;
+              if (trim < 4 || sg.len < trim * 2 + 6) continue;
+              const q = pointAt(sg.pts, sg.cum, atA ? trim - 2.2 : sg.len - trim + 2.2), nx = -q.dy, ny = q.dx;
+              ctx.beginPath();
+              for (let o = -hw + 0.3; o <= hw - 0.3; o += 1.1) {
+                const cx = q.x + nx * o, cy = q.y + ny * o;
+                ctx.moveTo(cx - q.dx * 1.5 - nx * 0.28, cy - q.dy * 1.5 - ny * 0.28); ctx.lineTo(cx + q.dx * 1.5 - nx * 0.28, cy + q.dy * 1.5 - ny * 0.28);
+                ctx.lineTo(cx + q.dx * 1.5 + nx * 0.28, cy + q.dy * 1.5 + ny * 0.28); ctx.lineTo(cx - q.dx * 1.5 + nx * 0.28, cy - q.dy * 1.5 + ny * 0.28); ctx.closePath();
+              }
+              ctx.fill();
+            }
+          }
+        }
         // 路口前的轉向箭頭（依實際車道連接，玩家調整後會跟著改變）
         if (z > 1.6) for (const n of nodes) {
           if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring))) continue;
@@ -1125,7 +1183,7 @@ export class Renderer {
       this.localTf(x, y, dx, dy);
       const hl = vh.len / 2, hw = vh.w / 2;
       if (vh.fadeIn !== undefined && vh.fadeIn < 1) ctx.globalAlpha = vh.fadeIn;
-      this.carBody(vh.color, vh.len, vh.w, vh.truck, detail);
+      this.carBody(vh.color, vh.len, vh.w, vh.bus ? 'bus' : vh.truck, detail, dx, dy);
       ctx.globalAlpha = 1;
       if (detail) {
         if (vh.braking) {
@@ -1138,13 +1196,34 @@ export class Renderer {
     this.worldTf();
   }
 
-  // 車身（區域座標：x 為車頭方向）：陰影、圓角車身、車頂亮面、前後擋風玻璃
-  carBody(color, len, w, truck, detail) {
+  // 車身（區域座標：x 為車頭方向，(dx, dy) 為車頭在世界座標的方向）：陰影、車身側面、圓角車頂、車頂亮面、前後擋風玻璃
+  // 放大看時車子有高度：先畫往畫面上方拉高的車身側面（較暗），車頂畫在抬高的位置
+  carBody(color, len, w, truck, detail, dx = 1, dy = 0) {
     const ctx = this.ctx, hl = len / 2, hw = w / 2;
     if (detail) { ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(-hl + 0.35, -hw + 0.35, len, w); }
+    if (detail) {
+      const H = (truck === 'bus' ? 3.2 : truck ? 3 : 1.4) * 0.5 * this.hs, ux = (this.up.x * dx + this.up.y * dy) * H, uy = (-this.up.x * dy + this.up.y * dx) * H;
+      const pts = [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw]];
+      ctx.fillStyle = color[0] === '#' ? shade(color, 0.62) : color;
+      ctx.beginPath(); convexHull([...pts.map(([x, y]) => ({ x, y })), ...pts.map(([x, y]) => ({ x: x + ux, y: y + uy }))]).forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); ctx.fill();
+      ctx.save(); ctx.translate(ux, uy); this.carTop(color, len, w, truck); ctx.restore();
+      return;
+    }
+    this.carTop(color, len, w, truck, false);
+  }
+  carTop(color, len, w, truck, detail = true) {
+    const ctx = this.ctx, hl = len / 2, hw = w / 2;
     ctx.fillStyle = color;
     if (detail && ctx.roundRect) { ctx.beginPath(); ctx.roundRect(-hl, -hw, len, w, 0.45); ctx.fill(); } else ctx.fillRect(-hl, -hw, len, w);
     if (!detail) return;
+    if (truck === 'bus') {
+      // 公車：兩側一長排車窗、前後擋風玻璃、車頂空調
+      ctx.fillStyle = 'rgba(30,40,55,0.8)';
+      ctx.fillRect(-hl + 1.2, -hw + 0.12, len - 2.6, 0.45); ctx.fillRect(-hl + 1.2, hw - 0.57, len - 2.6, 0.45);
+      ctx.fillRect(hl - 0.55, -hw + 0.2, 0.4, w - 0.4); ctx.fillRect(-hl + 0.15, -hw + 0.3, 0.3, w - 0.6);
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fillRect(-hl * 0.35, -0.6, len * 0.3, 1.2);
+      return;
+    }
     if (truck) {
       ctx.fillStyle = '#5b6f8a'; ctx.fillRect(hl - 2.2, -hw, 2.2, w);
       ctx.fillStyle = 'rgba(30,40,55,0.8)'; ctx.fillRect(hl - 0.7, -hw + 0.15, 0.45, w - 0.3);
@@ -1167,7 +1246,7 @@ export class Renderer {
       this.localTf(x, y, dx, dy);
       // 開進 / 開出地下停車場：只在坡道最裡面一小段淡出 / 淡入
       ctx.globalAlpha = !f.indoor ? 1 : f.arrive ? clamp((1 - k) / 0.15, 0, 1) : clamp(k / 0.15, 0, 1);
-      this.carBody(f.color, f.len, f.w, f.truck, z > 2.2);
+      this.carBody(f.color, f.len, f.w, f.len > 10 ? 'bus' : f.truck, z > 2.2, dx, dy);
     }
     ctx.globalAlpha = 1;
     this.worldTf();
@@ -1250,6 +1329,15 @@ export class Renderer {
       }
     } else if (sel.type === 'building') {
       const c = sel.obj.corners;
+      if (sel.obj.zone === 'T' && g.transit) for (const ln of g.transit.lines.filter(l => l.depot === sel.obj.id)) {
+        // 沿實際行駛的路段畫（偏到行車方向那一側，來回不同路線分得開）
+        ctx.strokeStyle = ln.color; ctx.lineWidth = Math.max(1.5, 4 / z); ctx.globalAlpha = 0.85; ctx.lineJoin = 'round';
+        for (const k of ln.path || []) {
+          const L = g.net.links.get(k);
+          if (L) this.strokePoly(offsetPoly(L.seg.pts, L.dir * (halfWidth(L.seg.T) * 0.5)));
+        }
+        ctx.globalAlpha = 1;
+      }
       ctx.strokeStyle = '#50dcff';
       ctx.lineWidth = 2 / z;
       ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath(); ctx.stroke();

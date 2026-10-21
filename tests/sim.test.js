@@ -266,5 +266,32 @@ for (const b of ['desert', 'snow', 'tropical']) {
   const gb = makeGame(777, b, 'normal');
   assert(gb.net.segs.size > 3 && gb.city.buildings.length > 3, `生態系 ${b}（${gb.city.outside.length} 個外部連線）`);
 }
+// 大眾運輸：在小鎮劃一塊公車總站，公車要開出來、繞站並載到乘客
+{
+  const gt = makeGame(12345, 'temperate', 'easy', true);
+  connectOutside(gt);
+  const C = gt.city, net = gt.net, c0 = gt.terrain.size / 2;
+  const segs = [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.len > 120).sort((a, b) => Math.hypot(a.pts[0].x - c0, a.pts[0].y - c0) - Math.hypot(b.pts[0].x - c0, b.pts[0].y - c0));
+  for (const s of segs) {
+    for (const side of [1, -1]) { const g0 = C.gridStart(s); const p = C.planStroke('T', s, side, g0, g0 + 60, 8).find(p => p.ok && p.rows >= 5); if (p) { C.addLot('T', s, p.u, side, p.cols, p.rows); break; } }
+    if (C.lots.some(l => l.zone === 'T')) break;
+  }
+  step(gt, 400);
+  const dep = C.buildings.find(b => b.zone === 'T');
+  assert(dep && C.truckSlotsOf(dep).length >= 2, `公車總站蓋好並有公車停車格（${dep ? C.truckSlotsOf(dep).length : 0} 格）`);
+  let maxRun = 0;
+  for (let h = 0; h < 36; h++) { step(gt, 150); maxRun = Math.max(maxRun, gt.traffic.vehicles.filter(v => v.bus).length); }
+  assert(gt.transit.lines.length >= 1 && gt.transit.lines.every(l => l.stops.length >= 2), `自動規劃公車路線（${gt.transit.lines.map(l => l.name + ' ' + l.stops.length + ' 站').join('、')}）`);
+  assert(maxRun >= 1 && gt.transit.stats.riders > 0, `公車開出並載到乘客（最多 ${maxRun} 輛，累計 ${gt.transit.stats.riders} 人）`);
+}
+
+// 空白地圖開局：只有外部連線，沒有分區與建築
+{
+  const gb = makeGame(4321, 'temperate', 'sandbox', false);
+  const { generateWorld } = await import('../js/worldgen.js');
+  generateWorld(gb, { blank: true });
+  assert(gb.city.outside.length >= 2 && !gb.city.lots.length && !gb.city.buildings.length, `空白地圖開局（${gb.city.outside.length} 個外部連線、${gb.city.lots.length} 塊分區）`);
+}
+
 if (failed) { console.error(`${failed} 項失敗`); process.exit(1); }
 console.log('全部通過');

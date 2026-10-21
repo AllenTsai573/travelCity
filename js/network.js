@@ -517,9 +517,12 @@ export class Network {
           b.conflicts.push({ c: a, type: 'merge' });
           continue;
         }
-        if (polyIntersections(a.pts, a.cum, b.pts, b.cum).length) {
-          a.conflicts.push({ c: b, type: 'cross' });
-          b.conflicts.push({ c: a, type: 'cross' });
+        // 交叉：記下交叉點在兩條連接線上的位置（at：自己、other：對方），已經開過交叉點的車不會擋住別人
+        const ints = polyIntersections(a.pts, a.cum, b.pts, b.cum);
+        if (ints.length) {
+          const sa = Math.max(...ints.map(t => t.sA)), sb = Math.max(...ints.map(t => t.sB));
+          a.conflicts.push({ c: b, type: 'cross', at: sa, other: sb });
+          b.conflicts.push({ c: a, type: 'cross', at: sb, other: sa });
         }
       }
     }
@@ -718,6 +721,21 @@ export class Network {
       const last = merged[merged.length - 1];
       if (last && c.sA - last.sA < 2) continue;
       merged.push(c);
+    }
+    // 道路的起點 / 終點只比交叉的道路多出一小截（< 12 m）：直接停在交叉點，
+    // 不會留下一段短短的死路、也不會多出一個十字路口（變成 T 字路口）
+    if (!opts._trimmed && merged.length) {
+      const first = merged[0], last = merged[merged.length - 1];
+      let trimS = !a.node && !a.seg && first.sA < 12, trimE = !b.node && !b.seg && len - last.sA < 12;
+      if (trimS && trimE && first === last) { if (first.sA < len - last.sA) trimE = false; else trimS = false; }
+      if (trimS || trimE) {
+        const s0 = trimS ? first.sA : 0, s1 = trimE ? last.sA : len;
+        if (s1 - s0 >= 10) {
+          const na = trimS ? { x: first.x, y: first.y, seg: first.seg, u: first.u } : a;
+          const nb = trimE ? { x: last.x, y: last.y, seg: last.seg, u: last.u } : b;
+          return this.planRoad(na, nb, null, typeKey, level, { ...opts, pts: cutPoly(pts, cum, s0, s1), _trimmed: true });
+        }
+      }
     }
     const stops = [0, ...merged.map(c => c.sA), len];
     for (let i = 0; i < stops.length - 1; i++) if (stops[i + 1] - stops[i] < 6) return fail('交叉點太近');

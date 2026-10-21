@@ -1,10 +1,12 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
-import { TRIP_SCALE, TRIP_REF, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
+import { TRIP_SCALE, TRIP_REF, SEP_RI, DEMAND_BUILD, DEMAND_ZONE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap, closestOnPoly } from './util.js';
 import { halfWidth } from './network.js';
 import { lotArt, lotAisles, lotParkArea } from './lotart.js';
 
 const ema = (a, x, k) => a + (x - a) * k;
+// 有公車可搭時（起訖附近都有同一條路線的站牌），就算有車也改搭公車的居民比例
+const BUS_SHARE = 0.35;
 
 // 需要場內道路的建築：工業園區（主幹道＋大園區的橫向道路）與附停車場的商業（從臨路開進停車場的車道）
 // 回傳車道終點與橫向道路離路邊的距離（公尺），與 lotart.js 的配置一致
@@ -14,6 +16,8 @@ export function driveway(zone, kind, geo) {
   // 工業：至少 8 格寬才開場內道路（太窄的直接臨路進出）
   if (zone === 'I') return geo.cols >= 8 ? { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null, through: true } : null;
   // 住宅區的巷道（盡頭迴車，不打通）：低密度兩側是宅地；中 / 高密度兩側是停車格，後面才是建物
+  // 公車總站：中央場內車道（兩側是公車停車格）
+  if (zone === 'T') return geo.cols >= 6 ? { end: d - 6 } : null;
   if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R1') return { end: d - 7 };
   if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R2') return { end: d - 7 };
   if (zone === 'R' && kind === null && geo.rows >= 7 && geo.cols >= 8 && geo.zt === 'R3') return { end: d - 7 };
@@ -180,8 +184,16 @@ export class City {
       // 場內道路只給進出這棟建築的車使用（巷道、停車場車道不會被當成迴轉道或捷徑）
       this.markGate(b);
       this.connectPark(b);
+      // 開了場內道路後配置改變（巷道旁的車位），初始停著的車要依新的車位重新停好
+      this.seedParked(b);
     }
     return b;
+  }
+  // 新建築一開始停著的車：住宅大部分的車停在家；工業區卸貨區停著幾輛貨車（之後送貨出去就從這裡開出）
+  seedParked(b) {
+    const sl = this.slotsOf(b), rng = this.game.rng;
+    b.slotOcc = sl.map(s => (b.zone === 'R' && rng.next() < 0.7 ? s.c : null));
+    b.tOcc = this.truckSlotsOf(b).map(() => (b.zone === 'I' && rng.next() < 0.4 ? '#d8d0c0' : b.zone === 'T' ? '#d23c2c' : null));
   }
 
   // 場內道路：工業園區的主幹道（深的再加橫向道路）、停車場的車道；員工、貨車與顧客都開進去
@@ -405,11 +417,7 @@ export class City {
     };
     this.buildings.push(b);
     this.byId.set(b.id, b);
-    // 住宅一開始大部分的車停在家
-    const sl = this.slotsOf(b);
-    if (zone === 'R') sl.forEach((s, i) => { if (this.game.rng.next() < 0.7) b.slotOcc[i] = s.c; });
-    // 工業區一開始卸貨區停著幾輛貨車（之後送貨出去就從這裡開出）
-    if (zone === 'I') b.tOcc.forEach((_, i) => { if (this.game.rng.next() < 0.4) b.tOcc[i] = '#d8d0c0'; });
+    this.seedParked(b);
     this.game.terrain.clearTreesCircle(geo.x, geo.y, geo.rad * 0.8);
     return b;
   }
@@ -645,7 +653,7 @@ export class City {
     const pop = Math.max(1, this.pop), jobs = this.jobsC + this.jobsI;
     const outsideShare = clamp(1 - pop * 0.5 / Math.max(1, jobs), 0.08, 0.85);
     for (const b of this.buildings) {
-      if (b.abandoned) continue;
+      if (b.abandoned || b.zone === 'T') continue;   // 公車總站不產生行程（公車由 transit.js 派車）
       const cap = this.cap(b);
       if (b.zone === 'R') {
         b.acc.work += cap * 0.3 * pWork * k;
@@ -727,6 +735,7 @@ export class City {
       if (trip.worker && trip.from.present > 0) trip.from.present--;
       this.pushTrip(trip.from, trip);
     }
+    if (g.transit) g.transit.update(dt);
     // 生成車輛
     this.spawnFrom(this.buildings, dt, 0.8);
     this.spawnFrom(this.outside, dt, 0.35);
@@ -748,12 +757,17 @@ export class City {
       if (o.spawnCD > 0) continue;
       const trip = o.queue[0];
       if (trip.to.dead || (trip.to.outside && trip.to.seg === null) || o.seg === null) { o.queue.shift(); this.recordFail(trip); continue; }
+      // 搭公車：起訖附近都有同一條路線的站牌時，部分居民（BUS_SHARE）就算有車也改搭公車，回程也搭公車
+      if (!trip.truck && !trip.transit && !trip.mode && o.zone === 'R' && (trip.kind === 'work' || trip.kind === 'shop') && this.game.transit) {
+        trip.mode = this.game.rng.chance(BUS_SHARE) ? 'bus' : 'car';
+        if (trip.mode === 'bus' && this.game.transit.board(trip)) { o.queue.shift(); trip.transit = true; continue; }
+      }
       const r = tr.trySpawn(trip);
       if (r === 'ok') { o.queue.shift(); o.spawnCD = cd; }
       else if (r === 'transit') {
-        // 家裡的車都開走了：搭大眾運輸 / 走路（不產生車，行程照樣完成；回程也不開車）
+        // 家裡的車都開走了：起訖附近有同一條公車路線的站牌就去等公車，否則走路（不產生車；回程也不開車）
         o.queue.shift(); trip.transit = true;
-        this.onTripEnd(trip, true, 300);
+        if (!(this.game.transit && this.game.transit.board(trip))) { if (this.game.transit) this.game.transit.stats.walked++; this.onTripEnd(trip, true, 300); }
       }
       else if (r === 'noroute') {
         // 外部連線尚未接通時，外地來的行程直接取消，不算失敗
@@ -774,6 +788,7 @@ export class City {
     const inds = this.buildings.filter(b => b.zone === 'I' && !b.abandoned);
     let income = 0;
     for (const b of this.buildings) {
+      if (b.zone === 'T') { b.happy = 1; b.workSat = 1; continue; }
       const cap = this.cap(b);
       if (b.zone === 'R') {
         let pol = 0;
@@ -852,7 +867,7 @@ export class City {
     for (const b of this.buildings) {
       if (b.abandoned) continue;
       const c = this.cap(b);
-      if (b.zone === 'R') pop += c; else if (b.zone === 'C') jc += c; else ji += c;
+      if (b.zone === 'R') pop += c; else if (b.zone === 'C') jc += c; else if (b.zone === 'I') ji += c;
     }
     this.pop = pop; this.jobsC = jc; this.jobsI = ji;
     const avgHappy = this.buildings.length ? this.buildings.reduce((s, b) => s + b.happy, 0) / this.buildings.length : 0.7;
@@ -900,11 +915,14 @@ export class City {
   // 已劃設的空地塊依需求發展成建築（不論是否開啟自動發展）
   developLots() {
     const g = this.game, net = g.net, rng = g.rng, comp = this.mainComponent();
+    // 公車總站不看需求，劃了就蓋
+    for (const l of this.lots.filter(l => l.zone === 'T' && net.segs.has(l.seg) && comp.has(net.segs.get(l.seg).a))) this.develop(l);
     for (const z of ['R', 'C', 'I']) {
       const d = this.demand[z];
-      if (d <= 0.05) continue;
+      if (d <= DEMAND_BUILD) continue;
       const cand = this.lots.filter(l => l.zone === z && net.segs.has(l.seg) && comp.has(net.segs.get(l.seg).a));
-      let n = d > 0.6 ? 4 : d > 0.3 ? 3 : 2;
+      // 需求越高一次蓋越多（剛過分水嶺時一次一棟，不會一下子蓋太多又變成荒廢）
+      let n = d > 0.7 ? 3 : d > 0.45 ? 2 : 1;
       while (n-- > 0 && cand.length) this.develop(cand.splice(rng.int(0, cand.length - 1), 1)[0]);
     }
     this.recount();
@@ -913,7 +931,7 @@ export class City {
   // 自動發展：需求高而且沒有空地塊時，自動在路旁劃設大小不一的分區
   autoGrow() {
     const g = this.game, net = g.net, rng = g.rng;
-    const zones = ['R', 'C', 'I'].filter(z => this.demand[z] > 0.1 && this.lots.filter(l => l.zone === z).length < 3)
+    const zones = ['R', 'C', 'I'].filter(z => this.demand[z] > DEMAND_ZONE && this.lots.filter(l => l.zone === z).length < 3)
       .sort((a, b) => this.demand[b] - this.demand[a]);
     if (!zones.length) return;
     const comp = this.mainComponent();
@@ -921,11 +939,17 @@ export class City {
     const segs = [...net.segs.values()].filter(s => s.T.access && s.drawLevel === 0 && net.nodes.get(s.a).level === 0 && net.nodes.get(s.b).level === 0 && s.len > 30 && comp.has(s.a) && !park.has(s.id));
     if (!segs.length) return;
     for (const zone of zones) {
-      const n = this.demand[zone] > 0.6 ? 3 : 2;
+      const n = this.demand[zone] > 0.7 ? 2 : 1;
       let placed = 0;
       for (let tries = 0; tries < 18 && placed < n; tries++) {
         let seg;
-        if (this.buildings.length && rng.chance(0.75)) {
+        if (zone === 'I') {
+          // 工業區：挑離住宅（建築與空地塊）最遠的那幾條路
+          const res = [...this.buildings, ...this.lots].filter(b => b.zone === 'R');
+          const far = s => { const x = (s.bbox.x0 + s.bbox.x1) / 2, y = (s.bbox.y0 + s.bbox.y1) / 2; return res.reduce((m, b) => Math.min(m, Math.hypot(b.x - x, b.y - y)), Infinity); };
+          const ranked = segs.map(s => [far(s), s]).sort((a, b) => b[0] - a[0]);
+          seg = rng.pick(ranked.slice(0, Math.max(1, Math.ceil(ranked.length * 0.25)))).at(1);
+        } else if (this.buildings.length && rng.chance(0.75)) {
           const nb = rng.pick(this.buildings);
           const near = segs.filter(s => Math.abs((s.bbox.x0 + s.bbox.x1) / 2 - nb.x) < 260 && Math.abs((s.bbox.y0 + s.bbox.y1) / 2 - nb.y) < 260);
           seg = near.length ? rng.pick(near) : rng.pick(segs);
@@ -940,8 +964,10 @@ export class City {
         while (r >= 2 && this.canPlaceLot(seg, u, side, cols, r)) r--;
         if (r < 2) continue;
         const geo = this.lotGeom(seg, u, side, cols, r);
-        if (zone === 'R' && this.buildings.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 160 + b.rad)) continue;
-        if (zone === 'I' && this.buildings.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110 + geo.rad)) continue;
+        // 住宅與工業保持距離（建築與還沒蓋的分區都算）
+        const placedAll = [...this.buildings, ...this.lots];
+        if (zone === 'R' && placedAll.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < SEP_RI + geo.rad + b.rad)) continue;
+        if (zone === 'I' && placedAll.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < SEP_RI + geo.rad + b.rad)) continue;
         if (seg.T.rank >= 2 && zone === 'R' && zt === 'R1' && rng.chance(0.5)) continue;
         this.addLot(zt, seg, u, side, cols, r);
         placed++;
@@ -992,6 +1018,8 @@ export class City {
       if (s.slotOcc) b.slotOcc = b.slotOcc.map((_, i) => s.slotOcc[i] || null);
       else if (s.parked !== undefined) b.slotOcc = b.slotOcc.map((_, i) => (i < s.parked ? this.slotsOf(b)[i].c : null));
       if (s.tOcc) b.tOcc = b.tOcc.map((_, i) => s.tOcc[i] || null);
+      // 公車總站：存檔時在路上跑的公車不會存，讀檔後全部停回總站重新派車
+      if (b.zone === 'T') b.tOcc = b.tOcc.map(() => '#d23c2c');
     }
     for (const l of d.lots || []) {
       const seg = net.segs.get(l.seg);

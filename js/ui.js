@@ -19,7 +19,7 @@ const TOOLS = [
   { id: 'zone', icon: '🏘️', name: '分區', key: 'Z' },
   { id: 'bulldoze', icon: '🚧', name: '拆除', key: 'B' },
 ];
-const PURPOSE = { work: '通勤上班', home: '回家', shop: '購物', goods: '貨運（商品）', mat: '貨運（原料）', through: '過境交通', visit: '觀光住宿', return: '卸完貨回程' };
+const PURPOSE = { work: '通勤上班', home: '回家', shop: '購物', goods: '貨運（商品）', mat: '貨運（原料）', through: '過境交通', visit: '觀光住宿', return: '回程', bus: '公車' };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pct = v => Math.round(clamp(v, 0, 1) * 100) + '%';
 const bar = (v, good = true) => {
@@ -117,7 +117,7 @@ export class UI {
         html += `<div class="hint">左鍵連續鋪路 · 右鍵/Esc 結束 · 接近平行 / 45° / 垂直會自動對齊起點道路 · Shift 每 15° 吸附 · Alt 不吸附 · [ ] 切換高度</div>`;
       } else html += `<div class="hint">點擊道路以變更類型（同類單行道則反轉方向）</div>`;
     } else if (t.tool === 'zone') {
-      const zdesc = { R1: '透天、獨棟', R2: '公寓、連棟', R3: '大樓', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機' };
+      const zdesc = { R1: '透天、獨棟', R2: '公寓、連棟', R3: '大樓', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車' };
       html += `<div class="grp">` + ZONE_ORDER.map(k => { const Z = ZONE_TYPES[k]; return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''}" title="${Z.name}：最大 ${Z.max}×${Z.max} 格（每格 6 m）｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>最大 ${Z.max}×${Z.max} · 免費</small></button>`; }).join('')
         + `<button data-sub="zone" data-v="X" class="${t.zone === 'X' ? 'on' : ''}" title="拖曳範圍內的空分區取消"><b>✕ 取消分區</b><small>僅空地</small></button></div>`;
       html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕工業污染與高速公路噪音。</div>`;
@@ -218,8 +218,14 @@ export class UI {
     const g = this.g;
     const name = o => o.outside ? `外部連線：${o.name}` : `${ZONES[o.zone].name}建築 #${o.id}`;
     return {
-      head: `<h3>${v.truck ? '🚚 貨車' : '🚗 汽車'} #${v.id}</h3>`,
-      dyn: () => `
+      head: `<h3>${v.bus ? '🚌 公車' : v.truck ? '🚚 貨車' : '🚗 汽車'} #${v.id}</h3>`,
+      dyn: () => v.bus ? (() => { const ln = g.transit.line(v.bus), st = v.busDest && g.transit.stop(v.busDest.stop); return `
+        <dl>
+          <dt>路線</dt><dd><span style="color:${ln ? ln.color : '#fff'}">■</span> ${ln ? ln.name : '—'}（${ln ? ln.stops.length : 0} 站）</dd>
+          <dt>下一站</dt><dd>${st ? '第 ' + (v.stopIdx + 1) + ' 站' : '—'}${v.dwell > 0 ? '（停靠中）' : ''}</dd>
+          <dt>乘客</dt><dd>${v.pax.length} 人</dd>
+          <dt>車速</dt><dd>${Math.round(v.v * 3.6)} km/h</dd>
+        </dl>`; })() : `
         <dl>
           <dt>目的</dt><dd>${PURPOSE[v.trip.kind]}</dd>
           <dt>出發地</dt><dd>${esc(name(v.trip.from))}</dd>
@@ -238,11 +244,20 @@ export class UI {
   buildingPanel(b) {
     const g = this.g, Z = ZONES[b.zone], cap = g.city.cap(b);
     return {
-      head: `<h3>${b.zone === 'R' ? (b.zt === 'R3' ? '🏢' : '🏠') : b.zone === 'C' ? '🏬' : '🏭'} ${b.zone === 'C' ? SHOP_KINDS[b.kind]?.name || '商店' : b.zone === 'I' ? INDUSTRY_KINDS[b.kind]?.name || '工廠' : ZONE_TYPES[b.zt].name} #${b.id}</h3>
+      head: `<h3>${b.zone === 'T' ? '🚌' : b.zone === 'R' ? (b.zt === 'R3' ? '🏢' : '🏠') : b.zone === 'C' ? '🏬' : '🏭'} ${b.zone === 'C' ? SHOP_KINDS[b.kind]?.name || '商店' : b.zone === 'I' ? INDUSTRY_KINDS[b.kind]?.name || '工廠' : ZONE_TYPES[b.zt].name} #${b.id}</h3>
         <p class="note">${ZONE_TYPES[b.zt].name} · 地塊 ${b.cols}×${b.rows} 格（${b.cols * 6}×${b.rows * 6} m）</p>`,
       dyn: () => {
         let rows = `<dt>等級</dt><dd>${'★'.repeat(b.level)}${'☆'.repeat(3 - b.level)}${b.abandoned ? '（已廢棄）' : ''}</dd>
           <dt>滿意度</dt><dd>${bar(b.happy)} ${pct(b.happy)}</dd>`;
+        if (b.zone === 'T') {
+          const tr = g.transit, lines = tr.lines.filter(l => l.depot === b.id), run = g.traffic.vehicles.filter(v => v.bus && lines.some(l => l.id === v.bus));
+          const stops = new Set(lines.flatMap(l => l.stops)), waiting = [...stops].reduce((a, id) => a + (tr.stop(id)?.queue.length || 0), 0);
+          return `<dl><dt>公車</dt><dd>${run.length} 輛行駛中 / ${g.city.truckSlotsOf(b).length} 個車位</dd>
+            <dt>路線</dt><dd>${lines.map(l => `<span style="color:${l.color}">■</span> ${l.name}（${l.stops.length} 站）`).join('<br>') || '—（附近還沒有住宅或工作地點）'}</dd>
+            <dt>候車人數</dt><dd>${waiting}</dd><dt>車上乘客</dt><dd>${run.reduce((a, v) => a + v.pax.length, 0)}</dd>
+            <dt>累計載客</dt><dd>${tr.stats.riders} 人次（無公車可搭改走路 ${tr.stats.walked} 次）</dd></dl>
+            <p class="note">路線由系統依附近住宅與工作地點自動規劃（每 6 個遊戲小時更新）。家裡車子都開走的居民會走到 350 m 內的站牌搭車。</p>`;
+        }
         if (b.zone === 'R') {
           rows += `<dt>居民</dt><dd>${cap}</dd>
             <dt>通勤成功</dt><dd>${bar(b.workOK)} ${pct(b.workOK)}</dd>
@@ -422,6 +437,8 @@ export class UI {
       <div class="cards" data-group="biome">${Object.entries(BIOMES).map(([k, b], i) => `<label class="cardopt"><input type="radio" name="biome" value="${k}" ${i === 0 ? 'checked' : ''}><span class="sw" style="background:linear-gradient(135deg, ${b.land[0]}, ${b.land[2]} 60%, ${b.waterC[0]})"></span>${b.name}</label>`).join('')}</div>
       <h4>難度</h4>
       <div class="cards">${Object.entries(DIFFICULTY).map(([k, d]) => `<label class="cardopt"><input type="radio" name="diff" value="${k}" ${k === 'normal' ? 'checked' : ''}><b>${d.name}</b><small>${d.unlockAll ? '無限資金' : fmtMoney(d.money)}</small></label>`).join('')}</div>
+      <h4>起始</h4>
+      <div class="cards"><label class="cardopt"><input type="radio" name="start" value="town" checked><b>預設小鎮</b><small>道路與分區已規劃，稍後自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="blank"><b>空白地圖</b><small>只有外部連線，自己從零規劃（不自動發展）</small></label></div>
       <h4>地圖種子</h4>
       <div class="row"><input id="ng-seed" type="number" value="${seed}"><button data-m="rand">🎲</button></div>
       <div class="btns end"><button data-m="${first ? 'help' : 'close'}">${first ? '直接遊玩目前地圖' : '取消'}</button>${this.g.hasSave() ? '<button data-m="load">讀取存檔</button>' : ''}<button class="primary" data-m="start">開始建設</button></div>`);
@@ -452,7 +469,7 @@ export class UI {
         <li><b>升級（U）</b>：直接把既有道路改為其他類型，或反轉單行道方向。</li>
         <li><b>分區（Z）</b>：手動劃設住宅、商業、工業區（也可開啟「自動發展」讓城市自己長）。</li>
         <li><b>熱圖（H）</b>：以顏色顯示各路段壅塞程度。</li>
-        <li><b>俯角（T）</b>：在 45° 斜看與正上方俯視之間切換（右上角「視角」按鈕）。</li>
+        <li><b>俯角（T）</b>：在 55° 斜看與正上方俯視之間切換（右上角「視角」按鈕）。</li>
         <li><b>旋轉視角</b>：<kbd>Q</kbd> / <kbd>E</kbd> 或右上角 ⟲ ⟳ 每次轉 90°；按住滑鼠中鍵左右拖曳可自由旋轉（交流道工具中 Q / E 是旋轉交流道）。</li>
         <li>空白鍵暫停，<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換速度；滑鼠右鍵或 Esc 取消。</li>
       </ul>
@@ -505,7 +522,8 @@ export class UI {
         const biome = document.querySelector('input[name=biome]:checked').value;
         const diff = document.querySelector('input[name=diff]:checked').value;
         const seed = Math.abs(parseInt(document.getElementById('ng-seed').value, 10)) || 1;
-        g.newGame({ seed, biome, difficulty: diff });
+        const start = document.querySelector('input[name=start]:checked')?.value || 'town';
+        g.newGame({ seed, biome, difficulty: diff, start });
         this.modalOpen = false;
         document.getElementById('modal').classList.add('hidden');
         break;

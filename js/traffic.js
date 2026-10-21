@@ -6,6 +6,7 @@ import { LANE_W, VEHICLE_COLORS } from './config.js';
 import { findRoute, routeFromPoint } from './routing.js';
 import { clamp, pointAt } from './util.js';
 import { laneOffset } from './network.js';
+import { BUS_LEN, BUS_W } from './transit.js';
 
 const FREE = { gap: Infinity, lv: 0 };
 
@@ -109,6 +110,7 @@ export class Traffic {
   // ---------- 生成 / 結束 ----------
   // 這輛車實際要停的位置：預約的車位在道路上的對應點（沒有預約就用建築的出入口）
   destOf(v) {
+    if (v.bus) return v.busDest;   // 公車：下一個站牌
     const to = v.trip.to;
     if (!v.slotPt || to.outside) return to;
     const city = this.game.city, ver = this.net.version, list = city.slotSet(to, v.truck).list;
@@ -123,7 +125,8 @@ export class Traffic {
     return v._dest;
   }
 
-  trySpawn(trip) {
+  // busDest：公車的第一站（公車行程不預約目的地車位）
+  trySpawn(trip, busDest = null) {
     if (this.vehicles.length >= MAX_VEHICLES) return 'wait';
     const net = this.net, city = this.game.city, from = trip.from, to = trip.to, truck = !!trip.truck;
     if (!net.segs.get(from.seg) || !net.segs.get(to.seg)) return 'noroute';
@@ -145,14 +148,14 @@ export class Traffic {
     if (!leaves.length) leaves.push(null);
     // 目的地是建築：先預約一個空車位（貨車預約卸貨區），開到車位對應的路邊
     let slotIdx = null, slotPt = null;
-    if (city && to.zone && !to.dead) {
+    if (city && to.zone && !to.dead && !busDest) {
       const { list, occ, res } = city.slotSet(to, truck), free = [];
       for (let i = 0; i < list.length; i++) if (!occ[i] && !res[i]) free.push(i);
       if (free.length) { slotIdx = free[Math.floor(this.game.rng.next() * free.length)]; slotPt = list[slotIdx]; }
     }
     const rd = slotPt ? city.slotRoad(to, slotIdx, truck) : null;
-    const destPt = rd ? { seg: rd.seg, u: rd.u, id: to.id } : to;
-    const len = truck ? 7.5 : 4.6;
+    const destPt = busDest || (rd ? { seg: rd.seg, u: rd.u, id: to.id } : to);
+    const len = trip.bus ? BUS_LEN : truck ? 7.5 : 4.6;
     let routed = false;
     for (const leave of leaves) {
       const fromPt = leave ? leave.pt : from;
@@ -169,6 +172,7 @@ export class Traffic {
         if (ok) {
           const v = this.createVehicle(truck);
           v.route = r.path; v.ri = 0; v.trip = trip;
+          if (trip.bus) Object.assign(v, { bus: trip.bus, color: trip.color, len: BUS_LEN, w: BUS_W, a: 1, b: 2, T: 1.6, v0f: 0.85, stopIdx: 0, pax: [], busDest, dwell: 0 });
           v.v = from.outside ? Math.min(lane.speed * 0.7, 14) : 0;
           v.fadeIn = from.outside ? 1 : 0;   // 沒有停車位的建築：車由路邊慢慢出現
           if (rd) { v.slotIdx = slotIdx; v.slotPt = slotPt; city.slotSet(to, truck).res[slotIdx] = true; }
@@ -177,7 +181,7 @@ export class Traffic {
           // 從停車位開出來，到路邊才加入車流（車子就是原本停著的那輛）
           if (leave) {
             city.slotSet(from, truck).occ[leave.idx] = null;
-            v.color = leave.color;
+            if (!trip.bus) v.color = leave.color;
             const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
             const f = this.parkPath(p, leave.slot, v, false, from, leave.idx);
             this.fx.push(f);
@@ -231,11 +235,46 @@ export class Traffic {
     this.endTrip(v, ok);
   }
   endTrip(v, ok) {
+    // 公車被移除（塞太久、道路被拆）：車上乘客改走路，公車回到總站的停車格（不會就此少一輛）
+    if (v.bus) {
+      for (const p of v.pax || []) this.game.transit.walk(p.trip);
+      const d = v.trip.from, st = this.game.city.slotSet(d, true), i = st.list.findIndex((_, k) => !st.occ[k] && !st.res[k]);
+      if (!d.dead && i >= 0) st.occ[i] = v.color;
+      this.removeFromTrack(v); v.dead = true; v.track = null; v.leaving = 0;
+      return;
+    }
     this.removeFromTrack(v);
     v.dead = true;
     v.track = null;
     v.leaving = 0;
     if (this.game.city) this.game.city.onTripEnd(v.trip, ok, v.age);
+  }
+
+  // 從公車總站派一輛停著的公車，開往路線的第一站
+  spawnBus(d, line) {
+    const transit = this.game.transit, st = transit.stop(line.stops[0]);
+    if (!st || !this.game.city.parkedCount(d, true)) return 'wait';
+    return this.trySpawn({ kind: 'bus', from: d, to: d, truck: true, bus: line.id, color: line.color }, { seg: st.seg, u: st.u, id: d.id, stop: st.id });
+  }
+  nextBusStop(v) {
+    const transit = this.game.transit, line = transit.line(v.bus);
+    if (!line) { this.retireBus(v); return; }
+    v.stopIdx = (v.stopIdx + 1) % line.stops.length;
+    const st = transit.stop(line.stops[v.stopIdx]);
+    if (!st) { this.retireBus(v); return; }
+    v.busDest = { seg: st.seg, u: st.u, id: v.trip.from.id, stop: st.id };
+    v.dwell = 0; v.waitT = 0;
+    this.reroute(v);
+  }
+  // 路線取消：公車載著的乘客改走路，公車開回總站的停車格
+  retireBus(v) {
+    const d = v.trip.from, city = this.game.city;
+    for (const p of v.pax || []) this.game.transit.walk(p.trip);
+    v.bus = null; v.pax = []; v.busDest = null; v._dest = null;
+    v.trip = { kind: 'return', from: d, to: d, truck: true };
+    const st = city.slotSet(d, true), i = st.list.findIndex((_, k) => !st.occ[k] && !st.res[k]);
+    if (i >= 0) { v.slotIdx = i; v.slotPt = st.list[i]; st.res[i] = true; }
+    this.reroute(v);
   }
 
   // 停進 / 開出路邊車位時要橫越的其他車道是否淨空：檢查自己的車道與車位那一側路邊之間的車道，
@@ -487,7 +526,8 @@ export class Traffic {
     const gapT = c.from.seg.T.internal ? 3.2 - 1.6 * clamp(v.waitT / 15, 0, 1) : 4.5 - 2.3 * clamp(v.waitT / 30, 0, 1);
     for (const cf of c.conflicts) {
       const oc = cf.c;
-      if (cf.type === 'cross' && oc.vehs.length) return false;
+      // 交叉方向的連接線上還有車沒完全開過交叉點（車尾離交叉點不到 2.5 m）才要等；已經開過去的不擋
+      if (cf.type === 'cross' && oc.vehs.some(w => w.s - w.len < cf.other + 2.5)) return false;
       const w = oc.from.vehs[0];
       if (!w || w === v || w.nextConn !== oc) continue;
       const wd = oc.from.len - w.s;
@@ -671,6 +711,8 @@ export class Traffic {
       const tr = v.track;
       if (tr.kind === 'lane') {
         if (v.ri >= v.route.length - 1) {
+          // 公車開過頭（站牌不在這條車道上）：重新規劃到站牌的路線
+          if (v.bus) { v.s = tr.len - 0.05; v.v = 0; this.reroute(v); return; }
           this.finish(v, !v.lost && tr.link.seg.id === this.destOf(v).seg);
           return;
         }
@@ -749,6 +791,13 @@ export class Traffic {
       this.advance(v);
       if (v.dead) { anyDead = true; continue; }
       const tr = v.track;
+      if (v.bus && tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === v.busDest.seg && v.s >= this.destS(v)) {
+        // 公車到站：停在站牌前上下客，時間到開往下一站
+        if (!v.dwell) { const st = this.game.transit.stop(v.busDest.stop); v.dwell = st ? this.game.transit.exchange(v, st) : 1; }
+        v.s = this.destS(v); v.v = 0; v.dwell -= dt;
+        if (v.dwell <= 0) this.nextBusStop(v);
+        continue;
+      }
       if (tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === this.destOf(v).seg && v.s >= this.destS(v)) {
         // 車位在路的另一側：停在原地等要橫越的車道淨空（最多 6 秒，免得停車場裡互等）
         const ahead = v.idx > 0 ? tr.vehs[v.idx - 1] : null;

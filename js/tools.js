@@ -233,7 +233,28 @@ export class Tools {
       const n = net.nodeNear(x, y, Math.max(4, 14 / z));
       if (n) return { x: n.x, y: n.y, node: n.id, level: n.level };
       const s = net.segNear(x, y, Math.max(1.5, 8 / z), 'any');
-      if (s && Math.abs(s.h - Math.round(s.h)) < 0.2) return { x: s.x, y: s.y, seg: s.seg.id, u: s.u, level: Math.round(s.h) };
+      if (s && Math.abs(s.h - Math.round(s.h)) < 0.2) {
+        const lv = Math.round(s.h);
+        // 鋪路中接到另一條路：接點沿那條路滑動，讓新路剛好垂直（或 45°）接上，或與起點道路平行 / 垂直
+        if (this.pts.length && !this.curve && this.tool === 'road') {
+          const a = this.pts[this.pts.length - 1], p = pointAt(s.seg.pts, s.seg.cum, s.u), tol = Math.max(3, 14 / z);
+          const ta = Math.atan2(p.dy, p.dx), ref = this.refAngle(this.pts[0]), cands = [];
+          for (let k = 0; k < 8; k++) cands.push(ta + k * Math.PI / 4, ref + k * Math.PI / 4);
+          let best = null;
+          for (const ang of cands) {
+            const dx = Math.cos(ang), dy = Math.sin(ang), den = dx * p.dy - dy * p.dx;
+            if (Math.abs(den) < 0.2) continue;   // 幾乎與那條路平行：接不上
+            const k = ((p.x - a.x) * p.dy - (p.y - a.y) * p.dx) / den;
+            if (k < 10) continue;
+            const q = { x: a.x + dx * k, y: a.y + dy * k }, d = Math.hypot(q.x - x, q.y - y);
+            if (d > tol || (best && d >= best.d)) continue;
+            const c = closestOnPoly(s.seg.pts, s.seg.cum, q);
+            if (c.d < 1 && c.s > 2 && c.s < s.seg.len - 2) best = { d, x: c.x, y: c.y, u: c.s };
+          }
+          if (best) return { x: best.x, y: best.y, seg: s.seg.id, u: best.u, level: lv, snapAng: true };
+        }
+        return { x: s.x, y: s.y, seg: s.seg.id, u: s.u, level: lv };
+      }
     }
     // 對齊地塊 / 建築的後緣或側邊：道路剛好貼著地塊（中間留 1.5 m 人行道）
     if (!this.mouse.alt && this.tool === 'road') {
@@ -346,8 +367,14 @@ export class Tools {
         if (this.zStroke) {
           const st = this.zStroke;
           if (st.rect) { this.setTip(`取消分區：${st.rect.cols}×${st.rect.rows} 格`); break; }
-          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1;
-          this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : ''), !ok.length);
+          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1, Z = ZONE_TYPES[this.zone];
+          // 說明是什麼限制了大小：分區最深格數、後方的道路 / 分區 / 建築 / 水域、這段路到路口為止
+          const why = [];
+          if (st.rows > Z.max) why.push(`${Z.name}最深 ${Z.max} 格`);
+          const want = Math.min(Math.max(2, st.rows), Z.max), short = ok.find(p => p.rows < want);
+          if (short) why.push('往內' + (this.g.city.canPlaceLot(st.seg, short.u, short.side, short.cols, short.rows + 1) || '受限'));
+          if (st.past) why.push('這段路到路口為止，跨過路口要另外畫');
+          this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : '') + (why.length ? `（${why.join('；')}）` : ''), !ok.length);
           break;
         }
         const a = this.zoneAnchor(m.x, m.y);
@@ -392,10 +419,11 @@ export class Tools {
     }
   }
 
+  // 游標下的路口：三條以上道路交會才算（連續鋪設的道路中間的轉折點不是路口，沒有號誌 / 路權可設定）
   nodeAt(x, y) {
     let best = null, bd = Infinity;
     for (const n of this.net.nodes.values()) {
-      if (n.segs.length < 2) continue;
+      if (n.segs.length < 3) continue;
       const d = Math.hypot(n.x - x, n.y - y);
       const r = Math.max(n.radius + 4, 8 / this.cam.z);
       if (d < r && d < bd) { bd = d; best = n; }
@@ -458,9 +486,9 @@ export class Tools {
     const signed = ((x - p.x) * -p.dy + (y - p.y) * p.dx) * sd;
     const g0 = this.g.city.gridStart(s);
     const nCells = Math.floor((s.len - s.rb - g0) / CELL + 1e-6);
-    const i = clamp(Math.floor((c.s - g0) / CELL), 0, Math.max(0, nCells - 1));
+    const raw = Math.floor((c.s - g0) / CELL), i = clamp(raw, 0, Math.max(0, nCells - 1));
     const depth = Math.max(1, Math.ceil((signed - halfWidth(s.T) - 1.5) / CELL));
-    return { seg: s, side: sd, i, depth, nCells, g0, geo: this.g.city.lotGeom(s, g0 + (i + 0.5) * CELL, sd, 1, 1) };
+    return { seg: s, side: sd, i, depth, nCells, g0, past: raw !== i, geo: this.g.city.lotGeom(s, g0 + (i + 0.5) * CELL, sd, 1, 1) };
   }
   zoneStart() {
     const a = this.zoneAnchor(this.mouse.x, this.mouse.y);
@@ -473,7 +501,7 @@ export class Tools {
     if (!this.net.segs.has(st.seg.id)) { this.zStroke = null; return; }
     const c = this.zoneCell(st.seg, m.x, m.y, st.side);
     if (c.i !== st.i0 || c.depth !== st.rows) st.moved = true;
-    st.i1 = c.i; st.rows = c.depth;
+    st.i1 = c.i; st.rows = c.depth; st.past = c.past;
     const s = st.seg, a = st.g0 + Math.min(st.i0, st.i1) * CELL, b = st.g0 + (Math.max(st.i0, st.i1) + 1) * CELL;
     if (this.zone === 'X') st.rect = city.lotGeom(s, (a + b) / 2, st.side, Math.round((b - a) / CELL), Math.max(1, st.rows));
     else st.plan = city.planStroke(this.zone, s, st.side, a, b, st.rows);

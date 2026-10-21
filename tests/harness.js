@@ -6,6 +6,7 @@ import { Network } from '../js/network.js';
 import { Traffic } from '../js/traffic.js';
 import { City } from '../js/city.js';
 import { generateWorld, snapAt } from '../js/worldgen.js';
+import { Transit } from '../js/transit.js';
 
 export function makeGame(seed, biome, diff, gen = true, size = MAP_SIZE) {
   const g = {
@@ -21,6 +22,7 @@ export function makeGame(seed, biome, diff, gen = true, size = MAP_SIZE) {
   g.net = new Network(g);
   g.city = new City(g);
   g.traffic = new Traffic(g);
+  g.transit = new Transit(g);
   if (gen) generateWorld(g);
   return g;
 }

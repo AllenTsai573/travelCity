@@ -11,6 +11,7 @@
   --R: #5fae68;
   --C: #4b8fd0;
   --I: #cf9a35;
+  --T: #9a62c8;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #1a2230; color: var(--fg);
@@ -42,6 +43,8 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 #demand .col { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--dim); }
 #demand .track { position: relative; width: 12px; height: 64px; background: rgba(255,255,255,0.06); border-radius: 3px; }
 #demand .track::after { content: ''; position: absolute; left: -2px; right: -2px; top: 50%; height: 1px; background: rgba(255,255,255,0.3); }
+/* 分水嶺：需求條超過這條虛線（DEMAND_BUILD = 0.2）才會蓋房子 */
+#demand .track::before { content: ''; position: absolute; left: -3px; right: -3px; top: 40%; border-top: 1px dashed rgba(255,255,255,0.6); z-index: 1; }
 #demand i { position: absolute; left: 0; right: 0; border-radius: 2px; }
 #d-R { background: var(--R); } #d-C { background: var(--C); } #d-I { background: var(--I); }
 #demand i.negd { opacity: 0.35; }
@@ -79,6 +82,7 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 #subbar .zone-R.on { border-color: var(--R); background: rgba(95,174,104,0.25); }
 #subbar .zone-C.on { border-color: var(--C); background: rgba(75,143,208,0.25); }
 #subbar .zone-I.on { border-color: var(--I); background: rgba(207,154,53,0.25); }
+#subbar .zone-T.on { border-color: var(--T); background: rgba(154,98,200,0.25); }
 #subbar .hint { font-size: 12px; color: var(--dim); }
 #subbar .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
 

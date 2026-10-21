@@ -9,6 +9,7 @@ import { Renderer } from './render.js';
 import { Tools } from './tools.js';
 import { UI } from './ui.js';
 import { generateWorld } from './worldgen.js';
+import { Transit } from './transit.js';
 
 const SAVE_KEY = 'travelcity_save_v1';
 
@@ -73,17 +74,22 @@ class Game {
     this.net = new Network(this);
     this.city = new City(this);
     this.traffic = new Traffic(this);
+    this.transit = new Transit(this);
     this.simAcc = 0;
   }
 
-  newGame({ seed, biome, difficulty }) {
+  // start：'town' 預設小鎮（道路與分區已規劃，6 個遊戲小時後才開始有人進駐）；'blank' 空白地圖（只有外部連線、不自動發展）
+  newGame({ seed, biome, difficulty, start = 'town' }) {
     this.setup(seed, biome, difficulty);
-    // 開局：小鎮的道路與分區已規劃好，先不蓋建築；6 個遊戲小時後才開始有人進駐（避免一開始就有分區荒廢）
-    generateWorld(this, { empty: true });
+    const blank = start === 'blank';
+    generateWorld(this, blank ? { blank: true } : { empty: true });
     this.city.growStart = this.time + 360;
-    Object.assign(this.renderer.cam, { x: MAP_SIZE / 2, y: MAP_SIZE / 2, z: 1.1 });
+    this.autoGrow = !blank;
+    Object.assign(this.renderer.cam, { x: MAP_SIZE / 2, y: MAP_SIZE / 2, z: blank ? 0.5 : 1.1 });
     this.afterLoad();
-    this.notify(`歡迎來到${this.terrain.biome.name}！小鎮的分區已經劃好，約 6 個遊戲小時後開始有人進駐。`, 'good');
+    this.notify(blank
+      ? `歡迎來到${this.terrain.biome.name}！這是空白地圖：從地圖邊緣的外部連線開始鋪路、劃分區吧（自動發展已關閉）。`
+      : `歡迎來到${this.terrain.biome.name}！小鎮的分區已經劃好，約 6 個遊戲小時後開始有人進駐。`, 'good');
   }
 
   afterLoad() {

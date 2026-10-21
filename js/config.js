@@ -87,18 +87,25 @@ export const ZONES = {
   R: { name: '住宅', w: 16, d: 18, cap: [0, 6, 14, 26], color: ['#7bc47f', '#5fae68', '#3f9150'], roof: ['#e9d9b8', '#d9b48a', '#c98d6b'] },
   C: { name: '商業', w: 22, d: 22, cap: [0, 5, 12, 22], color: ['#6aa9e0', '#4b8fd0', '#2f73b8'], roof: ['#bcd6ee', '#93b9df', '#6f9bcc'] },
   I: { name: '工業', w: 30, d: 30, cap: [0, 8, 18, 32], color: ['#e0b24f', '#cf9a35', '#b5801f'], roof: ['#b8b2a6', '#a39c90', '#8c857a'] },
+  T: { name: '大眾運輸', w: 30, d: 30, cap: [0, 4, 8, 12], color: ['#b07cd8', '#9a62c8', '#7f4bb0'], roof: ['#c9c3b5', '#c9c3b5', '#c9c3b5'] },
 };
 
 // 分區格子：每格 6 m × 6 m，沿道路排列；玩家一次拖曳的範圍會依各分區的最大地塊切成數塊
 export const CELL = 6;
+// 住宅與工業之間至少保持的距離（公尺，地塊邊緣到邊緣的概略值；開局與自動發展都遵守）
+export const SEP_RI = 250;
+// 需求的分水嶺：需求超過 DEMAND_BUILD 才在已劃設的空地塊蓋房子；超過 DEMAND_ZONE 才（自動發展時）自動劃新的分區
+export const DEMAND_BUILD = 0.2, DEMAND_ZONE = 0.35;
 export const ZONE_TYPES = {
   R1: { zone: 'R', name: '低密度住宅', short: '低密度', max: 12, per: [0.45, 0.65, 0.85] },
   R2: { zone: 'R', name: '中密度住宅', short: '中密度', max: 12, per: [0.8, 1.15, 1.5] },
   R3: { zone: 'R', name: '高密度住宅', short: '高密度', max: 24, per: [1.0, 1.5, 2.0] },
   C:  { zone: 'C', name: '商業區', short: '商業', max: 30, per: [0.22, 0.38, 0.55] },
   I:  { zone: 'I', name: '工業區', short: '工業', max: 32, per: [0.16, 0.26, 0.38] },
+  // 大眾運輸：公車總站（最大 16×16 格），公車路線由系統依住宅與工作地點自動規劃
+  T:  { zone: 'T', name: '公車總站', short: '大眾運輸', max: 16, per: [0.1, 0.12, 0.15] },
 };
-export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I'];
+export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T'];
 // 商業：15×15 格以上才有機會出現大型量販店 / 購物中心；工業的功能隨機
 export const SHOP_KINDS = {
   shops:  { name: '商店街', jobs: 1, shop: 1 },

@@ -1,6 +1,6 @@
 // 初始世界：外部連線（地圖邊緣）與市中心的小聚落
 import { RNG } from './util.js';
-import { CELL } from './config.js';
+import { CELL, SEP_RI } from './config.js';
 
 export function snapAt(net, p) {
   const n = net.nodeNear(p.x, p.y, 3);
@@ -11,6 +11,7 @@ export function snapAt(net, p) {
 }
 
 // opts.empty：初始分區只劃好、先不蓋建築（遊戲開局用；測試沿用直接蓋好的小鎮）
+// opts.blank：空白地圖，只有外部連線（沒有小鎮與分區）
 export function generateWorld(g, opts = {}) {
   const net = g.net, T = g.terrain, S = T.size, c = S / 2;
   const rng = new RNG(g.seed + 77);
@@ -43,8 +44,10 @@ export function generateWorld(g, opts = {}) {
     }
   }
   net.rebuild();
+  if (opts.blank) { g.money = savedMoney; return; }
 
-  // 市中心小鎮：棋盤狀街道（兩條大道十字交叉＋街道）
+  // 市中心小鎮：棋盤狀街道。中央大道十字交叉、外圈一圈大道，其餘為街道；
+  // 街廓 240 × 180 m，夠深的一側可以劃到 24 格（144 m）的高密度分區
   const ang = rng.range(-0.35, 0.35);
   const u = { x: Math.cos(ang), y: Math.sin(ang) }, v = { x: -Math.sin(ang), y: Math.cos(ang) };
   const P = (a, b) => ({ x: c + u.x * a + v.x * b, y: c + u.y * a + v.y * b });
@@ -55,13 +58,10 @@ export function generateWorld(g, opts = {}) {
   };
   // 一條街分成數段（每個街廓一段）鋪，碰到水域時只有那一段失敗，其餘仍然相連
   const street = (pts, type) => { for (let i = 0; i + 1 < pts.length; i++) road(pts[i], pts[i + 1], type); };
-  const xs = [-420, -240, 0, 240, 420], ys = [-300, -150, 0, 150, 300];
-  street(xs.map(a => P(a, 0)), 'avenue');
-  street(ys.map(b => P(0, b)), 'avenue');
-  for (const a of [-240, 240]) street(ys.map(b => P(a, b)), 'street');
-  for (const b of [-150, 150]) street(xs.map(a => P(a, b)), 'street');
-  street(ys.map(b => P(-420, b)), 'street');
-  street([-150, 0, 150].map(b => P(420, b)), 'street');
+  const xs = [-720, -480, -240, 0, 240, 480, 720], ys = [-540, -360, -180, 0, 180, 360, 540];
+  const avX = new Set([0, -480, 480]), avY = new Set([0, -360, 360]);
+  for (const a of xs) street(ys.map(b => P(a, b)), avX.has(a) ? 'avenue' : 'street');
+  for (const b of ys) street(xs.map(a => P(a, b)), avY.has(b) ? 'avenue' : 'street');
   net.rebuild();
 
   // 小鎮最大的連通區
@@ -109,7 +109,7 @@ export function generateWorld(g, opts = {}) {
 
   // 初始建築：較大的分區
   const city = g.city;
-  const segs = () => [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.drawLevel === 0 && s.len > 40 && Math.hypot((s.bbox.x0 + s.bbox.x1) / 2 - c, (s.bbox.y0 + s.bbox.y1) / 2 - c) < 650);
+  const segs = () => [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.drawLevel === 0 && s.len > 40 && Math.hypot((s.bbox.x0 + s.bbox.x1) / 2 - c, (s.bbox.y0 + s.bbox.y1) / 2 - c) < 800);
   const place = (zt, count, size) => {
     let n = 0;
     for (let tries = 0; tries < 900 && n < count; tries++) {
@@ -125,11 +125,11 @@ export function generateWorld(g, opts = {}) {
       if (r < Math.max(2, rows - 4)) continue;
       const geo = city.lotGeom(s, uu, side, cols, r);
       // 工業放在小鎮外圍，住宅與工業保持距離
-      if (zt === 'I' && Math.hypot(geo.x - c, geo.y - c) < 300) continue;
+      if (zt === 'I' && Math.hypot(geo.x - c, geo.y - c) < 450) continue;
       // 住宅與工業保持距離（建築或還沒蓋的分區都算）
       const placed = [...city.buildings, ...city.lots];
-      if (zt === 'I' && placed.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110 + geo.rad)) continue;
-      if (zt !== 'I' && zt !== 'C' && placed.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 90 + b.rad)) continue;
+      if (zt === 'I' && placed.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < SEP_RI + geo.rad + b.rad)) continue;
+      if (zt !== 'I' && zt !== 'C' && placed.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < SEP_RI + geo.rad + b.rad)) continue;
       const lot = city.addLot(zt, s, uu, side, cols, r);
       if (!opts.empty) city.develop(lot);
       n++;

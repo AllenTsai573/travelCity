@@ -619,31 +619,43 @@ export class Renderer {
     const selLane = g.ui.jSelLane;
     ctx.lineCap = 'round';
     const turnCol = { L: '#ffb74d', R: '#81c784', S: '#e0e0e0', U: '#ce93d8', MR: '#90caf9', ML: '#90caf9' };
+    ctx.lineJoin = 'round';
+    // 深色底線讓連接線在柏油上更清楚
+    for (const c of node.conns) {
+      const hl = selLane && c.from === selLane;
+      if (selLane && !hl) continue;
+      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      ctx.lineWidth = hl ? 0.95 : 0.7;
+      this.strokePoly(c.pts);
+    }
     for (const c of node.conns) {
       const hl = selLane && c.from === selLane;
       ctx.strokeStyle = hl ? '#50dcff' : turnCol[c.turn];
-      ctx.globalAlpha = selLane && !hl ? 0.25 : 0.9;
-      ctx.lineWidth = hl ? 0.7 : 0.45;
+      ctx.globalAlpha = selLane && !hl ? 0.25 : 0.95;
+      ctx.lineWidth = hl ? 0.55 : 0.38;
       this.strokePoly(c.pts);
+      // 箭頭放在接近終點處，順著曲線方向
       ctx.fillStyle = ctx.strokeStyle;
-      const p = pointAt(c.pts, c.cum, c.len);
+      const p = pointAt(c.pts, c.cum, Math.max(0, c.len - 1.1));
+      const sz = hl ? 1.1 : 0.9;
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x - p.dx * 1.4 - p.dy * 0.7, p.y - p.dy * 1.4 + p.dx * 0.7);
-      ctx.lineTo(p.x - p.dx * 1.4 + p.dy * 0.7, p.y - p.dy * 1.4 - p.dx * 0.7);
+      ctx.moveTo(p.x + p.dx * sz, p.y + p.dy * sz);
+      ctx.lineTo(p.x - p.dx * sz * 0.6 - p.dy * sz * 0.65, p.y - p.dy * sz * 0.6 + p.dx * sz * 0.65);
+      ctx.lineTo(p.x - p.dx * sz * 0.6 + p.dy * sz * 0.65, p.y - p.dy * sz * 0.6 - p.dx * sz * 0.65);
+      ctx.closePath();
       ctx.fill();
     }
     ctx.globalAlpha = 1;
     for (const L of net.inLinks(node)) for (const lane of L.lanes) {
       const p = lane.pts[lane.pts.length - 1];
       ctx.fillStyle = lane === selLane ? '#50dcff' : '#ff8a3d';
-      ctx.beginPath(); ctx.arc(p.x, p.y, 0.95, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x, p.y, 0.75, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = '#111'; ctx.lineWidth = 0.2; ctx.stroke();
     }
     for (const L of net.outLinks(node)) for (const lane of L.lanes) {
       const p = lane.pts[0];
       ctx.fillStyle = selLane ? '#7cf29a' : '#2fbf71';
-      ctx.beginPath(); ctx.arc(p.x, p.y, 0.95, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x, p.y, 0.75, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = '#111'; ctx.lineWidth = 0.2; ctx.stroke();
     }
     ctx.strokeStyle = 'rgba(80,220,255,0.6)';

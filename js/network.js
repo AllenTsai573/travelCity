@@ -184,7 +184,13 @@ export class Network {
       if (!sameLanes) return maxHW * 1.4 + 4;
       return maxHW * 0.9 + 2.5;
     }
-    return maxHW + 3;
+    // 路口範圍依最小夾角決定：斜交路口的重疊區較長，車道需在重疊區外才開始
+    let minAng = Math.PI;
+    const dirs = segs.map(sg => { const d = this.segDirAt(sg, node.id); const L = Math.hypot(d.x, d.y) || 1; return { x: d.x / L, y: d.y / L }; });
+    for (let i = 0; i < dirs.length; i++) for (let j = i + 1; j < dirs.length; j++) {
+      minAng = Math.min(minAng, Math.acos(clamp(dirs[i].x * dirs[j].x + dirs[i].y * dirs[j].y, -1, 1)));
+    }
+    return clamp((maxHW + 1) / Math.tan(Math.max(minAng, 0.2) / 2) + 2, maxHW + 3, 45);
   }
 
   updateSegGeom(seg) {
@@ -273,13 +279,26 @@ export class Network {
     const t0 = endTangent(from), t3 = startTangent(to);
     const d = Math.hypot(P3.x - P0.x, P3.y - P0.y);
     let pts;
+    const ang = Math.acos(clamp(t0.x * t3.x + t0.y * t3.y, -1, 1));
     if (d < 0.05) pts = [{ x: P0.x, y: P0.y }, { x: P3.x + t3.x * 0.02, y: P3.y + t3.y * 0.02 }];
     else {
-      const k = turn === 'U' ? Math.max(d * 0.9, LANE_W * 1.6) : d * 0.42;
-      pts = cubicPts(P0, { x: P0.x + t0.x * k, y: P0.y + t0.y * k }, { x: P3.x - t3.x * k, y: P3.y - t3.y * k }, P3, clamp(Math.ceil(d / 1.5), 3, 24));
+      // 控制柄長度：轉彎時取進出車道方向線的交點，依轉角近似圓弧（90° 時為 0.552R），
+      // 不會外拋或在出口處勾回；近乎直行（含換車道的 S 形）則用弦長的 0.4 倍
+      let k0 = d * 0.4, k1 = d * 0.4;
+      if (turn === 'U') k0 = k1 = Math.max(d * 0.9, LANE_W * 1.6);
+      else if (ang > 0.2) {
+        const dx = P3.x - P0.x, dy = P3.y - P0.y;
+        const den = t0.x * t3.y - t0.y * t3.x;
+        const a = (dx * t3.y - dy * t3.x) / den, b = (t0.x * dy - t0.y * dx) / den;
+        if (a > 0.1 && b > 0.1) {
+          const f = (4 / 3) * Math.tan(ang / 4) / Math.tan(ang / 2);
+          k0 = Math.min(a * f, d); k1 = Math.min(b * f, d);
+        }
+      }
+      const est = d + (k0 + k1) * 0.3;
+      pts = cubicPts(P0, { x: P0.x + t0.x * k0, y: P0.y + t0.y * k0 }, { x: P3.x - t3.x * k1, y: P3.y - t3.y * k1 }, P3, clamp(Math.ceil(est / 0.75), 8, 48));
     }
     const cum = polyCum(pts);
-    const ang = Math.acos(clamp(t0.x * t3.x + t0.y * t3.y, -1, 1));
     let vmax = Math.min(from.speed, to.speed);
     if (ang > 0.15 && d > 0.05) {
       const R = d / (2 * Math.sin(ang / 2) + 1e-6);
@@ -322,7 +341,7 @@ export class Network {
         }
         const dOut = startTangent(outL.lanes[0]);
         const ang = Math.atan2(dIn.x * dOut.y - dIn.y * dOut.x, dIn.x * dOut.x + dIn.y * dOut.y);
-        if (Math.abs(ang) > 2.75) continue;
+        if (Math.abs(ang) > 2.45) continue; // 超過 140° 的急轉不允許（會畫成打結的迴圈）
         cands.push({ outL, ang, cls: Math.abs(ang) < 0.55 ? 'S' : ang > 0 ? 'R' : 'L' });
       }
       per.set(inL, cands);

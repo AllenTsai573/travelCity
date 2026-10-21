@@ -18,7 +18,8 @@ class Game {
     this.renderer = new Renderer(this, this.canvas);
     this.ui = new UI(this);
     this.tools = new Tools(this, this.canvas);
-    this.speed = 1;
+    // 一般速度為 1.5 倍模擬速度（▶▶ 3 倍、▶▶▶ 8 倍）
+    this.speed = 1.5;
     this.paused = false;
     this.heatmap = false;
     this.autoGrow = true;

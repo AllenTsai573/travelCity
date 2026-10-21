@@ -178,7 +178,7 @@ export class Tools {
     if (map[k] && !e.ctrlKey && !e.metaKey) { this.setTool(map[k]); return; }
     if (k === 'escape') this.cancel();
     else if (k === ' ') { e.preventDefault(); this.g.togglePause(); }
-    else if (k === '1') this.g.setSpeed(1);
+    else if (k === '1') this.g.setSpeed(1.5);
     else if (k === '2') this.g.setSpeed(3);
     else if (k === '3') this.g.setSpeed(8);
     else if (k === 'h') this.g.toggleHeatmap();

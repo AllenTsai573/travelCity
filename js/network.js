@@ -214,10 +214,8 @@ export class Network {
   }
 
   computeRadius(node) {
-    if (node.jinfo && node.jinfo.ramp) {
-      const [m1, m2] = node.jinfo.pairs[0];
-      return Math.max(halfWidth(m1.T), halfWidth(m2.T)) + 3;
-    }
+    // 匝道路口：主線直通，只需很短的銜接區（匝道本身在離開主線路面處才截斷）
+    if (node.jinfo && node.jinfo.ramp) return 4;
     const segs = node.segs.map(id => this.segs.get(id)).filter(Boolean);
     if (segs.length <= 1) return 0;
     let maxHW = 0;
@@ -407,12 +405,33 @@ export class Network {
     // 匝道路口：依匝道「位置」在主線哪一側決定匯入 / 分出車道（不能只看行進方向）
     if (node.jinfo && node.jinfo.ramp) {
       const main = new Set(node.jinfo.pairs[0]);
+      // 匝道與主線之間不允許近乎迴轉的連接（例如匝道直接接到對向車道）
+      for (const [inL, cands] of per) {
+        for (let i = cands.length - 1; i >= 0; i--) {
+          const c = cands[i];
+          if (main.has(inL.seg) !== main.has(c.outL.seg) && Math.abs(c.ang) > 1.6) cands.splice(i, 1);
+        }
+      }
       for (const [inL, cands] of per) for (const c of cands) {
         const inMain = main.has(inL.seg), outMain = main.has(c.outL.seg);
         if (!inMain && outMain) c.cls = mergeSide(inL, c.outL);
         else if (inMain && !outMain) {
           const lane = inL.lanes[0], p = lane.pts[lane.pts.length - 1], t = endTangent(lane), q = c.outL.lanes[0].pts[0];
           c.cls = (q.x - p.x) * -t.y + (q.y - p.y) * t.x > 0 ? 'R' : 'L';
+        }
+      }
+    }
+    // 封閉式雙向道路（快速道路 / 高速公路）：其他道路只能接同側車道，
+    // 不允許左轉橫越對向車道（不論匝道角度）
+    if (node.jinfo && node.jinfo.pairs.length === 1) {
+      const main = new Set(node.jinfo.pairs[0]);
+      const ms = node.jinfo.pairs[0][0];
+      if (ms.T.bwd > 0 && (!ms.T.access || node.jinfo.ramp)) {
+        for (const [inL, cands] of per) {
+          for (let i = cands.length - 1; i >= 0; i--) {
+            const c = cands[i];
+            if (main.has(inL.seg) !== main.has(c.outL.seg) && (c.cls === 'L' || c.cls === 'ML')) cands.splice(i, 1);
+          }
         }
       }
     }

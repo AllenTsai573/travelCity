@@ -182,18 +182,33 @@ export class Traffic {
     return true;
   }
 
+  // 從某車道出發、不變換車道能沿路線走多遠（最多看 4 個路段）
+  // d：可到達的後續路段數；dist：這些路段的總長（在此之前必須換到正確車道）
+  laneReach(v, lane, offset = 0) {
+    let set = [lane], d = 0, dist = 0;
+    for (let k = 1; k <= 4; k++) {
+      const nk = v.route[v.ri + offset + k];
+      if (nk === undefined) return { d: 9, dist };
+      const next = [];
+      for (const l of set) for (const c of l.conns) if (!c.dead && c.to.link.key === nk && !next.includes(c.to)) next.push(c.to);
+      if (!next.length) return { d, dist };
+      d++; dist += next[0].len + 5; set = next;
+    }
+    return { d, dist };
+  }
+
   chooseConn(v) {
     const lane = v.track;
     const nc = v.nextConn;
     if (nc && !nc.dead && nc.from === lane) return nc;
     const nk = v.route[v.ri + 1];
     if (nk === undefined) { v.nextConn = null; return null; }
-    const nk2 = v.route[v.ri + 2];
     let best = null, bs = Infinity;
     for (const c of lane.conns) {
       if (c.dead || c.to.link.key !== nk) continue;
-      let sc = c.to.vehs.length * 2 + ((c.to.idx * 7 + v.id) % 3) * 0.1;
-      if (nk2 !== undefined && !c.to.outLinks.has(nk2)) sc += 100;
+      // 優先選能沿路線走得最遠的車道（提早靠到正確車道）
+      const r = this.laneReach(v, c.to, 1);
+      const sc = c.to.vehs.length * 2 + ((c.to.idx * 7 + v.id) % 3) * 0.1 - Math.min(r.d, 4) * 100;
       if (sc < bs) { bs = sc; best = c; }
     }
     v.nextConn = best;
@@ -274,11 +289,14 @@ export class Traffic {
       for (const sib of c.siblings) for (const w of sib.vehs) free -= w.len + 2;
       return free > Math.min(v.len * 2 + 8, to.len * 0.85);
     }
-    for (const w of c.vehs) if (w !== v) free -= w.len + 2;
+    // 只計入慢速 / 停止中的車：正常行駛中的車很快就會通過，不必排隊等候
+    // （否則很短的出口車道會讓整條車道只能一台一台通過路口）
+    const slow = w => w !== v && w.v < 4;
+    for (const w of c.vehs) if (slow(w)) free -= w.len + 2;
     for (const sib of c.siblings) {
-      for (const w of sib.vehs) free -= w.len + 2;
+      for (const w of sib.vehs) if (slow(w)) free -= w.len + 2;
       const w = sib.from.vehs[0];
-      if (w && w !== v && w.committed && w.nextConn === sib) free -= w.len + 2;
+      if (w && slow(w) && w.committed && w.nextConn === sib) free -= w.len + 2;
     }
     return free > Math.min(v.len + 2.5, to.len * 0.6);
   }
@@ -415,15 +433,21 @@ export class Traffic {
     const lanes = lane.link.lanes;
     if (lanes.length < 2) return;
     const atDest = v.ri >= v.route.length - 1;
-    const nk = v.route[v.ri + 1];
-    const valid = l => atDest || l.outLinks.has(nk);
     const distEnd = lane.len - v.s;
-    let mand = 0;
-    if (!valid(lane)) {
-      let bestD = Infinity;
-      for (const l of lanes) if (valid(l) && Math.abs(l.idx - lane.idx) < bestD) { bestD = Math.abs(l.idx - lane.idx); mand = Math.sign(l.idx - lane.idx); }
-      if (!mand) return;
-    } else if (distEnd < 40 || v.s < 5) return;
+    // 預先看後面幾個路段：哪些車道能一路走下去（例如前方匝道只能從最外側車道駛出）
+    const reach = atDest ? null : lanes.map(l => this.laneReach(v, l));
+    const bestD = reach ? Math.max(...reach.map(r => Math.min(r.d, 4))) : 0;
+    const cur = reach ? reach[lane.idx] : null;
+    const valid = l => atDest || Math.min(reach[l.idx].d, 4) >= Math.min(cur.d, 4);
+    let mand = 0, distEff = distEnd;
+    if (!atDest && Math.min(cur.d, 4) < bestD) {
+      distEff = distEnd + cur.dist;
+      if (distEff < 600) {
+        let bd = Infinity;
+        for (const l of lanes) if (Math.min(reach[l.idx].d, 4) === bestD && Math.abs(l.idx - lane.idx) < bd) { bd = Math.abs(l.idx - lane.idx); mand = Math.sign(l.idx - lane.idx); }
+      }
+    }
+    if (!mand && (distEnd < 40 || v.s < 5)) return;
     const opts = mand ? [mand] : [-1, 1];
     for (const d of opts) {
       const tl = lanes[lane.idx + d];
@@ -434,7 +458,7 @@ export class Traffic {
       const { lead, follow } = this.neighbors(tl, s2);
       const gapF = lead ? lead.s - lead.len - s2 : Infinity;
       const gapB = follow ? s2 - v.len - follow.s : Infinity;
-      const urg = mand ? clamp(1 - distEnd / 150, 0, 1) : 0;
+      const urg = mand ? clamp(1 - distEff / 180, 0, 1) : 0;
       const minGap = mand ? 1 + (1 - urg) * 2 : 2.5;
       if (gapF < minGap || gapB < minGap) continue;
       if (follow) {

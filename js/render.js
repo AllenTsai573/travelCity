@@ -397,16 +397,48 @@ export class Renderer {
         const ring = info.ring;
         const rampJunction = info.ramp;
         let hull = null;
+        const crossMk = [];
+        let ribbons = n.conns.map(c => c.pts);
         if (!ring && !rampJunction) {
-          const edge = [];
-          for (const e of ends) {
-            const nx = -e.t.y, ny = e.t.x;
-            edge.push({ x: e.P.x + nx * e.hw, y: e.P.y + ny * e.hw }, { x: e.P.x - nx * e.hw, y: e.P.y - ny * e.hw });
+          // 一般路口：各路口端以「向內彎的轉角圓弧」相連（路緣轉角），不會像小圓環一樣鼓出來
+          const ord = ends.map(e => { const d = { x: -e.t.x, y: -e.t.y }; return { e, d, a: Math.atan2(d.y, d.x) }; }).sort((p, q) => p.a - q.a);
+          const perp = d => ({ x: -d.y, y: d.x });
+          hull = [];
+          for (let k = 0; k < ord.length; k++) {
+            const cur = ord[k], nx = ord[(k + 1) % ord.length];
+            const pc = perp(cur.d), pn = perp(nx.d);
+            const before = { x: cur.e.P.x - pc.x * cur.e.hw, y: cur.e.P.y - pc.y * cur.e.hw };
+            const after = { x: cur.e.P.x + pc.x * cur.e.hw, y: cur.e.P.y + pc.y * cur.e.hw };
+            const nb = { x: nx.e.P.x - pn.x * nx.e.hw, y: nx.e.P.y - pn.y * nx.e.hw };
+            hull.push(before, after);
+            let gap = nx.a - cur.a;
+            if (k === ord.length - 1) gap += Math.PI * 2;
+            if (gap < 3.0) hull.push(...arcCurve(after, { x: -cur.d.x, y: -cur.d.y }, nb, nx.d, 6, 1.0).slice(1, -1));
           }
-          hull = convexHull(edge);
+          ribbons = [];
+          // 直通道路的邊線延伸穿過路口：有其他道路開口的一側畫虛線，沒有開口的一側維持實線
+          const angOf = new Map(ord.map(o => [o.e, o]));
+          for (const [ea, eb] of pairs) {
+            const A = angOf.get(ea), Bo = angOf.get(eb);
+            const pa = perp(A.d);
+            for (const sgn of [1, -1]) {
+              const from = sgn > 0 ? A : Bo, to = sgn > 0 ? Bo : A;
+              let sweep = to.a - from.a;
+              while (sweep <= 0) sweep += Math.PI * 2;
+              const opening = ord.some(o => {
+                if (o === A || o === Bo) return false;
+                let d = o.a - from.a;
+                while (d <= 0) d += Math.PI * 2;
+                return d < sweep;
+              });
+              const p0 = { x: ea.P.x + pa.x * sgn * (ea.hw - 0.75), y: ea.P.y + pa.y * sgn * (ea.hw - 0.75) };
+              const p1 = { x: eb.P.x + pa.x * sgn * (eb.hw - 0.75), y: eb.P.y + pa.y * sgn * (eb.hw - 0.75) };
+              const pts = arcCurve(p0, { x: -A.d.x, y: -A.d.y }, p1, Bo.d, 4, 1.0);
+              crossMk.push({ pts, cum: polyCum(pts), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: opening ? [2, 2.5] : null });
+            }
+          }
         }
         const strips = (ring || rampJunction) ? pairs.map(([a, b]) => strip(a, b)) : [];
-        let ribbons = n.conns.map(c => c.pts);
         if (rampJunction) {
           // 匝道：以完整匝道寬度沿匯入 / 分出軌跡接到主線外側車道，並加上加速 / 減速車道漸變段
           ribbons = [];
@@ -427,11 +459,11 @@ export class Renderer {
             }
           }
         }
-        j = { kind: 'hub', col: roadColor(widest.T), strips, hull, ribbons };
+        j = { kind: 'hub', col: roadColor(widest.T), strips, hull, ribbons, crossMk };
         j.openings = strips.filter(st => st.opening).map(st => st.opening);
         if (j.openings.length) for (const st of strips) if (!st.opening) st.mk = Renderer.splitEdges(st.mk, j.openings);
       }
-      if (j.kind === 'hub') j.mk = j.strips.flatMap(st => st.mk);
+      if (j.kind === 'hub') j.mk = [...j.strips.flatMap(st => st.mk), ...(j.crossMk || [])];
     }
     n._jg = { ver: net.version, j };
     return j;
@@ -473,9 +505,16 @@ export class Renderer {
     const outer = lat({ x: mid.x + mid.nx, y: mid.y + mid.ny }) > lat({ x: mid.x - mid.nx, y: mid.y - mid.ny }) ? 1 : -1;
     const line = sgn => C.map(q => ({ x: q.x + q.nx * sgn * (q.w - 0.75), y: q.y + q.ny * sgn * (q.w - 0.75) }));
     const mk = [];
-    mk.push({ pts: line(outer), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
-    const inner = line(-outer).filter(p => lat(p) > mainHW - 0.75 + 0.15);
-    if (inner.length >= 2) mk.push({ pts: inner, c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
+    // 匝道兩側邊線都只畫在主線路面之外（不會畫到主線車道上）
+    const outside = p => lat(p) > mainHW - 0.75 + 0.15;
+    for (const pts of [line(outer), line(-outer)]) {
+      let run = [];
+      for (const p of pts) {
+        if (outside(p)) run.push(p);
+        else { if (run.length >= 2) mk.push({ pts: run, c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null }); run = []; }
+      }
+      if (run.length >= 2) mk.push({ pts: run, c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
+    }
     for (const m of mk) m.cum = polyCum(m.pts);
     const body = Renderer.ribbonPoly(C, 0);
     return { body, curbs: Renderer.ribbonPoly(C, 0.5), mk, opening: Renderer.ribbonPoly(C, 0.4) };

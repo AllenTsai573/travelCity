@@ -81,6 +81,36 @@ assert(g2.city.buildings.length === g.city.buildings.length, '存讀檔：建築
 step(g2, 600);
 assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
 
+// 苜蓿葉交流道：12 種行向都要能完成，左轉走環道、右轉走外側匝道
+{
+  const gc = makeGame(1, 'desert', 'sandbox'); gc.autoGrow = false;
+  const net = gc.net;
+  const S = p => { const n = net.nodeNear(p.x, p.y, 3); if (n) return { x: n.x, y: n.y, node: n.id }; const sg = net.segNear(p.x, p.y, 3, 'any'); if (sg) return { x: sg.x, y: sg.y, seg: sg.seg.id, u: sg.u }; return { x: p.x, y: p.y }; };
+  const C = { x: 700, y: 1200 };
+  const W = (x, y) => ({ x: C.x - y, y: C.y + x });
+  let built = true;
+  const B = (a, b, t, lv, c) => { const p = net.planRoad(S(W(...a)), S(W(...b)), c ? W(...c) : null, t, lv); if (p.ok) net.executeRoad(p); else built = false; };
+  B([-430, 0], [430, 0], 'highway', 1); B([0, -360], [0, 360], 'avenue', 0);
+  for (const k of [1, -1]) {
+    const P = (x, y) => [x * k, y * k];
+    B(P(30, 0), P(90, 30), 'ramp', 1, P(65, 3)); B(P(90, 30), P(150, 90), 'ramp', 1, P(150, 30)); B(P(150, 90), P(90, 150), 'ramp', 0, P(150, 150));
+    B(P(90, 150), P(30, 90), 'ramp', 0, P(30, 150)); B(P(30, 90), P(0, 40), 'ramp', 0, P(30, 55));
+    B(P(0, 330), P(210, 130), 'ramp', 0, P(10, 220)); B(P(210, 130), P(340, 0), 'ramp', 1, P(290, 50));
+    B(P(0, -40), P(30, -90), 'ramp', 0, P(30, -55)); B(P(30, -90), P(90, -150), 'ramp', 0, P(30, -150)); B(P(90, -150), P(150, -90), 'ramp', 1, P(150, -150));
+    B(P(150, -90), P(90, -30), 'ramp', 1, P(150, -30)); B(P(90, -30), P(60, 0), 'ramp', 1, P(70, -3));
+    B(P(310, 0), P(210, -130), 'ramp', 0, P(290, -50)); B(P(210, -130), P(0, -330), 'ramp', 0, P(10, -220));
+  }
+  assert(built, '苜蓿葉交流道建造');
+  const ep = (lx, ly, name) => { const p = W(lx, ly); const sg = net.segNear(p.x, p.y, 3, 'any'); return { name, seg: sg.seg.id, u: sg.u, outside: true, queue: [], spawnCD: 0 }; };
+  const E = [ep(415, 0, 'FW+'), ep(-415, 0, 'FW-'), ep(0, 350, 'AV+'), ep(0, -350, 'AV-')];
+  for (const a of E) for (const b of E) if (a !== b) for (let i = 0; i < 3; i++) a.queue.push({ kind: 'through', from: a, to: b, truck: false, od: a.name + '>' + b.name });
+  let ok = 0, fail = 0, slow = 0;
+  gc.city.onTripEnd = (t, s, age) => { s ? ok++ : fail++; if (age > 150) slow++; };
+  for (let i = 0; i < 6000; i++) { gc.time += 0.05; gc.traffic.step(0.1); gc.city.spawnFrom(E, 0.1, 2); }
+  assert(ok === 36 && fail === 0, `苜蓿葉交流道 12 種行向全部完成（${ok}/36）`);
+  assert(slow === 0, '苜蓿葉交流道沒有異常繞路');
+}
+
 for (const b of ['desert', 'snow', 'tropical']) {
   const gb = makeGame(777, b, 'normal');
   assert(gb.net.segs.size > 3 && gb.city.buildings.length > 3, `生態系 ${b}（${gb.city.outside.length} 個外部連線）`);

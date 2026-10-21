@@ -23,7 +23,7 @@ function shade(hex, f) {
 }
 const ASPHALT = '#46494e';
 // 鋪面道路統一柏油色，銜接處不會出現色差；鄉間小路為碎石色
-const roadColor = T => (T.rank === 0 ? T.color : ASPHALT);
+const roadColor = T => (T.rank === 0 || T.rail ? T.color : ASPHALT);   // 鄉間小路、場內道路、鐵路（道碴）用自己的顏色
 // 路肩顏色：地面深、高架淺，依高度線性內插
 function curbColor(h) {
   const t = clamp(h, 0, 1);

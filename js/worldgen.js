@@ -75,9 +75,9 @@ export function generateWorld(g) {
       n++;
     }
   };
-  place('I', 1);
-  place('C', 3);
-  place('R', 12);
+  place('I', 2);
+  place('C', 4);
+  place('R', 22);
   city.recount();
   g.money = savedMoney;
 }

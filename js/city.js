@@ -252,7 +252,8 @@ export class City {
     const pWork = gauss(hour, 7.6, 1.5) + 0.04;
     const pShop = gauss(hour, 14.5, 3.2) + 0.02;
     const pFreight = hour >= 6 && hour < 22 ? 1 / 16 : 0.01;
-    const k = dt / 60;
+    // 小鎮階段出行較頻繁，城市變大後逐漸回到正常值（避免開局太冷清）
+    const k = dt / 60 * (1 + 1.5 * clamp(1 - this.pop / 700, 0, 1));
     const rng = g.rng;
     const pop = Math.max(1, this.pop), jobs = this.jobsC + this.jobsI;
     const outsideShare = clamp(1 - pop * 0.5 / Math.max(1, jobs), 0.08, 0.85);

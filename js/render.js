@@ -724,6 +724,11 @@ export class Renderer {
           }
         }
         ctx.setLineDash([]);
+        // 路口前的轉向箭頭（依實際車道連接，玩家調整後會跟著改變）
+        if (z > 1.6) for (const n of nodes) {
+          if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring))) continue;
+          for (const Lk of net.inLinks(n)) for (const lane of Lk.lanes) if (lane.len > 18) this.turnArrows(lane);
+        }
       }
       if (tunnel) {
         ctx.globalAlpha = 0.8;
@@ -872,6 +877,33 @@ export class Renderer {
       }
     } else if (sel.type === 'node') {
       this.drawJunctionEditor(sel.obj);
+    }
+  }
+
+  // 地面轉向箭頭：直行 / 左轉 / 右轉 / 迴轉的組合
+  turnArrows(lane) {
+    const set = new Set(lane.conns.map(c => (c.turn === 'MR' || c.turn === 'ML' ? 'S' : c.turn)));
+    if (!set.size) return;
+    const ctx = this.ctx, p = pointAt(lane.pts, lane.cum, lane.len - 7.5);
+    const fx = p.dx, fy = p.dy, rx = -p.dy, ry = p.dx;
+    const P = (f, r) => [p.x + fx * f + rx * r, p.y + fy * f + ry * r];
+    const head = (f, r, hx, hy) => {
+      const [x, y] = P(f, r), nx = -hy, ny = hx;
+      ctx.beginPath(); ctx.moveTo(x + hx * 0.9, y + hy * 0.9);
+      ctx.lineTo(x + nx * 0.6, y + ny * 0.6); ctx.lineTo(x - nx * 0.6, y - ny * 0.6); ctx.closePath(); ctx.fill();
+    };
+    ctx.strokeStyle = ctx.fillStyle = 'rgba(255,255,255,0.82)';
+    ctx.lineWidth = 0.32;
+    ctx.beginPath(); ctx.moveTo(...P(-2.6, 0)); ctx.lineTo(...P(0.2, 0)); ctx.stroke();
+    if (set.has('S')) { ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.lineTo(...P(2, 0)); ctx.stroke(); head(2, 0, fx, fy); }
+    for (const [k, sg] of [['L', -1], ['R', 1]]) {
+      if (!set.has(k)) continue;
+      ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.quadraticCurveTo(...P(1.3, 0), ...P(1.3, sg * 0.9)); ctx.stroke();
+      head(1.3, sg * 0.9, rx * sg, ry * sg);
+    }
+    if (set.has('U')) {
+      ctx.beginPath(); ctx.moveTo(...P(0.2, 0)); ctx.quadraticCurveTo(...P(1.8, 0), ...P(1.8, -0.8)); ctx.quadraticCurveTo(...P(1.8, -1.5), ...P(0.6, -1.5)); ctx.stroke();
+      head(0.6, -1.5, -fx, -fy);
     }
   }
 

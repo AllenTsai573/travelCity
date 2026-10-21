@@ -312,7 +312,7 @@ export class UI {
           <option value="auto" ${o === 'auto' ? 'selected' : ''}>自動</option><option value="prio" ${o === 'prio' ? 'selected' : ''}>優先道路</option><option value="yield" ${o === 'yield' ? 'selected' : ''}>讓路 ▽</option></select></label>`;
       }).join('') + `</div>`;
     }
-    const lanesInfo = `<div class="lanes"><p class="note">車道連接：點橘色點（進入車道）→ 綠色點（離開車道）新增或移除連接。</p>
+    const lanesInfo = `<div class="lanes"><p class="note">車道連接：從橘色點（進入車道）<b>按住拖曳</b>到綠色點（離開車道）即新增連接；對已存在的連接再拖一次就會移除。可藉此設定「只能直行」「只能左轉」等車道。</p>
       ${this.jSelLane ? `<p>已選取：${this.jSelLane.seg.T.short} 第 ${this.jSelLane.idx + 1} 車道</p>` : ''}
       ${n.custom ? '<button data-act="resetconn">↺ 恢復自動車道連接</button>' : ''}</div>`;
     return {

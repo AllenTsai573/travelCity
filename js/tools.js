@@ -40,6 +40,7 @@ export class Tools {
 
   setTool(t) {
     this.tool = t;
+    this.jDrag = null; this.jHover = null;
     this.pts = [];
     this.plan = null;
     this.hover = null;
@@ -71,6 +72,11 @@ export class Tools {
       this.updateMouse(e);
       this.down = { btn: e.button, sx: e.offsetX, sy: e.offsetY, cx: this.cam.x, cy: this.cam.y, moved: false, touch: e.pointerType === 'touch' };
       if (e.button === 0 && this.tool === 'zone') { this.lastZone = null; this.zonePaint(true); }
+      // 路口車道連接：從進入車道（橘點）按住拖曳到離開車道（綠點）
+      if (e.button === 0 && this.tool === 'junction') {
+        const h = this.jLaneHit();
+        if (h && h.kind === 'in') { this.jDrag = { node: h.node, from: h.lane }; this.g.ui.jSelLane = h.lane; }
+      }
     });
     cv.addEventListener('pointermove', e => {
       if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
@@ -82,6 +88,7 @@ export class Tools {
       }
       this.updateMouse(e);
       const d = this.down;
+      if (d && this.jDrag) { if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 6) d.moved = true; return; }
       if (d) {
         if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 6) d.moved = true;
         if (d.btn === 0 && this.tool === 'zone' && !d.touch) { this.zonePaint(false); return; }
@@ -97,6 +104,15 @@ export class Tools {
       if (this.ptrs.size < 2) this.pinch = null;
       const d = this.down;
       this.down = null;
+      if (this.jDrag) {
+        const jd = this.jDrag;
+        this.jDrag = null;
+        const h = this.jLaneHit();
+        if (h && h.kind === 'out' && h.node === jd.node) { this.toggleConn(jd.node, jd.from, h.lane); this.g.ui.renderPanel(true); }
+        else if (d && !d.moved) this.g.ui.renderPanel(true);
+        this.dirty = true;
+        return;
+      }
       if (!d || d.moved) return;
       if (d.btn === 0) this.click();
       else if (d.btn === 2) this.cancel();
@@ -266,6 +282,14 @@ export class Tools {
         break;
       }
       case 'junction': {
+        const h = this.jLaneHit();
+        this.jHover = h;
+        if (this.jDrag) {
+          if (h && h.kind === 'out') this.setTip(this.hasConn(this.jDrag.node, this.jDrag.from, h.lane) ? '放開：移除這條連接' : '放開：新增這條連接', this.hasConn(this.jDrag.node, this.jDrag.from, h.lane));
+          else this.setTip('拖到綠色的離開車道上放開');
+          break;
+        }
+        if (h) { this.hover = null; this.setTip(h.kind === 'in' ? '按住拖曳到綠點：新增連接（已存在則移除）' : '離開車道：從橘點拖到這裡'); break; }
         const n = this.nodeAt(m.x, m.y);
         if (n) { this.hover = { type: 'node', obj: n }; if (g.ui.selection?.obj !== n) this.setTip('點擊編輯路口'); }
         else if (!g.ui.selection) this.setTip('點擊路口以編輯號誌、路權與車道連接');
@@ -436,23 +460,30 @@ export class Tools {
     this.dirty = true;
   }
 
+  // 游標下的車道端點（目前選取的路口）
+  jLaneHit() {
+    const ui = this.g.ui, net = this.net, m = this.mouse, sel = ui.selection;
+    if (!sel || sel.type !== 'node' || !net.nodes.has(sel.obj.id)) return null;
+    const node = sel.obj;
+    let hit = null, hd = Math.max(1.4, 9 / this.cam.z);
+    for (const L of net.inLinks(node)) for (const lane of L.lanes) {
+      const p = lane.pts[lane.pts.length - 1], d = Math.hypot(p.x - m.x, p.y - m.y);
+      if (d < hd) { hd = d; hit = { kind: 'in', lane, node, p }; }
+    }
+    for (const L of net.outLinks(node)) for (const lane of L.lanes) {
+      const p = lane.pts[0], d = Math.hypot(p.x - m.x, p.y - m.y);
+      if (d < hd) { hd = d; hit = { kind: 'out', lane, node, p }; }
+    }
+    return hit;
+  }
+  hasConn(node, from, to) { return node.conns.some(c => c.from === from && c.to === to); }
+
   junctionClick() {
     const g = this.g, ui = g.ui, net = this.net, m = this.mouse;
     const sel = ui.selection;
     if (sel && sel.type === 'node' && net.nodes.has(sel.obj.id)) {
       const node = sel.obj;
-      const tol = Math.max(1.4, 7 / this.cam.z);
-      let hit = null, hd = tol;
-      for (const L of net.inLinks(node)) for (const lane of L.lanes) {
-        const p = lane.pts[lane.pts.length - 1];
-        const d = Math.hypot(p.x - m.x, p.y - m.y);
-        if (d < hd) { hd = d; hit = { kind: 'in', lane }; }
-      }
-      for (const L of net.outLinks(node)) for (const lane of L.lanes) {
-        const p = lane.pts[0];
-        const d = Math.hypot(p.x - m.x, p.y - m.y);
-        if (d < hd) { hd = d; hit = { kind: 'out', lane }; }
-      }
+      const hit = this.jLaneHit();
       if (hit) {
         if (hit.kind === 'in') ui.jSelLane = ui.jSelLane === hit.lane ? null : hit.lane;
         else if (ui.jSelLane) this.toggleConn(node, ui.jSelLane, hit.lane);
@@ -575,6 +606,22 @@ export class Tools {
       if (this.hover) {
         ctx.strokeStyle = '#ffd25e'; ctx.lineWidth = 3 / z;
         ctx.beginPath(); ctx.arc(this.hover.obj.x, this.hover.obj.y, this.hover.obj.radius + 4, 0, Math.PI * 2); ctx.stroke();
+      }
+      // 拖曳中的連接線
+      const h = this.jHover;
+      if (h) {
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(0.3, 2 / z);
+        ctx.beginPath(); ctx.arc(h.p.x, h.p.y, Math.max(1.3, 6 / z), 0, Math.PI * 2); ctx.stroke();
+      }
+      if (this.jDrag) {
+        const a = this.jDrag.from.pts[this.jDrag.from.pts.length - 1];
+        const tgt = h && h.kind === 'out' ? h.p : m;
+        const del = h && h.kind === 'out' && this.hasConn(this.jDrag.node, this.jDrag.from, h.lane);
+        ctx.strokeStyle = del ? '#ff5a5a' : '#50dcff';
+        ctx.lineWidth = Math.max(0.5, 3 / z);
+        ctx.setLineDash(del ? [4 / z, 3 / z] : []);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(tgt.x, tgt.y); ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
   }

@@ -1,5 +1,5 @@
 // 玩家工具與輸入處理
-import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, CELL, levelMul } from './config.js';
+import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, CELL, levelMul, zoneNext } from './config.js';
 import { halfWidth } from './network.js';
 import { pointAt, closestOnPoly, clamp, fmtMoney, convexOverlap, pointInPoly } from './util.js';
 const convexOverlapSafe = (a, b) => { try { return convexOverlap(a, b); } catch { return false; } };
@@ -182,6 +182,7 @@ export class Tools {
     else if (k === '2') this.g.setSpeed(3);
     else if (k === '3') this.g.setSpeed(8);
     else if (k === 'h') this.g.toggleHeatmap();
+    else if (k === 'm') this.g.toggleZonemap();
     else if (k === 't') { this.g.renderer.toggleTilt(); }
     else if (k === 'c') { this.curve = !this.curve; this.pts = this.pts.slice(0, 1); this.g.ui.refreshToolbar(); }
     else if (k === 'pageup' || k === ']') { this.changeLevel(1); }
@@ -367,10 +368,10 @@ export class Tools {
         if (this.zStroke) {
           const st = this.zStroke;
           if (st.rect) { this.setTip(`取消分區：${st.rect.cols}×${st.rect.rows} 格`); break; }
-          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1, Z = ZONE_TYPES[this.zone];
+          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1, Z = { name: ZONE_TYPES[this.zone].name, max: this.g.city.maxCells(this.zone) };
           // 說明是什麼限制了大小：分區最深格數、後方的道路 / 分區 / 建築 / 水域、這段路到路口為止
           const why = [];
-          if (st.rows > Z.max) why.push(`${Z.name}最深 ${Z.max} 格`);
+          if (st.rows > Z.max) { const nx = zoneNext(this.zone, this.g.city.peakPop); why.push(`${Z.name}目前最深 ${Z.max} 格` + (nx ? `，人口 ${nx[0]} 時放大到 ${nx[1]} 格` : '')); }
           const want = Math.min(Math.max(2, st.rows), Z.max), short = ok.find(p => p.rows < want);
           if (short) why.push('往內' + (this.g.city.canPlaceLot(st.seg, short.u, short.side, short.cols, short.rows + 1) || '受限'));
           if (st.past) why.push('這段路到路口為止，跨過路口要另外畫');
@@ -514,7 +515,7 @@ export class Tools {
     if (!st) return;
     // 只點一下：依分區給一塊預設大小的地塊
     if (!st.moved && !dragged && this.zone !== 'X') {
-      const Z = ZONE_TYPES[this.zone], cols = Math.min(Z.max, this.zone === 'R1' || this.zone === 'R2' ? 4 : 6);
+      const cols = Math.min(city.maxCells(this.zone), this.zone === 'R1' || this.zone === 'R2' ? 4 : 6);
       const i0 = clamp(st.i0 - Math.floor((cols - 1) / 2), 0, Math.max(0, Math.floor((st.seg.len - st.seg.rb - st.g0) / CELL) - cols));
       st.plan = city.planStroke(this.zone, st.seg, st.side, st.g0 + i0 * CELL, st.g0 + (i0 + cols) * CELL, cols);
     }

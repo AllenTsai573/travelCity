@@ -30,6 +30,20 @@ export function lotAisles(u0, u1, spine) {
   for (let a = spine + 19; a + 9.3 <= u1; a += 19) out.push(a);
   return out;
 }
+// 地下 / 立體停車場前的單向車道：從入口（ua 或 ub）開進來、沿停車場入口前方（離路邊 cv 公尺）、從另一端開出去
+// 停車場的室內車位都在這條車道旁，等著進場的車不會停在外面的道路上；city.driveway 依此開路
+// deck：立體停車場（gu0~gu1、深到 gv1）；否則是地下停車場坡道
+export function garageDrive(zt, kind, cols, rows) {
+  const w = cols * CELL, d = rows * CELL;
+  if (kind === 'mallp') { const gu1 = w * 0.44; return { deck: true, gu0: 3, gu1, gv1: d * 0.46, ua: 6, ub: gu1 - 3, cv: 9 }; }
+  if (zt === 'R3' && kind == null && cols >= 6 && rows >= 5) {
+    if (w >= 40 && d >= 30 && cols % 2 === 0) return { deck: true, gu0: w - 21, gu1: w - 1.5, gv1: Math.min(d - 1.5, 46), ua: w - 20, ub: w - 3, cv: 7 };
+    return { deck: false, ua: w - 16, ub: w - 3, cv: 7 };
+  }
+  return null;
+}
+// 量販店 / 購物中心 / 超市的停車場是單向環狀動線（一進一出），city.driveway 依此開路
+export function oneWayLot(kind, aisles) { return (kind === 'bigbox' || kind === 'mall' || kind === 'market') && aisles.length >= 1; }
 // 大型商業的停車場範圍（與 lotArt 的配置一致）：{ u0, v0, u1, v1 }
 export function lotParkArea(kind, w, d) {
   if (kind === 'bigbox') return { u0: 3, v0: 2, u1: w - 7.6, v1: d * 0.45 - 1 };
@@ -85,7 +99,8 @@ export function lotArt(b) {
   };
   // 停車場：沿車道兩側畫停車格（每格 2.6 m × 5 m）；spineOnly 只沿主車道
   // real：有場內道路——每條車道（間距 19 m）與底部的橫向車道都是真的道路（由路網畫出），車子沿車道開到車位旁才轉進去
-  const parking = (u0, v0, u1, v1, spine, real, occ, fromBack = false, spineOnly = false) => {
+  // top0：停車格從哪裡開始（單向停車場前方有分配車道，停車格往後退）
+  const parking = (u0, v0, u1, v1, spine, real, occ, fromBack = false, spineOnly = false, top0 = null) => {
     rect(u0, v0, u1, v1, '#7f8287');
     const aisles = [spine];
     if (!spineOnly && real) aisles.push(...lotAisles(u0, u1, spine));
@@ -93,7 +108,7 @@ export function lotArt(b) {
       for (let a = spine - 17; a - 8 >= u0; a -= 17) aisles.push(a);
       for (let a = spine + 17; a + 8 <= u1; a += 17) aisles.push(a);
     }
-    const top = fromBack ? v0 + 1 : v0 + 1, bot = v1 - (real && aisles.length > 1 ? 9.5 : 7);
+    const top = top0 ?? v0 + 1, bot = v1 - (real && aisles.length > 1 ? 9.5 : 7);
     for (const a of aisles) {
       // 實際的場內道路寬 8.6 m；裝飾用的通道 6 m
       const ah = real ? 4.3 : 3;
@@ -113,12 +128,34 @@ export function lotArt(b) {
     if (aisles.length > 1 && !real) rect(u0 + 1, v1 - 6.5, u1 - 1, v1 - 0.5, '#878a8f');
   };
   // 地下停車場入口坡道（臨路、靠地塊右側），以及看不見的室內車位（只用於商業大樓）
-  const garageRamp = (n, uc = w - 3.25) => {
+  // 坡道內左右兩條車道（進 / 出可以同時），室內車位輪流分在兩條車道
+  const garageRamp = (n, uc = w - 3.25, v0 = 0) => {
     const u0 = uc - 2.75, u1 = uc + 2.75;
-    rect(u0, 0, u1, 9, '#5b5f64');
-    rect(u0 + 0.6, 5.5, u1 - 0.6, 9, '#2b2e33');
-    for (let i = 0; i < n; i++) items.push({ t: 'rect', u0: u0 + 1.8, v0: 6, du: 1.8, dv: 3, c: pick(r, CARS), h: 0.4, car: true, slot: 0.5 + r() * 0.5, indoor: true });
+    rect(u0, v0, u1, v0 + 9, '#5b5f64');
+    rect(u0 + 0.6, v0 + 5.5, u1 - 0.6, v0 + 9, '#2b2e33');
+    // 臨路的坡道：室內車位在坡道裡；接場內車道的坡道：入口車道（靠車道入口那側）與出口車道分開，
+    // 車子從入口車道開進去、從出口車道開出來（out），進出的車不會互擋
+    if (!v0) { for (let i = 0; i < n; i++) items.push({ t: 'rect', u0: uc - 0.9 + (i % 2 ? 1.35 : -1.35), v0: 6, du: 1.8, dv: 3, c: pick(r, CARS), h: 0.4, car: true, slot: 0.5 + r() * 0.5, indoor: true }); return; }
+    const ui = uc - 1.35 * inDir, uo = uc + 1.35 * inDir;
+    for (let i = 0; i < n; i++) items.push({ t: 'rect', u0: ui - 0.9, v0: v0 + 0.3, du: 1.8, dv: 3, c: pick(r, CARS), h: 0.4, car: true, slot: 0.5 + r() * 0.5, indoor: true, out: { u: uo, v: v0 + 1.8 } });
   };
+  // 立體停車場（u0~u1、v0~v1，入口在臨路的 v0 側中央）：清水模的多層停車樓，每層開口；車子在入口開進去（室內車位，看不到）
+  // 寬的停車樓有兩個入口；每個入口兩條車道，室內車位輪流分在各車道（多台車可以同時進出）
+  // sv：室內車位（入口車道）的位置，在停車樓前緣 v0 之前
+  const deckGarage = (u0, v0, u1, v1, n, H, sv) => {
+    rect(u0, v0, u1, v1, '#a9a69f', H, { wall: '#c9c6bf', win: true, balc: 'rgba(60,62,66,0.55)', balc0: 0, units: 0, deck: true });
+    // 入口與出口分開：靠車道入口那側的是入口（兩條車道），另一側是出口；只有一個開口時左右兩條車道分別進出
+    const ents = u1 - u0 >= 30 ? [u0 + (u1 - u0) * 0.27, u0 + (u1 - u0) * 0.73] : [(u0 + u1) / 2];
+    for (const uc of ents) rect(uc - 3.4, sv - 0.2, uc + 3.4, v0, '#5b5f64');
+    if (inDir < 0) ents.reverse();
+    const ins = ents.length > 1 ? [ents[0] - 1.6, ents[0] + 1.6] : [ents[0] - 1.6 * inDir], outs = ents.length > 1 ? [ents[1] - 1.6, ents[1] + 1.6] : [ents[0] + 1.6 * inDir];
+    items.push({ t: 'sign', u: u1 - 1.5, v: v0 - 0.5, text: 'P', c: '#1d6fb8', h: 6 });
+    for (let i = 0; i < n; i++) items.push({ t: 'rect', u0: ins[i % ins.length] - 0.9, v0: sv, du: 1.8, dv: 2.6, c: pick(r, CARS), h: 0.4, car: true, slot: 0.4 + r() * 0.6, indoor: true, out: { u: outs[i % outs.length], v: sv + 1.3 } });
+  };
+  // 停車場前單向車道的入口在哪一端：臨路車道往 +u 行駛時入口在 u 小的那端（inDir = 1），否則在另一端
+  const inDir = b.tx === undefined || -b.ty * b.nx + b.tx * b.ny > 0 ? 1 : -1;
+  // 停車場前的單向車道：有場內道路時由路網畫出，沒有時畫裝飾用的
+  const drive = gd => { if (!b.roads) road([{ u: gd.ua, v: 0 }, { u: gd.ua, v: gd.cv }, { u: gd.ub, v: gd.cv }, { u: gd.ub, v: 0 }], 4.5); };
   // 把 a~b 平均切成長度不超過 max 的幾段
   const split = (a, b, max = 48) => { const k = Math.max(1, Math.ceil((b - a) / max - 1e-6)), L = (b - a) / k, out = []; for (let i = 0; i < k; i++) out.push([a + L * i, a + L * (i + 1)]); return out; };
   // 一棟日式集合住宅（u0~u1、v0~v1，長邊沿 u）：
@@ -258,13 +295,29 @@ export function lotArt(b) {
     // 日式高密度住宅：大地塊切成邊長最多 48 m 的街區，放塔式住宅或平行的板狀大樓（團地）
     // 停車：有巷道時巷道兩側是停車格（巷道左右各一組街廓）；沒有時臨路一排停車格，建物退縮在後面
     const lu = w / 2;
-    if (b.roads) {
+    const gd = garageDrive('R3', b.kind, b.cols, b.rows), legacy = b.roads && !(b.parkPlan && b.parkPlan.garage);
+    if (legacy || (b.roads && !gd)) {
+      // 舊存檔：中央巷道兩側是停車格
       laneBays(lu, 2, d - 7.5);
       for (const [a, e] of [[0, lu - 9.8], [lu + 9.8, w]]) for (const [U0, U1] of split(a, e)) for (const [V0, V1] of split(0, d)) housingBlock(U0, V0, U1, V1);
-    } else {
+    } else if (b.cols < 6 || b.rows < 5) {
       const v0 = b.rows >= 3 ? 7 : 0;
       if (v0) frontBays(0.5, w - 0.5);
       for (const [U0, U1] of split(0, w)) for (const [V0, V1] of split(v0, d)) housingBlock(U0, V0, U1, V1);
+    } else {
+      // 住戶的車大多停在地下停車場或旁邊的立體停車場（從臨路右側的單向車道進出），地面只有一排臨路訪客車位
+      const nIn = Math.round(b.cols * b.rows * (0.15 + lv * 0.05));
+      drive(gd);
+      frontBays(0.5, gd.ua - 3.5);
+      if (gd.deck) {
+        deckGarage(gd.gu0, gd.cv + 4, gd.gu1, gd.gv1, nIn, 8 + lv * 3, gd.cv + 2.8);
+        for (const [U0, U1] of split(0, gd.gu0 - 1)) for (const [V0, V1] of split(7, d)) housingBlock(U0, V0, U1, V1);
+        if (d - gd.gv1 > 14) for (const [V0, V1] of split(gd.gv1 + 1, d)) housingBlock(gd.gu0, V0, w, V1);
+      } else {
+        garageRamp(nIn, (gd.ua + gd.ub) / 2, gd.cv + 2.6);
+        for (const [U0, U1] of split(0, gd.ua - 2)) for (const [V0, V1] of split(7, d)) housingBlock(U0, V0, U1, V1);
+        if (d - gd.cv - 13 > 8) for (const [V0, V1] of split(gd.cv + 13, d)) housingBlock(gd.ua - 2, V0, w, V1);
+      }
     }
   } else if (b.zt === 'T') {
     // 公車總站：中央場內車道，兩側是垂直的公車停車格（每格 4.2 m 寬、13.5 m 深，車頭朝車道），後方是鋸齒屋頂的維修廠，臨路有站務辦公室
@@ -299,18 +352,28 @@ export function lotArt(b) {
     const real = !!b.roads, k = b.kind;
     if (k === 'bigbox') {
       // 大型量販店：前方大停車場（車道從臨路開進來）、後方大倉庫
-      const bv = d * 0.45, pa = lotParkArea(k, w, d);
-      parking(pa.u0, pa.v0, pa.u1, pa.v1, w / 2, real, 0.35 + lv * 0.15);
+      const bv = d * 0.45, pa = lotParkArea(k, w, d), ow = real && oneWayLot(k, lotAisles(pa.u0, pa.u1, w / 2));
+      parking(pa.u0, pa.v0, pa.u1, pa.v1, w / 2, real, 0.35 + lv * 0.15, false, false, ow ? pa.v0 + 6 : null);
       loadingBay(w - 7.2);
       rect(w * 0.12, bv + 1, w * 0.88, d - 4, pick(r, ['#d9d6cf', '#cfd3d6', '#d8d0c0']), 7 + lv, { wall: '#e4e1da', stripe: pick(r, ['#c8102e', '#005daa', '#e4002b', '#f2a900', '#2a9d3f']), units: 4, sky: true });
     } else if (k === 'mall' || k === 'market') {
-      const pv = d * 0.32, pa = lotParkArea(k, w, d);
-      parking(pa.u0, pa.v0, pa.u1, pa.v1, w / 2, real, 0.3 + lv * 0.15);
+      const pv = d * 0.32, pa = lotParkArea(k, w, d), ow = real && oneWayLot(k, lotAisles(pa.u0, pa.u1, w / 2));
+      parking(pa.u0, pa.v0, pa.u1, pa.v1, w / 2, real, 0.3 + lv * 0.15, false, false, ow ? pa.v0 + 6 : null);
       loadingBay(w - 7.2);
       if (k === 'mall') {
         rect(w * 0.15, pv + 2, w * 0.85, d - 4, '#e3ddd2', 8 + lv * 2, { wall: pick(r, ['#ece6da', '#e6d8c6', '#dfe3e6']), units: 5, sky: true });
         rect(w * 0.45, pv + 2, w * 0.55, d - 4, '#bcd6ee', 8.5 + lv * 2, { glass: true });
       } else rect(w * 0.1, pv + 2, w * 0.9, d - 3, pick(r, ['#93b9df', '#e4c9a8', '#c9d8b6', '#e8b9b0', '#d8c6e0']), 5 + lv, { wall: '#e8e2d4', awning: true, units: 3 });
+    } else if (k === 'mallp') {
+      // 購物中心（立體停車場）：臨路左側是多層停車樓（車子從入口開進去），右後方是購物中心本體與玻璃中庭，前方廣場
+      const gd = garageDrive(b.zt, k, b.cols, b.rows), gv1 = gd.gv1, gu1 = gd.gu1;
+      drive(gd);
+      deckGarage(gd.gu0, gd.cv + 4, gu1, gv1, Math.round(b.cols * b.rows * 0.3), 10 + lv * 3, gd.cv + 2.8);
+      loadingBay(w - 7.2);
+      rect(w * 0.08, gv1 + 3, w * 0.92, d - 4, '#e3ddd2', 9 + lv * 2, { wall: pick(r, ['#ece6da', '#e6d8c6', '#dfe3e6']), units: 5, sky: true });
+      rect(w * 0.5, 9, w * 0.92 - 8, gv1 + 3, '#d8d2c6', 8 + lv * 2, { wall: pick(r, ['#ece6da', '#e6d8c6']), win: true, shop: pick(r, AWN) });
+      rect(w * 0.62, 9, w * 0.72, d - 4, '#bcd6ee', 10 + lv * 2, { glass: true });
+      for (let u = gu1 + 4; u < w * 0.5 - 1; u += 7) for (let v = 6; v < d - 8; v += 12) tree(u, v, 0.8);
     } else if (k === 'parking') {
       // 收費停車場：入口旁的收費亭與 P 字招牌，四角植栽
       if (real) {
@@ -482,6 +545,21 @@ export function lotArt(b) {
         rect(u0, v0, u1, mv - 1, '#d8d2c2', 4 + lv, { wall: pick(r, ['#e6e1d6', '#e8dcc4', '#dfe6e0']), win: true, sky: true });
         const sr = Math.min(2.8, (v1 - mv) / 2 - 0.5);
         if (sr > 1.2) for (let u = u0 + sr + 1; u + sr <= u1 - 1; u += sr * 2 + 0.8) items.push({ t: 'circle', u, v: (mv + v1) / 2, r: sr, c: '#e6e6e2', h: 12 + lv * 2 });
+      } else if (k === 'semi') {
+        // 半導體晶圓廠：白色的大型無塵室廠房（屋頂滿是空調與排氣設備），前方玻璃辦公棟，側邊特殊氣體儲槽
+        const W = u1 - u0, D = v1 - v0, ov = Math.min(9, D * 0.28);
+        rect(u0 + 1, v0 + ov + 1, u1 - 1, v1 - 1, '#eceeef', 12 + lv * 3, { wall: pick(r, ['#f2f3f4', '#e6e9ec', '#eef0ee']), units: Math.max(3, Math.round(W * D / 250)), stripe: pick(r, ['#1d6fb8', '#2a9d3f', '#5a3d8a']) });
+        if (ov >= 5) rect(u0 + 1, v0 + 1, u0 + Math.min(W * 0.45, 30), v0 + ov, '#8fb7d6', 9 + lv * 2, { glass: true, mull: true });
+        const tr = Math.min(1.6, ov * 0.25);
+        if (ov >= 5 && W > 20) for (let u = u0 + Math.min(W * 0.45, 30) + 3; u + tr < u1 - 2 && u < u0 + Math.min(W * 0.45, 30) + 3 + 5 * (tr * 2 + 0.8); u += tr * 2 + 0.8) items.push({ t: 'circle', u, v: v0 + ov / 2 + 0.5, r: tr, c: '#dfe3e6', h: 5 + lv });
+      } else if (k === 'battery') {
+        // 電池 / 電子零件廠：長條形的淺色廠房（藍灰色屋頂、天窗），前方辦公棟與一排變電設備
+        const D = v1 - v0, ov = Math.min(7, D * 0.25);
+        rect(u0 + 1, v0 + ov + 1, u1 - 1, v1 - 1, pick(r, ['#9fb3c4', '#8ea6b8', '#a7b4bd']), 8 + lv * 2, { wall: pick(r, ['#e6e8ea', '#dfe4e8', '#ecebe6']), sky: true, win: true });
+        if (ov >= 4.5) {
+          rect(u0 + 1, v0 + 1, u0 + Math.min(u1 - u0 - 2, 16), v0 + ov, '#c9ccd0', 7 + lv, { wall: '#f0f1f2', win: true });
+          for (let u = u0 + 18; u + 2 < u1 - 2 && u < u0 + 34; u += 3.2) rect(u, v0 + 1.5, u + 2.2, v0 + Math.min(ov - 0.5, 4), '#9aa1a8', 2.4, { wall: '#aab1b8' });
+        }
       } else if (k === 'tech') {
         // 科技園區：低矮玻璃建築、綠屋頂
         rect(u0 + 2, v0 + 2, u1 - 2, v1 - 2, '#8fae6a', 4 + lv * 2, { wall: pick(r, ['#a9c0d2', '#b8c8c0', '#c2c9d6']), glass: true });

@@ -427,6 +427,12 @@ export class Network {
       }
       per.set(inL, cands);
     }
+    // 大型停車場的單向出入口（service1 接一般道路）：只能右進右出，左轉的車改走別條路
+    // （左轉進出的車會停在主要道路上等，排隊回堵到出口時整個停車場會卡死）
+    for (const [inL, cands] of per) for (let i = cands.length - 1; i >= 0; i--) {
+      const o = cands[i].outL, oneIn = o.seg.type === 'service1' && !inL.seg.T.internal, oneOut = inL.seg.type === 'service1' && !o.seg.T.internal;
+      if ((oneIn || oneOut) && cands[i].ang < -0.55) cands.splice(i, 1);
+    }
     // 同一進入方向有多個直行 → 角度最小者為直行，其餘依方向判為左/右轉（分流）
     for (const cands of per.values()) {
       const S = cands.filter(c => c.cls === 'S');

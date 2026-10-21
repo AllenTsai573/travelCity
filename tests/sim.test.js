@@ -285,6 +285,28 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert(maxRun >= 1 && gt.transit.stats.riders > 0, `公車開出並載到乘客（最多 ${maxRun} 輛，累計 ${gt.transit.stats.riders} 人）`);
 }
 
+// 依人口解鎖：開局只有低密度、商業、工業（最大 12×12），人口越多解鎖越多
+{
+  const { zoneMax } = await import('../js/config.js');
+  const gu = makeGame(4321, 'temperate', 'normal', true);
+  const C = gu.city;
+  C.peakPop = 0;
+  const s = [...gu.net.segs.values()].filter(x => x.T.access && !x.T.internal && x.len > 200).sort((a, b) => b.len - a.len)[0];
+  const g0 = C.gridStart(s);
+  const plan = (zt, n) => C.planStroke(zt, s, 1, g0, g0 + n * 6, n).filter(p => p.ok);
+  const c0 = plan('C', 30), r2 = plan('R2', 10), t0 = plan('T', 10);
+  assert(c0.length && c0.every(p => p.cols <= 12 && p.rows <= 12) && !r2.length && !t0.length, `開局：商業最大 12 格（${c0.map(p => p.cols + '×' + p.rows).join('、')}），中密度與公車總站未解鎖`);
+  C.peakPop = 2600;
+  assert(C.maxCells('C') === 18 && C.maxCells('R2') === 18 && C.maxCells('R3') === 0 && C.maxCells('T') === 16 && C.maxCells('I') === 12, '人口 2500：商業與中密度 18 格、公車總站 16 格，高密度未解鎖');
+  C.peakPop = 5200;
+  assert(zoneMax('C', 5200) === 30 && C.maxCells('R3') === 24 && C.maxCells('I') === 32, '人口 5000：商業 30 格、高密度 24 格、工業 32 格');
+  C.peakPop = 100; C.recount();
+  const kinds = new Set(); for (let i = 0; i < 200; i++) kinds.add(C.pickKind('I', 10, 10));
+  C.peakPop = 3100;
+  const kinds2 = new Set(); for (let i = 0; i < 400; i++) kinds2.add(C.pickKind('I', 10, 10));
+  assert(!kinds.has('semi') && !kinds.has('battery') && kinds2.has('semi') && kinds2.has('battery'), `高科技工廠人口 3000 才出現（${[...kinds2].join('、')}）`);
+}
+
 // 空白地圖開局：只有外部連線，沒有分區與建築
 {
   const gb = makeGame(4321, 'temperate', 'sandbox', false);

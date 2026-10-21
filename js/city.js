@@ -1,8 +1,8 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
-import { TRIP_SCALE, TRIP_REF, SEP_RI, DEMAND_BUILD, DEMAND_ZONE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
+import { zoneMax, HITECH_POP, POLLUTION, TRIP_SCALE, TRIP_REF, SEP_RI, DEMAND_BUILD, DEMAND_ZONE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap, closestOnPoly } from './util.js';
 import { halfWidth } from './network.js';
-import { lotArt, lotAisles, lotParkArea } from './lotart.js';
+import { lotArt, lotAisles, lotParkArea, oneWayLot, garageDrive } from './lotart.js';
 
 const ema = (a, x, k) => a + (x - a) * k;
 // 有公車可搭時（起訖附近都有同一條路線的站牌），就算有車也改搭公車的居民比例
@@ -18,15 +18,20 @@ export function driveway(zone, kind, geo) {
   // 住宅區的巷道（盡頭迴車，不打通）：低密度兩側是宅地；中 / 高密度兩側是停車格，後面才是建物
   // 公車總站：中央場內車道（兩側是公車停車格）
   if (zone === 'T') return geo.cols >= 6 ? { end: d - 6 } : null;
+  // 高密度住宅的地下 / 立體停車場、立體停車場的購物中心：停車場前的單向車道（右進右出）
+  const gd = garageDrive(geo.zt, kind, geo.cols, geo.rows);
+  if (gd) return { end: gd.cv, lot: { aisles: [gd.ua, gd.ub], oneway: true, front: gd.cv }, garage: true };
   if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R1') return { end: d - 7 };
   if (zone === 'R' && kind === null && geo.rows >= 6 && geo.cols >= 6 && geo.zt === 'R2') return { end: d - 7 };
-  if (zone === 'R' && kind === null && geo.rows >= 7 && geo.cols >= 8 && geo.zt === 'R3') return { end: d - 7 };
   if (zone !== 'C') return null;
   // 大型停車場：主車道開到停車場底部，再接一條橫向車道與其他平行車道（車位都在真的車道旁，車子不會穿過其他車位）
   const pa = lotParkArea(kind, geo.w, d);
   if (pa) {
     const aisles = lotAisles(pa.u0, pa.u1, geo.w / 2), through = kind === 'parking';
     if (!aisles.length) return { end: kind === 'parking' ? d - 6 : pa.v1 - 3, through };
+    // 量販店 / 購物中心 / 超市：單向環狀動線，只有一個入口（最左側車道）與一個出口（最右側車道）
+    // 入口 → 前方分配車道（往右）→ 各停車車道（往後）→ 後方集散車道（往右）→ 最右側車道（往前）→ 出口
+    if (oneWayLot(kind, aisles)) return { end: pa.v1 - 4.8, through, lot: { aisles: [...aisles, geo.w / 2].sort((a, b) => a - b), oneway: true, front: pa.v0 + 3 } };
     return { end: pa.v1 - 4.8, through, lot: { aisles, top: pa.v0 + 2 } };
   }
   if (kind === 'shops' && geo.rows >= 6 && geo.cols >= 5) return { end: d - 6, through: true };
@@ -55,6 +60,7 @@ export class City {
     this.hourT = 0;
     this.growT = 0;
     this.growStart = 0;   // 這個遊戲時間之後才開始發展（開局先讓路網跑一陣子）
+    this.peakPop = 0;     // 曾達到的最高人口：分區解鎖與城市稱號依此（人口減少不會再鎖回去）
     this.demand = { R: 0.7, C: 0.3, I: 0.4 };
     this.pop = 0; this.jobsC = 0; this.jobsI = 0;
     this.stats = { trips: 0, fails: 0, through: 0, tripTimeSum: 0, hourTrips: 0, hourFails: 0, hourIncome: 0, hourExpense: 0, lastIncome: 0, lastExpense: 0, lastTrips: 0, lastFails: 0 };
@@ -128,8 +134,12 @@ export class City {
   }
 
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
+  // 目前人口下分區 zt 的最大地塊格數（0 = 尚未解鎖）
+  maxCells(zt) { return zoneMax(zt, this.peakPop); }
+
   planStroke(zt, seg, side, u0, u1, rows) {
-    const Z = ZONE_TYPES[zt];
+    const Z = { max: this.maxCells(zt) };
+    if (!Z.max) return [];
     // 起點對齊格線
     const g0 = this.gridStart(seg);
     const a = g0 + Math.max(0, Math.ceil((Math.min(u0, u1) - g0) / CELL - 1e-6)) * CELL, b = Math.min(Math.max(u0, u1), seg.len - seg.rb);
@@ -200,17 +210,37 @@ export class City {
   buildParkRoads(geo, seg, u, plan) {
     const g = this.game, net = g.net;
     const P = (a, v) => ({ x: geo.corners[0].x + geo.tx * a + geo.nx * v, y: geo.corners[0].y + geo.ty * a + geo.ny * v });
-    const spend = g.spend, can = g.canAfford;
-    g.spend = () => {}; g.canAfford = () => true;
-    const build = (a, b) => {
-      const plan = net.planRoad(a, b, null, 'service', 0);
+    // 自動開路：不花錢；分段建造單向車道時中途的「無法駛出」提示不顯示給玩家（完成後每條都有出路）
+    const spend = g.spend, can = g.canAfford, notify = g.notify;
+    g.spend = () => {}; g.canAfford = () => true; g.notify = () => {};
+    const build = (a, b, type = 'service') => {
+      const plan = net.planRoad(a, b, null, type, 0);
       if (!plan.ok) return false;
       plan.demolish = [];
       net.executeRoad(plan);
       return true;
     };
     const before = new Set(net.segs.keys());
+    // 單向停車場：沿起點方向依序建造（a → b 為行車方向）；接到已有的節點 / 路段
+    const at = q => { const n = net.nodeNear(q.x, q.y, 2, 0); if (n) return { x: n.x, y: n.y, node: n.id }; const sn = net.segNear(q.x, q.y, 2, 0); return sn ? { x: sn.x, y: sn.y, seg: sn.seg.id, u: sn.u } : q; };
+    const road = a => { const f = P(a, -(halfWidth(seg.T) + 1.5)), fs = net.segNear(f.x, f.y, 4, 0); return fs && !fs.seg.T.internal ? { x: fs.x, y: fs.y, seg: fs.seg.id, u: fs.u } : null; };
     try {
+      if (plan.lot && plan.lot.oneway) {
+        // 入口在臨路車道的上游端、出口在下游端：等著進場的車往上游回堵，不會擋到出口右轉出來的車
+        // （臨路車道的行車方向 t 滿足「t 的右側 = 地塊內側」）
+        const nearPlusU = -geo.ty * geo.nx + geo.tx * geo.ny > 0;
+        const A = nearPlusU ? plan.lot.aisles : [...plan.lot.aisles].reverse(), n = A.length, vf = plan.lot.front, cv = plan.end, r0 = road(A[0]), r1 = road(A[n - 1]);
+        // direct：沒有前方分配車道（停車場前的車道），入口直接開到 cv
+        const direct = vf >= cv - 1;
+        if (!r0 || !r1 || !build(r0, P(A[0], direct ? cv : vf), 'service1')) return null;
+        if (!direct) for (let i = 0; i < n - 1; i++) {
+          if (i > 0) build(at(P(A[i - 1], vf)), at(P(A[i], vf)), 'service1');
+          build(at(P(A[i], vf)), at(P(A[i], cv)), 'service1');
+        }
+        for (let i = 0; i < n - 1; i++) build(at(P(A[i], cv)), at(P(A[i + 1], cv)), 'service1');
+        build(at(P(A[n - 1], cv)), road(A[n - 1]) || r1, 'service1');
+        net.rebuild();
+      } else {
       const fp = pointAt(seg.pts, seg.cum, u);
       if (!build({ x: fp.x, y: fp.y, seg: seg.id, u }, P(geo.w / 2, plan.end))) return null;
       if (plan.cross) build(P(6, plan.cross), P(geo.w - 6, plan.cross));
@@ -231,9 +261,11 @@ export class City {
         }
       }
       net.rebuild();
-    } finally { g.spend = spend; g.canAfford = can; }
-    const segs = [...net.segs.values()].filter(s => s.type === 'service' && !before.has(s.id)).map(s => s.id);
-    const q = P(geo.w / 2, Math.max(8, plan.end - 6)), acc = net.segNear(q.x, q.y, 4, 0);
+      }
+    } finally { g.spend = spend; g.canAfford = can; g.notify = notify; }
+    const segs = [...net.segs.values()].filter(s => s.T.internal && !before.has(s.id)).map(s => s.id);
+    const L = plan.lot && plan.lot.oneway ? plan.lot.aisles : null;
+    const q = L ? P((L[0] + L[L.length - 1]) / 2, plan.end) : P(geo.w / 2, Math.max(8, plan.end - 6)), acc = net.segNear(q.x, q.y, 4, 0);
     if (!segs.length || !acc) return null;
     return { segs, access: { seg: acc.seg.id, u: acc.u } };
   }
@@ -273,7 +305,7 @@ export class City {
       }
     } finally { g.spend = spend; g.canAfford = can; }
     if (!gates.length) return false;
-    const fresh = [...net.segs.values()].filter(s2 => s2.type === 'service' && !before.has(s2.id)).map(s2 => s2.id);
+    const fresh = [...net.segs.values()].filter(s2 => s2.T.internal && !before.has(s2.id)).map(s2 => s2.id);
     b.roads = [...b.roads.filter(id => net.segs.has(id)), ...fresh];
     b.gates = b.gates || [];
     if (!b.gates.some(gt => gt.front)) { const gp = P(b.w / 2, 1.5); b.gates.push({ x: gp.x, y: gp.y, dx: -b.nx, dy: -b.ny, front: true }); }
@@ -306,13 +338,14 @@ export class City {
     const rng = this.game.rng, zone = ZONE_TYPES[zt].zone;
     if (zone === 'C') {
       const m = Math.min(cols, rows), x = rng.next();
-      if (m >= SHOP_KINDS.bigbox.minCells) return rng.pick(['bigbox', 'bigbox', 'mall', 'hotel', 'office', 'market']);
+      if (m >= SHOP_KINDS.bigbox.minCells) return rng.pick(['bigbox', 'bigbox', 'mall', 'mallp', 'hotel', 'office', 'market']);
       if (m >= 5) return x < 0.2 ? 'hotel' : x < 0.42 ? 'office' : x < 0.44 ? 'parking' : cols * rows >= 60 && x < 0.75 ? 'market' : 'shops';
       if (m >= 4 && x < 0.2) return 'office';
       if (m >= 3 && x < 0.38) return 'gas';
       return m >= 4 && x < 0.41 ? 'parking' : 'shops';
     }
-    if (zone === 'I') return rng.pick(Object.keys(INDUSTRY_KINDS));
+    // 高科技工廠（半導體、電池）要城市夠大才會出現
+    if (zone === 'I') return rng.pick(Object.keys(INDUSTRY_KINDS).filter(k => !INDUSTRY_KINDS[k].hitech || this.peakPop >= HITECH_POP));
     return null;
   }
 
@@ -324,7 +357,10 @@ export class City {
       const P = (u, v) => ({ x: c0.x + b.tx * u + b.nx * v, y: c0.y + b.ty * u + b.ny * v });
       const toSlot = it => {
         const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv;
-        return { ...P(cu, cv), ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny, indoor: !!it.indoor, c: it.c };
+        const s = { ...P(cu, cv), ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny, indoor: !!it.indoor, c: it.c };
+        // 室內停車場的出口車道：開出來的車從這裡出發
+        if (it.out) s.out = { ...P(it.out.u, it.out.v), ax: s.ax, ay: s.ay, indoor: true };
+        return s;
       };
       const list = art.slots.map(toSlot), tlist = art.tslots.map(toSlot);
       // 建物的牆（車子開進 / 出車位時不能穿過；樹籬、頂棚不算）
@@ -362,9 +398,11 @@ export class City {
   }
   // 車位對應的道路位置：車頭方向上最近、而且直直開過去不會穿過建物的道路
   // （臨路車位接前面的道路、巷道 / 停車場車道旁的車位接場內道路）；車子開到這個位置，再沿曲線開進車位
-  slotRoad(b, i, truck = false) {
-    const net = this.game.net, sl = this.slotSet(b, truck).list[i];
+  // out：開出時用的位置（室內停車場的出口車道），沒有就與停進來的位置相同
+  slotRoad(b, i, truck = false, out = false) {
+    const net = this.game.net, sl0 = this.slotSet(b, truck).list[i], sl = out && sl0 && sl0.out ? sl0.out : sl0;
     if (!sl) return null;
+    out = sl !== sl0;
     if (!b._slotRd || b._slotRd.ver !== net.version || b._slotRd.list !== b._slots.list) {
       // 候選道路：建築自己的場內道路＋地塊附近的一般地面道路（臨路的路段可能被巷道口切成好幾段）
       const ids = new Set([b.seg, b.front && b.front.seg, ...(b.roads || [])].filter(id => id !== null && id !== undefined));
@@ -372,7 +410,7 @@ export class City {
       for (const s of net.segs.values()) if (!s.T.internal && s.T.access && s.drawLevel === 0 && bboxOverlap(bb, s.bbox)) ids.add(s.id);
       b._slotRd = { ver: net.version, list: b._slots.list, map: new Map(), ids: [...ids] };
     }
-    const m = b._slotRd.map, key = truck ? 't' + i : i;
+    const m = b._slotRd.map, key = (truck ? 't' + i : i) + (out ? 'o' : '');
     if (m.has(key)) return m.get(key);
     const walls = b._slots.walls;
     let best = null;
@@ -534,7 +572,7 @@ export class City {
       x => this.cap(x) * this.near(b, x, 700) * (x.present < this.cap(x) * 0.5 * TRIP_REF ? 1.5 : 0.4));
   }
   pickShop(b) {
-    return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * (SHOP_KINDS[x.kind]?.shop || 1) * this.near(b, x, x.kind === 'bigbox' || x.kind === 'mall' ? 900 : 450));
+    return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * (SHOP_KINDS[x.kind]?.shop || 1) * this.near(b, x, x.kind === 'bigbox' || x.kind === 'mall' || x.kind === 'mallp' ? 900 : 450));
   }
   pickGoodsDest(b) {
     return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned && x.kind !== 'office'), x => this.cap(x) * (x.stock < 10 ? 2 : 0.4) * this.near(b, x, 1000));
@@ -673,7 +711,7 @@ export class City {
         }
       } else {
         // 大型商場吸引外地顧客
-        if (b.kind === 'bigbox' || b.kind === 'mall' || b.kind === 'market') {
+        if (b.kind === 'bigbox' || b.kind === 'mall' || b.kind === 'mallp' || b.kind === 'market') {
           b.acc.ext = (b.acc.ext || 0) + cap * 0.08 * pShop * k;
           while (b.acc.ext >= 1) {
             b.acc.ext -= 1;
@@ -807,7 +845,7 @@ export class City {
       for (const b of shopsC) {
         const d = Math.hypot(h.x - b.x, h.y - b.y);
         if (d >= 450) continue;
-        const w = shopW(b) * (1 - d / 450) * (b.kind === 'mall' || b.kind === 'bigbox' ? 0.3 : 1);
+        const w = shopW(b) * (1 - d / 450) * (b.kind === 'mall' || b.kind === 'mallp' || b.kind === 'bigbox' ? 0.3 : 1);
         near.push([b, w]); tw += w;
       }
       if (!tw) continue;
@@ -824,7 +862,7 @@ export class City {
       const cap = this.cap(b);
       if (b.zone === 'R') {
         let pol = 0;
-        for (const i of inds) {
+        for (const i of POLLUTION ? inds : []) {
           const d = Math.max(0, Math.hypot(i.x - b.x, i.y - b.y) - i.rad * 0.7);
           if (d < 220) pol += (1 - d / 220) * 0.35 * i.level * (INDUSTRY_KINDS[i.kind]?.pol ?? 1) * Math.min(2, Math.sqrt(i.cols * i.rows) / 6);
         }
@@ -907,6 +945,7 @@ export class City {
       if (b.zone === 'R') pop += c; else if (b.zone === 'C') jc += c; else if (b.zone === 'I') ji += c;
     }
     this.pop = pop; this.jobsC = jc; this.jobsI = ji;
+    this.peakPop = Math.max(this.peakPop || 0, pop);
     const avgHappy = this.buildings.length ? this.buildings.reduce((s, b) => s + b.happy, 0) / this.buildings.length : 0.7;
     const hb = (avgHappy - 0.5) * 0.6;
     // 交通狀況回饋：壅塞或行程失敗多時，沒有人想搬進來
@@ -1016,12 +1055,14 @@ export class City {
   autoLotSize(zone, seg) {
     const rng = this.game.rng, pop = this.pop;
     const R = (a, b) => rng.int(a, b);
+    // 只用已解鎖的分區與尺寸
+    const fit = o => { const m = this.maxCells(o.zt); return { zt: o.zt, cols: Math.min(o.cols, m), rows: Math.min(o.rows, m) }; };
     if (zone === 'R') {
-      const zt = pop > 2500 && seg.T.rank >= 2 && rng.chance(0.35) ? 'R3' : pop > 900 && rng.chance(0.45) ? 'R2' : 'R1';
-      return zt === 'R3' ? { zt, cols: R(4, 8), rows: R(4, 7) } : { zt, cols: R(3, 6), rows: R(3, 5) };
+      const zt = this.maxCells('R3') && seg.T.rank >= 2 && rng.chance(0.35) ? 'R3' : this.maxCells('R2') && rng.chance(0.45) ? 'R2' : 'R1';
+      return fit(zt === 'R3' ? { zt, cols: R(4, 8), rows: R(4, 7) } : { zt, cols: R(3, 6), rows: R(3, 5) });
     }
-    if (zone === 'C') return pop > 1800 && rng.chance(0.12) ? { zt: 'C', cols: R(15, 18), rows: 15 } : { zt: 'C', cols: R(3, 7), rows: R(3, 5) };
-    return { zt: 'I', cols: R(5, 10), rows: R(5, 9) };
+    if (zone === 'C') return fit(this.maxCells('C') >= 15 && rng.chance(0.12) ? { zt: 'C', cols: R(15, 18), rows: 15 } : { zt: 'C', cols: R(3, 7), rows: R(3, 5) });
+    return fit({ zt: 'I', cols: R(5, 10), rows: R(5, 9) });
   }
 
   // ---------- 序列化 ----------
@@ -1032,7 +1073,7 @@ export class City {
         roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, parkPlan: b.parkPlan || undefined, links: b.links || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, tOcc: b.tOcc && b.tOcc.some(Boolean) ? b.tOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
-      demand: this.demand, stats: this.stats, history: this.history, growStart: this.growStart,
+      demand: this.demand, stats: this.stats, history: this.history, growStart: this.growStart, peakPop: this.peakPop,
     };
   }
   load(d) {
@@ -1069,6 +1110,7 @@ export class City {
     Object.assign(this.stats, d.stats);
     this.history = d.history || [];
     this.growStart = d.growStart || 0;
+    this.peakPop = Math.max(d.peakPop || 0, this.pop || 0);
     this.afterRebuild();
     this.recount();
   }

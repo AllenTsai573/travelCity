@@ -27,6 +27,8 @@ export const ROAD_TYPES = {
   highway4:  { name: '高速公路（4+4）', short: '國道4', fwd: 4, bwd: 4, speed: 110, rank: 3, cost: 65, median: 3,  access: false, color: '#3a3d42', unlock: 0 },
   // 園區 / 停車場內的場內道路（由建築自動產生，不在工具列中）
   service:   { name: '場內道路',       short: '場內', fwd: 1, bwd: 1, speed: 30,  rank: 0, cost: 0,  median: 0,   access: false, color: '#878a8f', unlock: 0, internal: true },
+  // 單向場內道路：大型停車場的單向環狀動線（一進一出）
+  service1:  { name: '場內道路（單向）', short: '場內', fwd: 1, bwd: 0, speed: 30,  rank: 0, cost: 0,  median: 0,   access: false, color: '#878a8f', unlock: 0, internal: true },
   freeway4:  { name: '單向高速（4 線）', short: '單高4', fwd: 4, bwd: 0, speed: 110, rank: 3, cost: 36, median: 0,   access: false, color: '#3a3d42', unlock: 0 },
 };
 export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'ramp2', 'express', 'highway', 'highway4', 'freeway1', 'freeway4'];
@@ -45,12 +47,29 @@ export const LEVEL_H = 6;           // 每層高度（公尺），用於陰影
 export const SLOPE_LEN = 45;        // 每升降一層所需最短距離
 
 // 人口里程碑（解鎖道路與高度）
+// 城市稱號：依「曾達到的最高人口」升級（人口減少不會降級），unlock 為這一級解鎖的內容（升級時通知）
 export const MILESTONES = [
-  { pop: 0,    name: '小村莊' },
-  { pop: 300,  name: '小鎮' },
-  { pop: 1200, name: '城市' },
-  { pop: 3500, name: '大都會' },
+  { pop: 0,    name: '小村莊', unlock: '低密度住宅、商業、工業（最大 12×12）' },
+  { pop: 750,  name: '小鎮',   unlock: '大眾運輸（公車總站 12×12）' },
+  { pop: 1000, name: '市鎮',   unlock: '中密度住宅（12×12）' },
+  { pop: 2500, name: '城市',   unlock: '商業 18×18、中密度 18×18、公車總站 16×16' },
+  { pop: 3000, name: '大城市', unlock: '高密度住宅（12×12）、工業 32×32、高科技工廠（半導體、電池）' },
+  { pop: 5000, name: '大都會', unlock: '商業 30×30、高密度 24×24' },
 ];
+// 各分區依人口放大的最大地塊：[[人口, 最大格數], ...]，人口未達第一項就是尚未解鎖
+export const ZONE_UNLOCK = {
+  R1: [[0, 12]],
+  R2: [[1000, 12], [2500, 18]],
+  R3: [[3000, 12], [5000, 24]],
+  C:  [[0, 12], [2500, 18], [5000, 30]],
+  I:  [[0, 12], [3000, 32]],
+  T:  [[750, 12], [2500, 16]],
+};
+export const HITECH_POP = 3000;   // 高科技工廠（半導體、電池）出現的人口
+// 人口 pop 時分區 zt 的最大地塊格數（0 = 尚未解鎖）
+export function zoneMax(zt, pop) { let m = 0; for (const [p, n] of ZONE_UNLOCK[zt]) if (pop >= p) m = n; return m; }
+// 分區 zt 下一次放大（或解鎖）需要的人口與格數；已經最大就是 null
+export function zoneNext(zt, pop) { return ZONE_UNLOCK[zt].find(([p]) => pop < p) || null; }
 
 export const DIFFICULTY = {
   sandbox: { name: '沙盒',  money: 1e9,    maint: 0,   patience: 2.0, tax: 1.0, through: 0.8, unlockAll: true },
@@ -90,6 +109,9 @@ export const ZONES = {
   T: { name: '大眾運輸', w: 30, d: 30, cap: [0, 4, 8, 12], color: ['#b07cd8', '#9a62c8', '#7f4bb0'], roof: ['#c9c3b5', '#c9c3b5', '#c9c3b5'] },
 };
 
+// 分區圖與工具列用的顏色：住宅依密度由淺到深
+export function zoneColor(zt) { const Z = ZONE_TYPES[zt]; return ZONES[Z.zone].color[zt === 'R1' ? 0 : zt === 'R3' ? 2 : 1]; }
+
 // 分區格子：每格 6 m × 6 m，沿道路排列；玩家一次拖曳的範圍會依各分區的最大地塊切成數塊
 export const CELL = 6;
 // 住宅與工業之間至少保持的距離（公尺，地塊邊緣到邊緣的概略值；開局與自動發展都遵守）
@@ -112,6 +134,7 @@ export const SHOP_KINDS = {
   market: { name: '超級市場', jobs: 0.9, shop: 1.3 },
   bigbox: { name: '大型量販店', jobs: 0.8, shop: 2.2, minCells: 15 },
   mall:   { name: '購物中心', jobs: 1.2, shop: 1.8, minCells: 15 },
+  mallp:  { name: '購物中心（立體停車場）', jobs: 1.2, shop: 1.8, minCells: 15 },
   hotel:  { name: '飯店', jobs: 1.1, shop: 0.4, minCells: 5, visit: 1 },
   office: { name: '辦公大樓', jobs: 1.9, shop: 0.1, minCells: 4 },
   gas:    { name: '加油站', jobs: 0.4, shop: 0.9, minCells: 3 },
@@ -123,6 +146,11 @@ export const INDUSTRY_KINDS = {
   food:      { name: '食品加工', jobs: 1.1, goods: 0.9, pol: 0.6 },
   chemical:  { name: '化工廠', jobs: 0.8, goods: 1.2, pol: 1.8 },
   tech:      { name: '科技園區', jobs: 1.4, goods: 0.6, pol: 0.3 },
+  // 高科技工廠：人口達到 HITECH_POP 才會出現
+  semi:      { name: '半導體晶圓廠', jobs: 1.6, goods: 1.3, pol: 0.4, hitech: true },
+  battery:   { name: '電池 / 電子零件廠', jobs: 1.3, goods: 1.4, pol: 0.5, hitech: true },
 };
+// 工業污染（住宅滿意度扣分）：目前先忽略
+export const POLLUTION = false;
 
 export const VEHICLE_COLORS = ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7d3c98', '#d35400', '#5d6d7e', '#ecf0f1', '#a93226'];

@@ -23,6 +23,7 @@ class Game {
     this.speed = 1.5;
     this.paused = false;
     this.heatmap = false;
+    this.zonemap = false;
     this.autoGrow = true;
     this.net = null;
     this.terrain = null;
@@ -45,11 +46,12 @@ class Game {
   }
   notify(msg, kind = 'info') { this.ui.toast(msg, kind); }
 
-  checkMilestone() {
+  // 城市稱號依曾達到的最高人口；升級時通知這一級解鎖了什麼
+  checkMilestone(silent = false) {
     for (let i = MILESTONES.length - 1; i > this.milestone; i--) {
-      if (this.city.pop >= MILESTONES[i].pop) {
+      if (this.city.peakPop >= MILESTONES[i].pop) {
+        if (!silent) for (let k = this.milestone + 1; k <= i; k++) this.notify(`🎉 城市成長為「${MILESTONES[k].name}」！解鎖：${MILESTONES[k].unlock}`, 'good');
         this.milestone = i;
-        this.notify(`🎉 城市成長為「${MILESTONES[i].name}」！`, 'good');
         this.ui.refreshToolbar();
         break;
       }
@@ -59,6 +61,7 @@ class Game {
   setSpeed(s) { this.speed = s; this.paused = false; this.ui.refreshTop(); }
   togglePause() { this.paused = !this.paused; this.ui.refreshTop(); }
   toggleHeatmap() { this.heatmap = !this.heatmap; this.ui.refreshTop(); }
+  toggleZonemap() { this.zonemap = !this.zonemap; this.ui.refreshTop(); }
 
   // ---------- 世界 ----------
   setup(seed, biome, difficulty, size = MAP_SIZE) {
@@ -111,10 +114,12 @@ class Game {
     this.setup(d.seed, d.biome, d.diff, d.mapSize || 2400);
     this.time = d.time;
     this.money = d.money;
-    this.milestone = d.milestone;
+    this.milestone = 0;   // 依最高人口重新判定（舊存檔的稱號分級不同）
     this.autoGrow = d.autoGrow !== false;
     this.net.load(d.net);
     this.city.load(d.city);
+    this.city.recount();
+    this.checkMilestone(true);
     for (const s of this.net.segs.values()) if (s.drawLevel === 0) this.terrain.clearTreesAlong(s.pts, halfWidth(s.T) + 3);
     if (d.cam) Object.assign(this.renderer.cam, d.cam);
     this.afterLoad();

@@ -23,6 +23,8 @@ export function makeGame(seed, biome, diff, gen = true, size = MAP_SIZE) {
   g.city = new City(g);
   g.traffic = new Traffic(g);
   g.transit = new Transit(g);
+  // 測試預設全部解鎖（依人口解鎖的分區與尺寸另有專門的測試）
+  g.city.peakPop = 1e6;
   if (gen) generateWorld(g);
   return g;
 }

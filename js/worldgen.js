@@ -135,11 +135,11 @@ export function generateWorld(g, opts = {}) {
       n++;
     }
   };
-  place('I', 2, () => ({ cols: rng.int(10, 14), rows: rng.int(10, 12) }));
-  place('C', 1, () => ({ cols: rng.int(15, 18), rows: 15 }));
+  // 開局人口 0：只有低密度住宅、商業、工業，最大 12×12（中 / 高密度、大型商場要人口夠多才解鎖）
+  place('I', 2, () => ({ cols: rng.int(10, 12), rows: rng.int(10, 12) }));
+  place('C', 1, () => ({ cols: 12, rows: rng.int(10, 12) }));
   place('C', 4, () => ({ cols: rng.int(5, 8), rows: rng.int(5, 7) }));
-  place('R2', 3, () => ({ cols: rng.int(8, 12), rows: rng.int(6, 8) }));
-  place('R1', 12, () => ({ cols: rng.int(4, 6) * 2, rows: rng.int(6, 10) }));
+  place('R1', 16, () => ({ cols: rng.int(4, 6) * 2, rows: rng.int(6, 10) }));
   city.recount();
   g.money = savedMoney;
 }

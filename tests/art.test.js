@@ -5,8 +5,8 @@ import { lotArt } from '../js/lotart.js';
 import { driveway } from '../js/city.js';
 
 const cases = [['R1', 'R', [null]], ['R2', 'R', [null]], ['R3', 'R', [null]],
-  ['C', 'C', ['shops', 'market', 'bigbox', 'mall', 'hotel', 'office', 'gas', 'parking']],
-  ['I', 'I', ['factory', 'logistics', 'food', 'chemical', 'tech']], ['T', 'T', [null]]];
+  ['C', 'C', ['shops', 'market', 'bigbox', 'mall', 'mallp', 'hotel', 'office', 'gas', 'parking']],
+  ['I', 'I', ['factory', 'logistics', 'food', 'chemical', 'tech', 'semi', 'battery']], ['T', 'T', [null]]];
 const bad = [];
 let n = 0;
 for (const [zt, zone, kinds] of cases) for (const kind of kinds) for (let cols = 2; cols <= 32; cols += cols < 16 ? 1 : 4) for (let rows = 2; rows <= 32; rows += rows < 16 ? 1 : 4) for (const level of [1, 2, 3]) for (const roads of [null, [1]]) {

@@ -99,10 +99,12 @@ export class Traffic {
   }
   // 同一處車位（地下停車場入口、相鄰的車位）一次只讓一台車進出
   slotBusy(b, pt) {
+    // 室內車位（地下 / 立體停車場入口）：入口內並排的車道各自進出，只擋同一條車道
+    const R = pt.indoor ? 2.4 : 3.4;
     for (const f of this.fx) {
       if (f.done || f.b !== b) continue;
       const q = f.arrive ? f.pts[3] : f.pts[0];
-      if (Math.hypot(q.x - pt.x, q.y - pt.y) < 3.4) return true;
+      if (Math.hypot(q.x - pt.x, q.y - pt.y) < R) return true;
     }
     return false;
   }
@@ -135,9 +137,11 @@ export class Traffic {
     if (city && from.zone && !from.dead) {
       const parked = city.pickParked(from, 4, truck);
       for (const lv of parked) {
-        if (this.slotBusy(from, lv.slot)) continue;
-        const rd = city.slotRoad(from, lv.idx, truck);
-        if (rd) leaves.push({ ...lv, pt: { seg: rd.seg, u: rd.u, id: from.id } });
+        // 室內停車場：從出口車道開出來
+        const sp = lv.slot.out || lv.slot;
+        if (this.slotBusy(from, sp)) continue;
+        const rd = city.slotRoad(from, lv.idx, truck, true);
+        if (rd) leaves.push({ ...lv, slot: sp, pt: { seg: rd.seg, u: rd.u, id: from.id } });
       }
       // 有停著的車但旁邊正有車在進出：等一下，不要從建物憑空開出一輛
       if (!leaves.length && parked.length) return 'wait';

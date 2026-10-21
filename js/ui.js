@@ -1,5 +1,5 @@
 // 介面：頂部資訊列、工具列、資訊面板、路口編輯器、對話框
-import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, ZONE_ORDER, SHOP_KINDS, INDUSTRY_KINDS, BIOMES, DIFFICULTY, MILESTONES } from './config.js';
+import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, ZONE_ORDER, SHOP_KINDS, INDUSTRY_KINDS, BIOMES, DIFFICULTY, MILESTONES, POLLUTION, zoneMax, zoneNext, zoneColor } from './config.js';
 import { fmtMoney, fmtTime, clamp } from './util.js';
 import { TEMPLATES, TEMPLATE_ORDER } from './interchange.js';
 import { roadThumb, roundaboutThumb, interchangeThumb } from './thumbs.js';
@@ -51,6 +51,7 @@ export class UI {
       if (s === 0) g.togglePause(); else g.setSpeed(s);
     });
     document.getElementById('btn-heat').onclick = () => g.toggleHeatmap();
+    document.getElementById('btn-zmap').onclick = () => g.toggleZonemap();
     document.getElementById('btn-tilt').onclick = () => g.renderer.toggleTilt();
     document.getElementById('btn-rotl').onclick = () => g.renderer.rotate(-Math.PI / 2);
     document.getElementById('btn-rotr').onclick = () => g.renderer.rotate(Math.PI / 2);
@@ -75,7 +76,10 @@ export class UI {
         if (!g.unlocked(L.unlock)) { g.notify(`需達到「${MILESTONES[L.unlock].name}」才能解鎖${L.name}`, 'warn'); return; }
         t.level = Number(v);
       } else if (k === 'curve') { t.curve = !t.curve; t.pts = t.pts.slice(0, 1); }
-      else if (k === 'zone') t.zone = v;
+      else if (k === 'zone') {
+        if (v !== 'X' && !g.city.maxCells(v)) { g.notify(`${ZONE_TYPES[v].name}需要人口達到 ${zoneNext(v, g.city.peakPop)[0]} 才能解鎖`, 'warn'); return; }
+        t.zone = v;
+      }
       else if (k === 'rb') t.rbR = Number(v);
       else if (k === 'ix') t.ixType = v;
       else if (k === 'rot') t.ixAngle += Number(v) * Math.PI / 12;
@@ -118,9 +122,15 @@ export class UI {
       } else html += `<div class="hint">點擊道路以變更類型（同類單行道則反轉方向）</div>`;
     } else if (t.tool === 'zone') {
       const zdesc = { R1: '透天、獨棟', R2: 'アパート、低層公寓大樓', R3: '板狀大樓、塔式住宅', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車' };
-      html += `<div class="grp">` + ZONE_ORDER.map(k => { const Z = ZONE_TYPES[k]; return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''}" title="${Z.name}：最大 ${Z.max}×${Z.max} 格（每格 6 m）｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>最大 ${Z.max}×${Z.max} · 免費</small></button>`; }).join('')
+      // 依人口解鎖：未解鎖的顯示需要的人口；已解鎖的顯示目前最大尺寸與下一次放大的人口
+      const peak = g.city.peakPop;
+      html += `<div class="grp">` + ZONE_ORDER.map(k => {
+        const Z = ZONE_TYPES[k], m = zoneMax(k, peak), nx = zoneNext(k, peak);
+        const sub = m ? `最大 ${m}×${m}` + (nx ? `（${nx[0]} 人 → ${nx[1]}×${nx[1]}）` : '') : `🔒 人口 ${nx[0]}`;
+        return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''} ${m ? '' : 'locked'}" title="${Z.name}：${m ? `最大 ${m}×${m} 格（每格 6 m）` : `人口達到 ${nx[0]} 才能解鎖`}${nx && m ? `；人口 ${nx[0]} 時放大到 ${nx[1]}×${nx[1]}` : ''}｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>${sub}</small></button>`;
+      }).join('')
         + `<button data-sub="zone" data-v="X" class="${t.zone === 'X' ? 'on' : ''}" title="拖曳範圍內的空分區取消"><b>✕ 取消分區</b><small>僅空地</small></button></div>`;
-      html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕工業污染與高速公路噪音。</div>`;
+      html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕高速公路噪音。各分區的最大尺寸隨人口解鎖放大。</div>`;
     } else if (t.tool === 'roundabout') {
       html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="th ${t.rbR === r ? 'on' : ''}">${roundaboutThumb(r)}<b>半徑 ${r} m</b></button>`).join('') + `</div>`;
       html += `<div class="hint">點擊既有路口將其改建為圓環，或在空地放置圓環。環道車輛擁有路權。</div>`;
@@ -166,6 +176,17 @@ export class UI {
       b.classList.toggle('on', s === 0 ? g.paused : !g.paused && g.speed === s);
     }
     $('btn-heat').classList.toggle('on', g.heatmap);
+    $('btn-zmap').classList.toggle('on', g.zonemap);
+    // 分區圖圖例：各分區的建築數、空地塊數與面積（格）
+    $('zonemap').classList.toggle('hidden', !g.zonemap);
+    if (g.zonemap) {
+      const cnt = {};
+      for (const b of c.buildings) { const o = cnt[b.zt] || (cnt[b.zt] = { b: 0, l: 0, a: 0 }); o.b++; o.a += b.cols * b.rows; }
+      for (const l of c.lots) { const o = cnt[l.zt] || (cnt[l.zt] = { b: 0, l: 0, a: 0 }); o.l++; o.a += l.cols * l.rows; }
+      $('zonemap').innerHTML = '<b>分區圖</b>' + ZONE_ORDER.map(k => { const o = cnt[k] || { b: 0, l: 0, a: 0 }, Z = ZONE_TYPES[k];
+        return `<div class="zr"><i class="sw" style="background:${zoneColor(k)}"></i><span>${Z.name}</span><small>${o.b} 棟 · 空地 ${o.l} · ${o.a} 格</small></div>`; }).join('')
+        + '<small class="dim">實心：已蓋建築；淡色虛線框：還沒蓋的空地塊</small>';
+    }
     $('btn-grow').classList.toggle('on', g.autoGrow);
     // 需求條與資訊面板放在頂部列下方（視窗窄時頂部列會換行變高）
     const tb = $('topbar').getBoundingClientRect().bottom + 8;
@@ -263,7 +284,7 @@ export class UI {
             <dt>通勤成功</dt><dd>${bar(b.workOK)} ${pct(b.workOK)}</dd>
             <dt>購物成功</dt><dd>${bar(b.shopOK)} ${pct(b.shopOK)}</dd>
             <dt>通勤時間</dt><dd>${bar(b.timeScore)} ${pct(b.timeScore)}</dd>
-            <dt>工業污染</dt><dd>${bar(b.pollution, false)} ${pct(b.pollution)}</dd>
+            ${POLLUTION ? `<dt>工業污染</dt><dd>${bar(b.pollution, false)} ${pct(b.pollution)}</dd>` : ''}
             <dt>交通噪音</dt><dd>${bar(b.noise, false)} ${pct(b.noise)}</dd>`;
         } else {
           rows += `<dt>工作崗位</dt><dd>${cap}</dd>

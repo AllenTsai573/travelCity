@@ -1,6 +1,6 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
 import { lotArt } from './lotart.js';
-import { LANE_W, LEVEL_H, ZONES, CLOCK } from './config.js';
+import { LANE_W, LEVEL_H, ZONES, CLOCK, zoneColor } from './config.js';
 import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly, closestOnPoly } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
 import { fxAt } from './traffic.js';
@@ -169,8 +169,10 @@ export class Renderer {
     this.drawArrivals(v);
     this.drawGates(v);
     this.drawStops(v);
-    this.drawBuildings(v, 'tall');
+    // 分區圖：不畫建物的立體部分，只看各地塊的分區顏色
+    if (!g.zonemap) this.drawBuildings(v, 'tall');
     this.drawNetwork(v, L => L > 0);
+    if (g.zonemap) this.drawZoneMap(v);
     if (g.heatmap) this.drawHeatmap(v);
     this.drawSelection();
     g.tools.drawOverlay(ctx, this);
@@ -1318,6 +1320,25 @@ export class Renderer {
         }
       }
     }
+  }
+
+  // 分區圖：已蓋建築的地塊整塊塗上分區顏色，空地塊淡色加虛線框
+  drawZoneMap(v) {
+    const ctx = this.ctx, z = this.cam.z, city = this.game.city;
+    const vis = o => o.x + o.rad > v.x0 && o.x - o.rad < v.x1 && o.y + o.rad > v.y0 && o.y - o.rad < v.y1;
+    const poly = c => { ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath(); };
+    for (const b of city.buildings) {
+      if (b.dead || !vis(b)) continue;
+      poly(b.corners); ctx.globalAlpha = b.abandoned ? 0.35 : 0.78; ctx.fillStyle = zoneColor(b.zt); ctx.fill();
+      ctx.globalAlpha = 1; ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 1.2 / z; ctx.stroke();
+    }
+    ctx.setLineDash([5 / z, 4 / z]);
+    for (const l of city.lots) {
+      if (!vis(l)) continue;
+      poly(l.corners); ctx.globalAlpha = 0.3; ctx.fillStyle = zoneColor(l.zt); ctx.fill();
+      ctx.globalAlpha = 1; ctx.strokeStyle = zoneColor(l.zt); ctx.lineWidth = 2 / z; ctx.stroke();
+    }
+    ctx.setLineDash([]);
   }
 
   drawHeatmap(v) {

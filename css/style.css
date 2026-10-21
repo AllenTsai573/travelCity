@@ -155,3 +155,10 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
   #toolbar button { min-width: 50px; }
   #toolbar kbd { display: none; }
 }
+/* 分區圖圖例 */
+#zonemap { position: fixed; left: 8px; bottom: 96px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; z-index: 4; font-size: 12px; display: flex; flex-direction: column; gap: 4px; min-width: 210px; }
+#zonemap.hidden { display: none; }
+#zonemap .zr { display: flex; align-items: center; gap: 6px; }
+#zonemap .zr span { flex: 1; }
+#zonemap .zr small, #zonemap .dim { color: var(--dim); font-size: 11px; }
+#zonemap .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }

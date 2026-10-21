@@ -104,6 +104,8 @@ export class Network {
     if (opts.id) this.nextId = Math.max(this.nextId, id + 1);
     const seg = {
       id, a: A.id, b: B.id, type: typeKey, T, pts, cum, len: cum[cum.length - 1], ring: !!opts.ring,
+      // 分區格線的起算位移：路段被切開或反向時沿用，格子才不會跑掉
+      go: opts.go || 0,
       lanes: [], links: {}, ra: 0, rb: 0, core: null, coreCum: null, bbox: polyBBox(pts, halfWidth(T) + 2),
     };
     for (const dir of [1, -1]) {
@@ -581,8 +583,8 @@ export class Network {
     if (u > seg.len - 1.5) return B;
     const p = pointAt(seg.pts, seg.cum, u);
     const N = this.addNode(p.x, p.y, Math.round(this.segHeightAt(seg, u)));
-    const s1 = this.addSegment(A, N, seg.type, cutPoly(seg.pts, seg.cum, 0, u), { ring: seg.ring });
-    const s2 = this.addSegment(N, B, seg.type, cutPoly(seg.pts, seg.cum, u, seg.len), { ring: seg.ring });
+    const s1 = this.addSegment(A, N, seg.type, cutPoly(seg.pts, seg.cum, 0, u), { ring: seg.ring, go: seg.go });
+    const s2 = this.addSegment(N, B, seg.type, cutPoly(seg.pts, seg.cum, u, seg.len), { ring: seg.ring, go: seg.go + u });
     for (const lane of seg.lanes) {
       for (const v of lane.vehs) {
         const uv = this.laneSToSegU(lane, v.s);
@@ -605,7 +607,7 @@ export class Network {
   replaceSegment(seg, typeKey, reverse = false) {
     const A = this.nodes.get(seg.a), B = this.nodes.get(seg.b);
     const pts = reverse ? [...seg.pts].reverse() : seg.pts;
-    const ns = reverse ? this.addSegment(B, A, typeKey, pts, { ring: seg.ring }) : this.addSegment(A, B, typeKey, pts, { ring: seg.ring });
+    const ns = reverse ? this.addSegment(B, A, typeKey, pts, { ring: seg.ring, go: -(seg.go + seg.len) }) : this.addSegment(A, B, typeKey, pts, { ring: seg.ring, go: seg.go });
     const T = ROAD_TYPES[typeKey];
     for (const lane of seg.lanes) {
       const nd = reverse ? -lane.dir : lane.dir;
@@ -904,7 +906,7 @@ export class Network {
         sigAdaptive: n.sigAdaptive, sigDur: n.signal ? Object.fromEntries(n.signal.phases.map((p, i) => [i, p.dur])) : n.sigDur,
         yieldOverride: n.yieldOverride, custom: n.custom, outside: n.outside,
       })),
-      segs: [...this.segs.values()].map(s => ({ id: s.id, a: s.a, b: s.b, type: s.type, ring: s.ring, pts: s.pts.map(p => [r2(p.x), r2(p.y)]) })),
+      segs: [...this.segs.values()].map(s => ({ id: s.id, a: s.a, b: s.b, type: s.type, ring: s.ring, go: s.go ? r2(s.go) : undefined, pts: s.pts.map(p => [r2(p.x), r2(p.y)]) })),
     };
   }
   load(data) {
@@ -916,7 +918,7 @@ export class Network {
       });
     }
     for (const s of data.segs) {
-      this.addSegment(this.nodes.get(s.a), this.nodes.get(s.b), s.type, s.pts.map(([x, y]) => ({ x, y })), { id: s.id, ring: s.ring });
+      this.addSegment(this.nodes.get(s.a), this.nodes.get(s.b), s.type, s.pts.map(([x, y]) => ({ x, y })), { id: s.id, ring: s.ring, go: s.go || 0 });
     }
     this.nextId = Math.max(this.nextId, data.nextId);
     this.rebuild();

@@ -1,5 +1,5 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
-import { ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
+import { TRIP_SCALE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap } from './util.js';
 import { halfWidth } from './network.js';
 
@@ -10,12 +10,12 @@ const ema = (a, x, k) => a + (x - a) * k;
 export function driveway(zone, kind, geo) {
   const d = geo.d;
   if (geo.rows < 5 || geo.cols < 3) return null;
-  if (zone === 'I') return { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null };
+  if (zone === 'I') return { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null, through: true };
   if (zone !== 'C') return null;
   if (kind === 'bigbox') return { end: d * 0.45 - 4 };
   if (kind === 'mall' || kind === 'market') return { end: d * 0.32 - 4 };
-  if (kind === 'parking') return { end: d - 6 };
-  if (kind === 'shops' && geo.rows >= 6) return { end: d - 6 };
+  if (kind === 'parking') return { end: d - 6, through: true };
+  if (kind === 'shops' && geo.rows >= 6) return { end: d - 6, through: true };
   return null;
 }
 const gauss = (h, mu, sd) => Math.exp(-0.5 * ((h - mu) / sd) ** 2) / (sd * 2.5066);
@@ -97,10 +97,18 @@ export class City {
     return null;
   }
 
+  // 路段上第一條分區格線的位置（u），之後每 CELL 公尺一格
+  gridStart(seg) {
+    const go = seg.go || 0;
+    return Math.ceil((seg.ra + go) / CELL - 1e-6) * CELL - go;
+  }
+
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
   planStroke(zt, seg, side, u0, u1, rows) {
     const Z = ZONE_TYPES[zt];
-    const a = Math.max(Math.min(u0, u1), seg.ra), b = Math.min(Math.max(u0, u1), seg.len - seg.rb);
+    // 起點對齊格線
+    const g0 = this.gridStart(seg);
+    const a = g0 + Math.max(0, Math.ceil((Math.min(u0, u1) - g0) / CELL - 1e-6)) * CELL, b = Math.min(Math.max(u0, u1), seg.len - seg.rb);
     const total = Math.floor((b - a) / CELL + 1e-6);
     // 所有地塊最小 2×2 格
     if (total < 2) return [];
@@ -148,6 +156,7 @@ export class City {
       const fr = net.segNear(m.x - geo.nx * (halfWidth(seg.T) - 0.5), m.y - geo.ny * (halfWidth(seg.T) - 0.5), 6, 0);
       b.front = fr ? { seg: fr.seg.id, u: fr.u } : null;
       b.roads = roads.segs; b.seg = roads.access.seg; b.u = roads.access.u;
+      if (roads.gate) { b.gate = roads.gate; this.applyGate(b); }
     }
     return b;
   }
@@ -165,16 +174,33 @@ export class City {
       net.executeRoad(plan);
       return true;
     };
+    const before = new Set(net.segs.keys());
+    let gate = null;
     try {
       const fp = pointAt(seg.pts, seg.cum, u);
       if (!build({ x: fp.x, y: fp.y, seg: seg.id, u }, P(geo.w / 2, plan.end))) return null;
       if (plan.cross) build(P(6, plan.cross), P(geo.w - 6, plan.cross));
       net.rebuild();
+      // 地塊後方緊鄰另一條道路：打通，但在後方出口設閘門（只有進出這裡的車可以走，避免被當捷徑）
+      const back = P(geo.w / 2, geo.d + 2), sn = plan.through ? net.segNear(back.x, back.y, 14, 0) : null;
+      if (sn && !sn.seg.T.internal && sn.seg.id !== seg.id && sn.seg.a !== seg.a && sn.seg.b !== seg.b && sn.seg.a !== seg.b && sn.seg.b !== seg.a &&
+          Math.hypot(sn.x - back.x, sn.y - back.y) < halfWidth(sn.seg.T) + 6) {
+        if (build(P(geo.w / 2, plan.end), { x: sn.x, y: sn.y, seg: sn.seg.id, u: sn.u })) {
+          net.rebuild();
+          const gp = P(geo.w / 2, geo.d - 1.5);
+          gate = { x: gp.x, y: gp.y, dx: geo.nx, dy: geo.ny };
+        }
+      }
     } finally { g.spend = spend; g.canAfford = can; }
-    const segs = [...net.segs.values()].filter(s => s.type === 'service' && pointInPoly(pointAt(s.pts, s.cum, s.len / 2), geo.corners)).map(s => s.id);
+    const segs = [...net.segs.values()].filter(s => s.type === 'service' && !before.has(s.id)).map(s => s.id);
     const q = P(geo.w / 2, Math.max(8, plan.end - 6)), acc = net.segNear(q.x, q.y, 4, 0);
     if (!segs.length || !acc) return null;
-    return { segs, access: { seg: acc.seg.id, u: acc.u } };
+    return { segs, access: { seg: acc.seg.id, u: acc.u }, gate };
+  }
+  applyGate(b) {
+    const net = this.game.net;
+    for (const id of b.roads || []) { const s = net.segs.get(id); if (s) s.gate = b.gate ? b.id : null; }
+    net.rebuild();
   }
   parkRoadSet() { const set = new Set(); for (const b of this.buildings) if (b.roads) for (const id of b.roads) set.add(id); return set; }
   removeParkRoads(b) {
@@ -204,6 +230,7 @@ export class City {
     const zone = ZONE_TYPES[zt].zone;
     const b = {
       id: this.nextId++, built: true, zone, zt, kind: kind || this.pickKind(zt, cols, rows), seg: seg.id, u, side, level, ...geo,
+      streetPark: seg.T.rank <= 1 && !seg.T.internal,
       happy: 0.7, workOK: 0.8, shopOK: 0.8, timeScore: 0.8, pollution: 0, noise: 0,
       workSat: 0.7, goodsSat: 1, custSat: 0.6, matSat: 1, stock: zone === 'R' ? 0 : 8, custLevel: 0, present: 0,
       // 起始累計量隨機，讓各棟建築的出發時間錯開
@@ -422,7 +449,7 @@ export class City {
     const pShop = gauss(hour, 14.5, 3.2) + 0.02;
     const pFreight = hour >= 6 && hour < 22 ? 1 / 16 : 0.01;
     // 小鎮階段出行較頻繁，城市變大後逐漸回到正常值（避免開局太冷清）
-    const k = dt / 60 * (1 + 1.5 * clamp(1 - this.pop / 700, 0, 1));
+    const k = dt / 60 * TRIP_SCALE * (1 + 1.5 * clamp(1 - this.pop / 700, 0, 1));
     const rng = g.rng;
     const pop = Math.max(1, this.pop), jobs = this.jobsC + this.jobsI;
     const outsideShare = clamp(1 - pop * 0.5 / Math.max(1, jobs), 0.08, 0.85);
@@ -696,10 +723,10 @@ export class City {
           seg = near.length ? rng.pick(near) : rng.pick(segs);
         } else seg = rng.pick(segs);
         const { zt, cols, rows } = this.autoLotSize(zone, seg);
-        const lo = seg.ra + cols * CELL / 2, hi = seg.len - seg.rb - cols * CELL / 2;
+        const g0 = this.gridStart(seg), lo = g0 + cols * CELL / 2, hi = seg.len - seg.rb - cols * CELL / 2;
         if (hi <= lo) continue;
         // 對齊路段上的格線
-        const u = seg.ra + cols * CELL / 2 + Math.floor(rng.next() * (hi - lo) / CELL) * CELL;
+        const u = lo + Math.floor(rng.next() * (hi - lo) / CELL) * CELL;
         const side = rng.chance(0.5) ? 1 : -1;
         let r = rows;
         while (r >= 2 && this.canPlaceLot(seg, u, side, cols, r)) r--;
@@ -731,7 +758,7 @@ export class City {
     return {
       nextId: this.nextId,
       buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, zt: b.zt, kind: b.kind, cols: b.cols, rows: b.rows, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned,
-        roads: b.roads || undefined, front: b.front || undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
+        roads: b.roads || undefined, front: b.front || undefined, gate: b.gate || undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
       demand: this.demand, stats: this.stats, history: this.history,
@@ -749,6 +776,7 @@ export class City {
       const geo = s.c0 ? this.geomFrom(...s.c0, s.cols, s.rows) : null;
       const b = this.addBuilding(zt, seg, s.u, s.side, s.cols || old[0], s.rows || old[1], s.level, s.kind, geo);
       if (s.roads) { b.roads = s.roads; b.front = s.front || null; }
+      if (s.gate) { b.gate = s.gate; this.applyGate(b); }
       b.happy = s.happy; b.stock = s.stock; b.abandoned = s.abandoned;
     }
     for (const l of d.lots || []) {

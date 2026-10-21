@@ -104,6 +104,9 @@ export class Renderer {
     if (!baked) this.drawTrees(v);
     this.drawBuildings(v);
     this.drawNetwork(v);
+    this.drawCurbCars(v);
+    this.drawArrivals(v);
+    this.drawGates(v);
     if (g.heatmap) this.drawHeatmap(v);
     this.drawSelection();
     g.tools.drawOverlay(ctx, this);
@@ -182,6 +185,26 @@ export class Renderer {
     }
   }
 
+  // 打通到後方道路的停車場 / 園區：出口的柵欄機（紅白相間的橫桿）
+  drawGates(v) {
+    const ctx = this.ctx, z = this.cam.z;
+    if (z < 0.8) return;
+    for (const b of this.game.city.buildings) {
+      const gt = b.gate;
+      if (!gt || gt.x < v.x0 || gt.x > v.x1 || gt.y < v.y0 || gt.y > v.y1) continue;
+      const tx = -gt.dy, ty = gt.dx, L = 4;
+      ctx.lineCap = 'butt';
+      for (let i = 0; i < 4; i++) {
+        ctx.strokeStyle = i % 2 ? '#ffffff' : '#d62828';
+        ctx.lineWidth = 0.45;
+        ctx.beginPath(); ctx.moveTo(gt.x - tx * L + tx * i * 2, gt.y - ty * L + ty * i * 2); ctx.lineTo(gt.x - tx * L + tx * (i + 1) * 2, gt.y - ty * L + ty * (i + 1) * 2); ctx.stroke();
+      }
+      ctx.fillStyle = '#3a3d42';
+      ctx.fillRect(gt.x - tx * (L + 0.5) - 0.5, gt.y - ty * (L + 0.5) - 0.5, 1, 1);
+      ctx.lineCap = 'round';
+    }
+  }
+
   drawBuildings(v) {
     const g = this.game, ctx = this.ctx, z = this.cam.z, city = g.city;
     const inV = b => !(b.x + b.rad < v.x0 || b.x - b.rad > v.x1 || b.y + b.rad < v.y0 || b.y - b.rad > v.y1);
@@ -216,12 +239,16 @@ export class Renderer {
         b._art.sorted = [...flat, ...cars, ...tall];
       }
       const items = b._art.sorted;
+      // 停車使用率：住宅白天上班時間車少、晚上多；商業 / 工業依在場員工與顧客
+      const hour = (g.time % 1440) / 60;
+      const occ = b.abandoned ? 0 : b.zone === 'R' ? (hour >= 8 && hour < 17 ? 0.35 : 0.85)
+        : clamp((b.present + b.custLevel * 1.5) / Math.max(1, city.cap(b) * 0.5), 0.08, 1);
       // 陰影
       // 陰影從建物底部往右下方投射（與底部相連，不會看起來浮在空中）
       if (detail) {
         ctx.fillStyle = 'rgba(20,24,30,0.24)';
         for (const it of items) {
-          if (!it.h || it.t === 'line') continue;
+          if (!it.h || it.t === 'line' || it.curb || (it.slot !== undefined && it.slot > occ)) continue;
           const o = it.h * 0.55;
           if (it.t === 'circle') {
             const p = P(it.u, it.v);
@@ -236,6 +263,18 @@ export class Renderer {
       }
       for (const it of items) {
         if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2))) continue;
+        if (it.slot !== undefined && it.slot > occ) continue;
+        if (it.curb) continue;   // 路邊停車在道路之後才畫（否則會被人行道蓋住）
+        if (it.car) {
+          // 停著的車：車身＋前後擋風玻璃
+          quad(box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv)); ctx.fillStyle = it.c; ctx.fill();
+          if (z > 1.8) {
+            ctx.fillStyle = 'rgba(30,40,55,0.7)';
+            const al = it.du > it.dv, L = al ? it.du : it.dv;
+            for (const [f0, f1] of [[0.18, 0.3], [0.68, 0.84]]) quad(al ? box(it.u0 + L * f0, it.v0 + 0.2, it.u0 + L * f1, it.v0 + it.dv - 0.2) : box(it.u0 + 0.2, it.v0 + L * f0, it.u0 + it.du - 0.2, it.v0 + L * f1)), ctx.fill();
+          }
+          continue;
+        }
         const col = b.abandoned && it.h >= 1 && !it.car ? '#a5a39c' : it.c;
         if (it.t === 'line') {
           ctx.strokeStyle = it.c; ctx.lineWidth = it.w; ctx.lineCap = 'butt';
@@ -281,6 +320,15 @@ export class Renderer {
               ctx.beginPath();
               for (let f = 1.0; f < H - 0.4; f += 1.5) { ctx.moveTo(p.x + (q.x - p.x) * 0.06, p.y - f + (q.y - p.y) * 0.06); ctx.lineTo(q.x - (q.x - p.x) * 0.06, q.y - f - (q.y - p.y) * 0.06); }
               ctx.stroke();
+            }
+            // 透天厝：朝南的牆畫門與窗
+            if (it.ridge && z > 2 && oy / L > 0.5 && !b.abandoned) {
+              const W = (u, h) => ({ x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u - h });
+              ctx.fillStyle = 'rgba(70,90,110,0.75)';
+              for (const f of [0.2, 0.72]) { const a0 = W(f, H * 0.75), a1 = W(f + 0.14, H * 0.4); ctx.fillRect(Math.min(a0.x, a1.x), a0.y, Math.abs(a1.x - a0.x) || 0.6, a1.y - a0.y); }
+              ctx.fillStyle = '#7a5a43';
+              const d0 = W(0.45, H * 0.62), d1 = W(0.56, 0);
+              ctx.fillRect(Math.min(d0.x, d1.x), d0.y, Math.abs(d1.x - d0.x) || 0.6, d1.y - d0.y);
             }
             // 牆腳的暗線，讓建物「站」在地上
             ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.35;
@@ -343,6 +391,8 @@ export class Renderer {
   // 道路標線（依道路類型沿中心線產生）
   markingsFor(T, core) {
     const lines = [];
+    // 場內道路與停車場鋪面融為一體，不畫標線
+    if (T.internal) return lines;
     const hw = halfWidth(T);
     lines.push({ pts: offsetPoly(core, hw - 0.75), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null, edge: true });
     lines.push({ pts: offsetPoly(core, -(hw - 0.75)), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null, edge: true });
@@ -485,7 +535,7 @@ export class Renderer {
     let j = null;
     const widest = segs.reduce((a, s) => (!a || halfWidth(s.T) > halfWidth(a.T) ? s : a), null);
     if (segs.length === 1) {
-      j = { kind: 'cap', r: halfWidth(segs[0].T), col: roadColor(segs[0].T) };
+      j = { kind: 'cap', r: halfWidth(segs[0].T), col: roadColor(segs[0].T), internal: !!segs[0].T.internal };
     } else if (segs.length >= 2) {
       const ends = segs.map(s => {
         const atA = s.a === n.id, core = s.core, cl = s.coreLen;
@@ -598,6 +648,7 @@ export class Renderer {
     const ctx = this.ctx;
     const ex = pass === 'curb' ? curbW : 0;
     if (j.kind === 'cap') {
+      if (j.internal) return;
       ctx.beginPath(); ctx.arc(n.x, n.y, j.r + ex, 0, Math.PI * 2); ctx.fill();
     } else {
       for (const st of j.strips) this.fillPoly(pass === 'curb' ? st.curbs : st.body);
@@ -786,6 +837,16 @@ export class Renderer {
         }
       }
       ctx.globalAlpha = tunnel ? 0.35 : 1;
+      // 人行道：一般道路兩側（建築地塊與路邊之間的 1.5 m）
+      if (L === 0 && !tunnel && z > 0.5) {
+        ctx.strokeStyle = '#c9c5bb'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        for (const pc of pieces) {
+          const T = pc.seg.T;
+          if (!T.access || T.internal || pc.seg.drawLevel !== 0) continue;
+          ctx.lineWidth = (halfWidth(T) + 1.6) * 2;
+          this.strokePoly(pc.seg.pts);
+        }
+      }
       // 路肩（先畫全部路肩，再畫柏油，接縫處不會出現邊線）
       const curbCol = tunnel ? '#222' : curbColor(L);
       const curbW = 0.5;
@@ -797,7 +858,7 @@ export class Renderer {
           gr.addColorStop(1, curbColor(pc.grad.h1));
           ctx.fillStyle = gr;
         } else ctx.fillStyle = curbCol;
-        this.fillPoly(pc.curb);
+        if (!pc.seg.T.internal) this.fillPoly(pc.curb);
       }
       for (const [n, j] of joints) { ctx.fillStyle = curbCol; this.drawJoint(n, j, 'curb', curbW); }
       // 柏油
@@ -844,7 +905,7 @@ export class Renderer {
         // 路口前的轉向箭頭（依實際車道連接，玩家調整後會跟著改變）
         if (z > 1.6) for (const n of nodes) {
           if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring))) continue;
-          for (const Lk of net.inLinks(n)) for (const lane of Lk.lanes) if (lane.len > 18) this.turnArrows(lane);
+          for (const Lk of net.inLinks(n)) if (!Lk.seg.T.internal) for (const lane of Lk.lanes) if (lane.len > 18) this.turnArrows(lane);
         }
       }
       if (tunnel) {
@@ -880,17 +941,10 @@ export class Renderer {
       }
       ctx.setTransform(a * dx, a * dy, -a * dy, a * dx, ox + a * x, oy + a * y);
       const hl = vh.len / 2, hw = vh.w / 2;
-      ctx.fillStyle = vh.color;
-      ctx.fillRect(-hl, -hw, vh.len, vh.w);
+      if (vh.fadeIn !== undefined && vh.fadeIn < 1) ctx.globalAlpha = vh.fadeIn;
+      this.carBody(vh.color, vh.len, vh.w, vh.truck, detail);
+      ctx.globalAlpha = 1;
       if (detail) {
-        if (vh.truck) {
-          ctx.fillStyle = '#5b6f8a';
-          ctx.fillRect(hl - 2.2, -hw, 2.2, vh.w);
-        } else {
-          ctx.fillStyle = 'rgba(30,40,55,0.75)';
-          ctx.fillRect(hl - 1.9, -hw + 0.2, 0.9, vh.w - 0.4);
-          ctx.fillRect(-hl + 0.5, -hw + 0.25, 0.6, vh.w - 0.5);
-        }
         if (vh.braking) {
           ctx.fillStyle = '#ff3b30';
           ctx.fillRect(-hl - 0.1, -hw, 0.35, 0.5);
@@ -898,6 +952,68 @@ export class Renderer {
         }
       }
     }
+    this.worldTf();
+  }
+
+  // 車身（區域座標：x 為車頭方向）：陰影、圓角車身、車頂亮面、前後擋風玻璃
+  carBody(color, len, w, truck, detail) {
+    const ctx = this.ctx, hl = len / 2, hw = w / 2;
+    if (detail) { ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(-hl + 0.35, -hw + 0.35, len, w); }
+    ctx.fillStyle = color;
+    if (detail && ctx.roundRect) { ctx.beginPath(); ctx.roundRect(-hl, -hw, len, w, 0.45); ctx.fill(); } else ctx.fillRect(-hl, -hw, len, w);
+    if (!detail) return;
+    if (truck) {
+      ctx.fillStyle = '#5b6f8a'; ctx.fillRect(hl - 2.2, -hw, 2.2, w);
+      ctx.fillStyle = 'rgba(30,40,55,0.8)'; ctx.fillRect(hl - 0.7, -hw + 0.15, 0.45, w - 0.3);
+      ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(-hl + 0.3, -hw + 0.3, len - 3, w - 0.6);
+      return;
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.fillRect(-hl * 0.45, -hw + 0.3, len * 0.42, w - 0.6);
+    ctx.fillStyle = 'rgba(30,40,55,0.78)';
+    ctx.fillRect(hl - 1.75, -hw + 0.2, 0.8, w - 0.4);
+    ctx.fillRect(-hl + 0.45, -hw + 0.25, 0.55, w - 0.5);
+    ctx.fillStyle = 'rgba(255,250,220,0.9)'; ctx.fillRect(hl - 0.15, -hw + 0.15, 0.15, 0.35); ctx.fillRect(hl - 0.15, hw - 0.5, 0.15, 0.35);
+  }
+
+  // 路邊停車（畫在道路之上）
+  drawCurbCars(v) {
+    const ctx = this.ctx, g = this.game, city = g.city, z = this.cam.z;
+    if (z < 0.9) return;
+    const hour = (g.time % 1440) / 60;
+    for (const b of city.buildings) {
+      if (!b.streetPark || !b._art || b.abandoned || b.x + b.rad < v.x0 || b.x - b.rad > v.x1 || b.y + b.rad < v.y0 || b.y - b.rad > v.y1) continue;
+      const occ = b.zone === 'R' ? (hour >= 8 && hour < 17 ? 0.45 : 0.9) : clamp((b.present + b.custLevel * 1.5) / Math.max(1, city.cap(b) * 0.5), 0.1, 1);
+      const c0 = b.corners[0], P = (u, w) => ({ x: c0.x + b.tx * u + b.nx * w, y: c0.y + b.ty * u + b.ny * w });
+      for (const it of b._art.items) {
+        if (!it.curb || it.slot > occ) continue;
+        const c = [P(it.u0, it.v0), P(it.u0 + it.du, it.v0), P(it.u0 + it.du, it.v0 + it.dv), P(it.u0, it.v0 + it.dv)];
+        ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); c.forEach((p, i) => (i ? ctx.lineTo(p.x + 0.3, p.y + 0.3) : ctx.moveTo(p.x + 0.3, p.y + 0.3))); ctx.fill();
+        ctx.fillStyle = it.c; ctx.beginPath(); c.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.fill();
+        if (z > 1.8) {
+          ctx.fillStyle = 'rgba(30,40,55,0.7)';
+          for (const [f0, f1] of [[0.18, 0.3], [0.68, 0.84]]) {
+            const q = [P(it.u0 + it.du * f0, it.v0 + 0.2), P(it.u0 + it.du * f1, it.v0 + 0.2), P(it.u0 + it.du * f1, it.v0 + it.dv - 0.2), P(it.u0 + it.du * f0, it.v0 + it.dv - 0.2)];
+            ctx.beginPath(); q.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.fill();
+          }
+        }
+      }
+    }
+  }
+
+  // 抵達後靠邊停好、淡出的車
+  drawArrivals(v) {
+    const ctx = this.ctx, c = this.cam, d = this.dpr, z = c.z, a = d * z;
+    const ox = d * (this.W / 2 - c.x * z), oy = d * (this.H / 2 - c.y * z);
+    for (const f of this.game.traffic.fx) {
+      const k = Math.min(1, f.t / 1.2), side = 2.6 * (1 - (1 - k) * (1 - k));
+      const x = f.x - f.dy * side, y = f.y + f.dx * side;
+      if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
+      const turn = 0.35 * Math.sin(Math.PI * k), dx = f.dx - f.dy * turn, dy = f.dy + f.dx * turn, L = Math.hypot(dx, dy);
+      ctx.setTransform(a * dx / L, a * dy / L, -a * dy / L, a * dx / L, ox + a * x, oy + a * y);
+      ctx.globalAlpha = Math.max(0, 1 - Math.max(0, f.t - 1.0) / 0.8);
+      this.carBody(f.color, f.len, f.w, f.truck, z > 2.2);
+    }
+    ctx.globalAlpha = 1;
     this.worldTf();
   }
 

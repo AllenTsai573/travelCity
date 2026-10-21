@@ -3,6 +3,7 @@ import { Network } from '../js/network.js';
 import { Traffic } from '../js/traffic.js';
 import { City } from '../js/city.js';
 import { makeGame, step, connectOutside } from './harness.js';
+import { routeFromPoint } from '../js/routing.js';
 
 let failed = 0;
 function assert(c, m) { if (!c) { console.error('FAIL -', m); failed++; } else console.log('ok   -', m); }
@@ -175,6 +176,31 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   assert(ib.roads === null && !net.segs.has(ib.seg), '拆除工業建築時一併拆除園區道路');
   const hb = c.buildings.find(b => b.zt === 'R1' && b.cols === 10 && b.rows === 12);
   assert(!hb || c.cap(hb) >= 20, `10×12 低密度住宅的住戶數（${hb && c.cap(hb)}）`);
+}
+
+// 兩條平行道路之間的停車場：場內道路打通到後方道路，但設閘門，一般車流不能當捷徑
+{
+  const gg = makeGame(1, 'temperate', 'normal'); gg.autoGrow = false;
+  const net = gg.net, c = gg.city, S = gg.terrain.size / 2;
+  let y = null;
+  for (const yy of [S + 600, S - 600, S + 900, S - 900]) {
+    const p1 = net.planRoad({ x: S - 400, y: yy }, { x: S + 400, y: yy }, null, 'street', 0);
+    const p2 = net.planRoad({ x: S - 400, y: yy + 72 }, { x: S + 400, y: yy + 72 }, null, 'street', 0);
+    if (p1.ok && p2.ok && !p1.crossings.length && !p2.crossings.length) { net.executeRoad(p1); net.executeRoad(p2); y = yy; break; }
+  }
+  net.executeRoad(net.planRoad({ x: S - 400, y }, { x: S - 400, y: y + 72 }, null, 'street', 0));
+  net.rebuild();
+  const seg = net.segNear(S, y, 3, 0).seg, u = S - seg.pts[0].x;
+  const pl = c.planStroke('C', seg, 1, u - 36, u + 36, 11).find(l => l.ok);
+  c.pickKind = () => 'parking';
+  const pb = c.develop(c.addLot('C', pl.seg, pl.u, pl.side, pl.cols, pl.rows));
+  const ref = sn => ({ id: 'x' + sn.seg.id, seg: sn.seg.id, u: sn.u });
+  const A = ref(net.segNear(S + 300, y, 3, 0)), B = ref(net.segNear(S + 300, y + 72, 3, 0));
+  assert(pb.gate, '停車場打通到後方道路並設閘門');
+  assert(!routeFromPoint(net, A, B).path.some(k => net.links.get(k).seg.T.internal), '一般車流不會穿過有閘門的停車場');
+  assert(routeFromPoint(net, pb, B).path.some(k => net.links.get(k).seg.T.internal), '停車場的車可以從後方閘門出去');
+  const segGo = net.segs.get(pl.seg.id) ? null : [...net.segs.values()].find(s => s.type === 'street' && Math.abs(s.pts[0].y - y) < 1 && s.go);
+  assert(segGo && Math.abs(((c.gridStart(segGo) + segGo.go) / 6) - Math.round((c.gridStart(segGo) + segGo.go) / 6)) < 1e-6, '路段被切開後分區格線仍然對齊');
 }
 
 for (const b of ['desert', 'snow', 'tropical']) {

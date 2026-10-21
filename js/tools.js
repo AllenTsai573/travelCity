@@ -215,13 +215,35 @@ export class Tools {
       const s = net.segNear(x, y, Math.max(1.5, 8 / z), 'any');
       if (s && Math.abs(s.h - Math.round(s.h)) < 0.2) return { x: s.x, y: s.y, seg: s.seg.id, u: s.u, level: Math.round(s.h) };
     }
-    if (this.mouse.shift && this.pts.length) {
-      const a = this.pts[this.pts.length - 1];
+    if (this.pts.length && !this.mouse.alt) {
+      // 角度吸附以起點所在道路為基準：接近平行 / 45° / 垂直時自動對齊；按 Shift 以 15° 為單位
+      const a = this.pts[this.pts.length - 1], ref = this.refAngle(this.pts[0]);
       const ang = Math.atan2(y - a.y, x - a.x), d = Math.hypot(x - a.x, y - a.y);
-      const st = Math.PI / 12, q = Math.round(ang / st) * st;
-      return { x: a.x + Math.cos(q) * d, y: a.y + Math.sin(q) * d, level: this.level };
+      const rel = ang - ref;
+      const st = this.mouse.shift ? Math.PI / 12 : Math.PI / 4, q = Math.round(rel / st) * st;
+      if (this.mouse.shift || Math.abs(rel - q) < 3 * Math.PI / 180) return { x: a.x + Math.cos(ref + q) * d, y: a.y + Math.sin(ref + q) * d, level: this.level, snapAng: true };
     }
     return { x, y, level: this.level };
+  }
+  // 起點所在道路的方向（沒有接在道路上時以地圖水平為基準）
+  refAngle(p) {
+    const net = this.net;
+    let s = null, u = 0;
+    if (p.node && net.nodes.has(p.node)) {
+      const n = net.nodes.get(p.node);
+      s = net.segs.get(n.segs[0]);
+      if (s) u = s.a === n.id ? 0.5 : s.len - 0.5;
+    } else if (p.seg && net.segs.has(p.seg)) { s = net.segs.get(p.seg); u = p.u; }
+    if (!s) return 0;
+    const q = pointAt(s.pts, s.cum, clamp(u, 0, s.len));
+    return Math.atan2(q.dy, q.dx);
+  }
+  angleText(a, b) {
+    const ref = this.refAngle(a), ang = Math.atan2(b.y - a.y, b.x - a.x);
+    let deg = Math.abs(((ang - ref) * 180 / Math.PI) % 180);
+    if (deg > 180) deg -= 180;
+    deg = Math.round(deg > 90 ? 180 - deg : deg);
+    return `∠${deg}°${deg === 90 ? '（垂直）' : deg === 0 ? '（平行）' : ''}`;
   }
 
   setTip(t, bad = false) { this.tip = t; this.tipBad = bad; }
@@ -246,7 +268,8 @@ export class Tools {
         const plan = net.planRoad(a, sn, this.curve ? this.pts[1] : null, this.roadType, this.level);
         this.plan = plan;
         const extra = plan.demolish && plan.demolish.length ? ` · 拆除 ${plan.demolish.length} 棟` : '';
-        if (plan.ok) this.setTip(`${fmtMoney(plan.cost)} · ${Math.round(plan.len)} m${plan.crossings.length ? ` · ${plan.crossings.length} 個新路口` : ''}${extra}`);
+        const angT = this.curve ? '' : ` · ${this.angleText(a, sn)}`;
+        if (plan.ok) this.setTip(`${fmtMoney(plan.cost)} · ${Math.round(plan.len)} m${angT}${plan.crossings.length ? ` · ${plan.crossings.length} 個新路口` : ''}${extra}`);
         else this.setTip(plan.reason + (plan.cost ? ` (${fmtMoney(plan.cost)})` : ''), true);
         break;
       }
@@ -383,15 +406,16 @@ export class Tools {
     const p = pointAt(s.pts, s.cum, c.s);
     const sd = side || (((x - p.x) * -p.dy + (y - p.y) * p.dx) > 0 ? 1 : -1);
     const signed = ((x - p.x) * -p.dy + (y - p.y) * p.dx) * sd;
-    const nCells = Math.floor((s.len - s.rb - s.ra) / CELL + 1e-6);
-    const i = clamp(Math.floor((c.s - s.ra) / CELL), 0, Math.max(0, nCells - 1));
+    const g0 = this.g.city.gridStart(s);
+    const nCells = Math.floor((s.len - s.rb - g0) / CELL + 1e-6);
+    const i = clamp(Math.floor((c.s - g0) / CELL), 0, Math.max(0, nCells - 1));
     const depth = Math.max(1, Math.ceil((signed - halfWidth(s.T) - 1.5) / CELL));
-    return { seg: s, side: sd, i, depth, nCells, geo: this.g.city.lotGeom(s, s.ra + (i + 0.5) * CELL, sd, 1, 1) };
+    return { seg: s, side: sd, i, depth, nCells, g0, geo: this.g.city.lotGeom(s, g0 + (i + 0.5) * CELL, sd, 1, 1) };
   }
   zoneStart() {
     const a = this.zoneAnchor(this.mouse.x, this.mouse.y);
     if (!a || a.nCells < 1) return;
-    this.zStroke = { seg: a.seg, side: a.side, i0: a.i, i1: a.i, rows: a.depth, moved: false };
+    this.zStroke = { seg: a.seg, side: a.side, i0: a.i, i1: a.i, rows: a.depth, moved: false, g0: a.g0 };
     this.zoneMove();
   }
   zoneMove() {
@@ -400,7 +424,7 @@ export class Tools {
     const c = this.zoneCell(st.seg, m.x, m.y, st.side);
     if (c.i !== st.i0 || c.depth !== st.rows) st.moved = true;
     st.i1 = c.i; st.rows = c.depth;
-    const s = st.seg, a = s.ra + Math.min(st.i0, st.i1) * CELL, b = s.ra + (Math.max(st.i0, st.i1) + 1) * CELL;
+    const s = st.seg, a = st.g0 + Math.min(st.i0, st.i1) * CELL, b = st.g0 + (Math.max(st.i0, st.i1) + 1) * CELL;
     if (this.zone === 'X') st.rect = city.lotGeom(s, (a + b) / 2, st.side, Math.round((b - a) / CELL), Math.max(1, st.rows));
     else st.plan = city.planStroke(this.zone, s, st.side, a, b, st.rows);
     this.dirty = true;
@@ -413,8 +437,8 @@ export class Tools {
     // 只點一下：依分區給一塊預設大小的地塊
     if (!st.moved && !dragged && this.zone !== 'X') {
       const Z = ZONE_TYPES[this.zone], cols = Math.min(Z.max, this.zone === 'R1' || this.zone === 'R2' ? 4 : 6);
-      const i0 = clamp(st.i0 - Math.floor((cols - 1) / 2), 0, Math.max(0, Math.floor((st.seg.len - st.seg.rb - st.seg.ra) / CELL) - cols));
-      st.plan = city.planStroke(this.zone, st.seg, st.side, st.seg.ra + i0 * CELL, st.seg.ra + (i0 + cols) * CELL, cols);
+      const i0 = clamp(st.i0 - Math.floor((cols - 1) / 2), 0, Math.max(0, Math.floor((st.seg.len - st.seg.rb - st.g0) / CELL) - cols));
+      st.plan = city.planStroke(this.zone, st.seg, st.side, st.g0 + i0 * CELL, st.g0 + (i0 + cols) * CELL, cols);
     }
     if (this.zone === 'X') {
       const r = st.rect;
@@ -718,11 +742,11 @@ export class Tools {
     const segs = [...net.segs.values()].filter(s => s.T.access && s.drawLevel === 0 && !park.has(s.id) && net.nodes.get(s.a).level === 0 && net.nodes.get(s.b).level === 0)
       .sort((p, q) => q.T.rank - p.T.rank || q.len - p.len);
     for (const s of segs) {
-      const n = Math.floor((s.len - s.rb - s.ra) / CELL + 1e-6);
+      const g0 = city.gridStart(s), n = Math.floor((s.len - s.rb - g0) / CELL + 1e-6);
       if (n < 1) continue;
       const off = halfWidth(s.T) + 1.5;
       for (const side of [1, -1]) {
-        const at = (i, j) => { const p = pointAt(s.pts, s.cum, s.ra + i * CELL); return { x: p.x - p.dy * side * (off + j * CELL), y: p.y + p.dx * side * (off + j * CELL) }; };
+        const at = (i, j) => { const p = pointAt(s.pts, s.cum, g0 + i * CELL); return { x: p.x - p.dy * side * (off + j * CELL), y: p.y + p.dx * side * (off + j * CELL) }; };
         for (let i = 0; i < n; i++) for (let j = 0; j < D; j++) {
           const c = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
           const cx = (c[0].x + c[2].x) / 2, cy = (c[0].y + c[2].y) / 2;

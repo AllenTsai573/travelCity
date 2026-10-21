@@ -4,7 +4,7 @@
 // - 依即時壅塞重新規劃路線
 import { LANE_W, VEHICLE_COLORS } from './config.js';
 import { findRoute, routeFromPoint } from './routing.js';
-import { clamp } from './util.js';
+import { clamp, pointAt } from './util.js';
 
 const FREE = { gap: Infinity, lv: 0 };
 const MAX_VEHICLES = 3000;
@@ -13,6 +13,7 @@ export class Traffic {
   constructor(game) {
     this.game = game;
     this.vehicles = [];
+    this.fx = [];   // 抵達後靠邊停車、淡出的車（只用於繪圖）
     this.nextId = 1;
     this.active = new Set();
     this.rerouteBudget = 40;
@@ -95,6 +96,7 @@ export class Traffic {
         const v = this.createVehicle(trip.truck);
         v.route = r.path; v.ri = 0; v.trip = trip;
         v.v = trip.from.outside ? Math.min(lane.speed * 0.7, 14) : 0;
+        v.fadeIn = trip.from.outside ? 1 : 0;   // 從建築出發的車由路邊慢慢出現
         this.place(v, lane, s);
         this.vehicles.push(v);
         return 'ok';
@@ -106,6 +108,12 @@ export class Traffic {
 
   finish(v, ok) {
     if (v.dead) return;
+    // 抵達建築：先靠邊停好再消失（開進車庫 / 停車場的感覺）
+    const to = v.trip && v.trip.to;
+    if (ok && to && to.zone && v.track && v.track.pts && this.fx.length < 200) {
+      const p = pointAt(v.track.pts, v.track.cum, clamp(v.s - v.len / 2, 0, v.track.len));
+      this.fx.push({ x: p.x, y: p.y, dx: p.dx, dy: p.dy, color: v.color, len: v.len, w: v.w, truck: v.truck, t: 0 });
+    }
     this.removeFromTrack(v);
     v.dead = true;
     v.track = null;
@@ -171,11 +179,11 @@ export class Traffic {
           if (!r || cost < r.cost) r = { path: [tl.key], cost };
         }
       }
-      const r2 = findRoute(net, starts, dest);
+      const r2 = findRoute(net, starts, dest, [v.trip.from.id, dest.id]);
       if (r2 && (!r || r2.cost < r.cost)) r = r2;
       if (r) r = { path: [L.key, ...r.path], cost: r.cost };
     } else {
-      r = findRoute(net, [{ link: L, cost: distEnd / L.eff }], dest);
+      r = findRoute(net, [{ link: L, cost: distEnd / L.eff }], dest, [v.trip.from.id, dest.id]);
     }
     if (!r) { v.lost = true; v.route = [L.key]; v.ri = 0; return false; }
     v.lost = false;
@@ -509,10 +517,13 @@ export class Traffic {
 
   step(dt) {
     this.updateSignals(dt);
+    for (const f of this.fx) f.t += dt;
+    if (this.fx.length && this.fx[0].t > 1.8) this.fx = this.fx.filter(f => f.t <= 1.8);
     const vs = this.vehicles;
     for (const v of vs) if (!v.dead) v.acc = this.computeAccel(v);
     for (const v of vs) {
       if (v.dead) continue;
+      if (v.fadeIn < 1) v.fadeIn = Math.min(1, v.fadeIn + dt / 0.8);
       v.lcT -= dt;
       if (v.lcT <= 0) { v.lcT = 0.4 + (v.id % 7) * 0.03; this.tryLaneChange(v); }
     }

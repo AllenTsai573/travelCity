@@ -3,7 +3,8 @@ import { Heap } from './util.js';
 
 // starts: [{ link, cost }]，cost 為抵達該路段「終點」的成本
 // dest: { seg, u }（u 為沿路段 a→b 的距離）
-export function findRoute(net, starts, dest) {
+// allow：可以通過的閘門（建築 id）；設有閘門的場內道路只讓進出該建築的車使用
+export function findRoute(net, starts, dest, allow = null) {
   const destSeg = net.segs.get(dest.seg);
   if (!destSeg) return null;
   const goal = new Map();
@@ -39,6 +40,7 @@ export function findRoute(net, starts, dest) {
       if (g !== undefined && arrive + g < best) { best = arrive + g; bestEnd = nk; bestPrev = k; }
       const NL = net.links.get(nk);
       if (!NL) continue;
+      if (NL.seg.gate !== undefined && NL.seg.gate !== null && !(allow && allow.includes(NL.seg.gate)) && !goal.has(nk)) continue;
       const end = arrive + NL.len / NL.eff;
       const od = distM.get(nk);
       if (od === undefined || end < od) {
@@ -75,7 +77,7 @@ export function routeFromPoint(net, from, dest) {
       }
     }
   }
-  const r = findRoute(net, starts, dest);
+  const r = findRoute(net, starts, dest, [from.id, dest.id]);
   if (r && (!best || r.cost < best.cost)) best = r;
   return best;
 }

@@ -68,7 +68,7 @@ export function generateWorld(g) {
       if (!list.length) return;
       const s = rng.pick(list);
       const { cols, rows } = size();
-      const lo = s.ra + cols * CELL / 2, hi = s.len - s.rb - cols * CELL / 2;
+      const lo = city.gridStart(s) + cols * CELL / 2, hi = s.len - s.rb - cols * CELL / 2;
       if (hi <= lo) continue;
       const uu = lo + Math.floor(rng.next() * (hi - lo) / CELL) * CELL, side = rng.chance(0.5) ? 1 : -1;
       if (city.canPlaceLot(s, uu, side, cols, rows)) continue;

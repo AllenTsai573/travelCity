@@ -111,7 +111,7 @@ export class UI {
       if (t.tool === 'road') {
         html += `<div class="grp levels">` + [...LEVELS].reverse().map(L => `<button data-sub="level" data-v="${L.lv}" class="${t.level === L.lv ? 'on' : ''} ${g.unlocked(L.unlock) ? '' : 'locked'}" title="成本 ×${L.mul}">${L.lv > 0 ? '▲' : L.lv < 0 ? '▼' : '■'} ${L.name}</button>`).join('') + `</div>`;
         html += `<div class="grp"><button data-sub="curve" class="${t.curve ? 'on' : ''}" title="C">〰 彎道</button></div>`;
-        html += `<div class="hint">左鍵連續鋪路 · 右鍵/Esc 結束 · Shift 角度吸附 · Alt 不吸附 · [ ] 切換高度</div>`;
+        html += `<div class="hint">左鍵連續鋪路 · 右鍵/Esc 結束 · 接近平行 / 45° / 垂直會自動對齊起點道路 · Shift 每 15° 吸附 · Alt 不吸附 · [ ] 切換高度</div>`;
       } else html += `<div class="hint">點擊道路以變更類型（同類單行道則反轉方向）</div>`;
     } else if (t.tool === 'zone') {
       const zdesc = { R1: '透天、獨棟', R2: '公寓、連棟', R3: '大樓', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機' };
@@ -164,6 +164,10 @@ export class UI {
     }
     $('btn-heat').classList.toggle('on', g.heatmap);
     $('btn-grow').classList.toggle('on', g.autoGrow);
+    // 需求條與資訊面板放在頂部列下方（視窗窄時頂部列會換行變高）
+    const tb = $('topbar').getBoundingClientRect().bottom + 8;
+    if (window.innerWidth > 760) { $('demand').style.top = tb + 'px'; this.panel.style.top = tb + 'px'; }
+    else { $('demand').style.top = ''; this.panel.style.top = ''; }
     for (const z of ['R', 'C', 'I']) {
       const d = c.demand[z];
       const el = $('d-' + z);

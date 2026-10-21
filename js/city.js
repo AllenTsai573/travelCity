@@ -2,6 +2,7 @@
 import { TRIP_SCALE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap } from './util.js';
 import { halfWidth } from './network.js';
+import { lotArt } from './lotart.js';
 
 const ema = (a, x, k) => a + (x - a) * k;
 
@@ -216,13 +217,28 @@ export class City {
     if (zone === 'C') {
       const m = Math.min(cols, rows), x = rng.next();
       if (m >= SHOP_KINDS.bigbox.minCells) return rng.pick(['bigbox', 'bigbox', 'mall', 'hotel', 'office', 'market']);
-      if (m >= 5) return x < 0.2 ? 'hotel' : x < 0.42 ? 'office' : x < 0.48 ? 'parking' : cols * rows >= 60 && x < 0.75 ? 'market' : 'shops';
+      if (m >= 5) return x < 0.2 ? 'hotel' : x < 0.42 ? 'office' : x < 0.44 ? 'parking' : cols * rows >= 60 && x < 0.75 ? 'market' : 'shops';
       if (m >= 4 && x < 0.2) return 'office';
       if (m >= 3 && x < 0.38) return 'gas';
-      return m >= 4 && x < 0.44 ? 'parking' : 'shops';
+      return m >= 4 && x < 0.41 ? 'parking' : 'shops';
     }
     if (zone === 'I') return rng.pick(Object.keys(INDUSTRY_KINDS));
     return null;
+  }
+
+  // 建築的停車位（世界座標、車頭方向），與畫面上 lotArt 的停車位一一對應
+  slotsOf(b) {
+    const key = b.level + '|' + b.abandoned + '|' + !!b.roads;
+    if (!b._slots || b._slots.key !== key) {
+      const c0 = b.corners[0];
+      const list = lotArt(b).slots.map(it => {
+        const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv;
+        return { x: c0.x + b.tx * cu + b.nx * cv, y: c0.y + b.ty * cu + b.ny * cv, ax: alongU ? b.tx : b.nx, ay: alongU ? b.ty : b.ny };
+      });
+      b._slots = { key, list };
+      b.parked = Math.min(b.parked || 0, list.length);
+    }
+    return b._slots.list;
   }
 
   addBuilding(zt, seg, u, side, cols, rows, level = 1, kind = null, geo = null) {
@@ -240,6 +256,9 @@ export class City {
     };
     this.buildings.push(b);
     this.byId.set(b.id, b);
+    // 住宅一開始大部分的車停在家
+    b.parked = 0;
+    if (zone === 'R') b.parked = Math.round(this.slotsOf(b).length * 0.7);
     this.game.terrain.clearTreesCircle(geo.x, geo.y, geo.rad * 0.8);
     return b;
   }
@@ -758,7 +777,7 @@ export class City {
     return {
       nextId: this.nextId,
       buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, zt: b.zt, kind: b.kind, cols: b.cols, rows: b.rows, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned,
-        roads: b.roads || undefined, front: b.front || undefined, gate: b.gate || undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
+        roads: b.roads || undefined, front: b.front || undefined, gate: b.gate || undefined, parked: b.parked, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
       demand: this.demand, stats: this.stats, history: this.history,
@@ -778,6 +797,7 @@ export class City {
       if (s.roads) { b.roads = s.roads; b.front = s.front || null; }
       if (s.gate) { b.gate = s.gate; this.applyGate(b); }
       b.happy = s.happy; b.stock = s.stock; b.abandoned = s.abandoned;
+      if (s.parked !== undefined) b.parked = Math.min(s.parked, this.slotsOf(b).length);
     }
     for (const l of d.lots || []) {
       const seg = net.segs.get(l.seg);

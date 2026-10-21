@@ -42,49 +42,58 @@ export function lotArt(b) {
     // 底部橫向通道把各車道連起來
     if (aisles.length > 1) rect(u0 + 1, v1 - 6.5, u1 - 1, v1 - 0.5, '#878a8f');
   };
-  // 路邊停車：臨一般街道的公寓與商店，在路肩停車（v < 0 為道路那一側）
-  const curbPark = (skip = null) => {
-    if (!b.streetPark) return;
-    for (let u = 3; u + 4.4 < w - 2; u += 6.5) {
-      if (skip && u + 4.4 > skip[0] && u < skip[1]) continue;
-      items.push({ t: 'rect', u0: u, v0: -1.9, du: 4.4, dv: 1.8, curb: true, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r() });
-    }
-  };
   let base = '#a6c98f';
   const fill = [0.55, 0.8, 1][lv - 1];
 
   if (b.zt === 'R1') {
     base = '#a3c98c';
-    // 深的地塊加一條巷道，兩側都排房子
+    // 每戶一塊 12 m 寬的宅地：前院、車道接到路（或巷道）、車道旁的車庫、車道上一個停車位
+    // home(o, t, n, W, D)：o 為宅地臨路邊的起點，t 沿臨路方向，n 往宅地內，W 寬、D 深（都在 u/v 座標，方向只會是 ±u / ±v）
+    const home = (ou, ov, tu, tv, nu, nv, W, D) => {
+      const P = (a, c) => ({ u: ou + tu * a + nu * c, v: ov + tv * a + nv * c });
+      const R = (a0, c0, a1, c1, col, h, extra) => { const p = P(a0, c0), q = P(a1, c1); rect(Math.min(p.u, q.u), Math.min(p.v, q.v), Math.max(p.u, q.u), Math.max(p.v, q.v), col, h, extra); };
+      if (r() > fill + 0.1) { if (r() < 0.7) { const c = P(W / 2, D / 2); tree(c.u, c.v); } return; }
+      const gw = 3.6, hw = Math.min(W - gw - 2.2, 6.5 + r() * 1.5), hd = Math.min(D - 7, 7 + r() * 2), setback = 5.6;
+      const left = r() < 0.5, ha = left ? W - 1 - hw : 1, ga = left ? ha - gw : ha + hw;
+      R(ga + 0.4, 0, ga + gw - 0.4, setback, '#bdb8ae');
+      R(ha, setback, ha + hw, setback + hd, pick(r, ROOF_R), 4 + lv * 0.6 + r(), { ridge: tu ? 'u' : 'v', wall: pick(r, ['#efe6d6', '#e6dccb', '#f2efe8', '#e9d9c4', '#dfe3e6']) });
+      R(ga, setback, ga + gw, setback + 5.6, '#d9d3c7', 3, {});
+      const c0 = P(ga + 0.9, 0.5), c1 = P(ga + gw - 0.9, 4.7);
+      items.push({ t: 'rect', u0: Math.min(c0.u, c1.u), v0: Math.min(c0.v, c1.v), du: Math.abs(c1.u - c0.u), dv: Math.abs(c1.v - c0.v), c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r(), along: tu ? 'v' : 'u' });
+      if (r() < 0.7) { const c = P(ha + hw / 2, setback + hd + 2.5); tree(c.u, c.v, 0.8); }
+    };
     const lane = b.rows >= 6 && b.cols >= 4;
-    const lu = Math.round(b.cols / 2) * CELL;
-    if (lane) { road([{ u: lu, v: 0 }, { u: lu, v: d - 7 }], 5); items.push({ t: 'circle', u: lu, v: d - 7, r: 5, c: '#5b5f64', h: 0 }); }
-    for (let i = 0; i + 2 <= b.cols; i += 2) for (let j = 0; j + 2 <= b.rows; j += 2) {
-      const u0 = i * CELL, v0 = j * CELL;
-      if (lane && Math.abs(u0 + CELL - lu) < CELL * 1.2) continue;
-      if (r() > fill) { if (r() < 0.6) tree(u0 + 6, v0 + 6); continue; }
-      // 房子往後退，前院留車道停車
-      const hw = 3.2 + r() * 1.2, hd = 2.6 + r() * 0.7, cu = u0 + 6 + (r() - 0.5) * 1.2, cv = v0 + 7.4 + r() * 0.6;
-      // 臨路的房子有車道接到路邊，靠巷道的接到巷道
-      if (j === 0) {
-        rect(cu + hw - 2.6, 0, cu + hw - 0.4, cv - hd, '#bdb8ae');
-        if (cv - hd > 4.3) items.push({ t: 'rect', u0: cu + hw - 2.4, v0: 0.2, du: 1.8, dv: 4.0, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r() });
+    if (!lane) {
+      // 一排面向道路的宅地
+      const D = Math.min(d, 24);
+      for (let i = 0; i + 2 <= b.cols; i += 2) home(i * CELL, 0, 1, 0, 0, 1, 12, D);
+    } else {
+      // 中央巷道（盡頭迴車），巷道兩側的宅地面向巷道
+      const lu = Math.round(b.cols / 2) * CELL;
+      road([{ u: lu, v: 0 }, { u: lu, v: d - 7 }], 5); items.push({ t: 'circle', u: lu, v: d - 7, r: 5.5, c: '#5b5f64', h: 0 });
+      // 巷口兩側先放面向主要道路的宅地
+      if (lu - 2.5 >= 12) for (let a = 0; a + 12 <= lu - 2.5; a += 12) home(a, 0, 1, 0, 0, 1, 12, 12);
+      for (let a = lu + 2.5; a + 12 <= w; a += 12) home(a, 0, 1, 0, 0, 1, 12, 12);
+      for (let v = 12; v + 12 <= d; v += 12) {
+        if (lu - 2.5 >= 12) home(lu - 2.5, v + 12, 0, -1, -1, 0, 12, Math.min(lu - 2.5, 22));
+        if (w - lu - 2.5 >= 12) home(lu + 2.5, v, 0, 1, 1, 0, 12, Math.min(w - lu - 2.5, 22));
       }
-      else if (lane && Math.abs(u0 + 6 - lu) < 20) { const toL = u0 + 6 < lu; rect(toL ? cu + hw : lu + 2.5, cv - 1.2, toL ? lu - 2.5 : cu - hw, cv + 1.2, '#bdb8ae'); }
-      rect(cu - hw, cv - hd, cu + hw, cv + hd, pick(r, ROOF_R), 3.6 + lv * 0.6 + r() * 1, { ridge: r() < 0.5 ? 'u' : 'v', wall: pick(r, ['#efe6d6', '#e6dccb', '#f2efe8', '#e9d9c4', '#dfe3e6']) });
-      if (r() < 0.55) tree(u0 + (r() < 0.5 ? 2 : 10), v0 + 10.5, 0.8);
     }
   } else if (b.zt === 'R2') {
     base = '#b7c4a6';
-    curbPark();
-    // 連棟公寓：每排 2 格深，排與排之間留中庭
-    for (let j = 0; j + 2 <= b.rows; j += 3) {
+    // 臨路一排垂直停車格（直接從道路進出），後面是連棟公寓，排與排之間留中庭
+    rect(1, 0.4, w - 1, 6, '#878a8f');
+    for (let u = 1.6; u + 2.6 <= w - 1.4; u += 2.7) {
+      line([{ u, v: 0.6 }, { u, v: 5.6 }], 'rgba(255,255,255,0.85)', 0.2);
+      items.push({ t: 'rect', u0: u + 0.45, v0: 0.9, du: 1.8, dv: 4.3, c: pick(r, ['#e8e8e8', '#2b2b2b', '#c0392b', '#2e6fb7', '#8e9aa6', '#f1c40f', '#1e8449', '#7f8c8d']), h: 0.4, car: true, slot: r() });
+    }
+    for (let v = 7.5; v + 9 <= d; v += 18) {
       for (let i = 0; i < b.cols; i += 4) {
-        if (r() > fill + 0.15) { tree(i * CELL + 8, j * CELL + 6); continue; }
+        if (r() > fill + 0.15) { tree(i * CELL + 8, v + 4.5); continue; }
         const u1 = Math.min(b.cols, i + 4) * CELL - 1.5;
-        rect(i * CELL + 1.5, j * CELL + 1.5, u1, j * CELL + 10.5, pick(r, WALL_R2), 7 + lv * 2.5, { grid: 'u' });
+        rect(i * CELL + 1.5, v, u1, v + 9, pick(r, WALL_R2), 7 + lv * 2.5, { grid: 'u' });
       }
-      if (j + 3 <= b.rows) for (let i = 0; i < b.cols; i += 2) if (r() < 0.5) tree(i * CELL + 6, j * CELL + 15, 0.8);
+      if (v + 18 <= d) for (let i = 0; i < b.cols; i += 2) if (r() < 0.5) tree(i * CELL + 6, v + 13.5, 0.8);
     }
   } else if (b.zt === 'R3') {
     base = '#c4c6c0';
@@ -99,7 +108,6 @@ export function lotArt(b) {
   } else if (b.zone === 'C') {
     base = '#c7c3b8';
     const real = !!b.roads, k = b.kind;
-    if (k === 'shops' || k === 'office' || k === 'hotel') curbPark(real || b.rows >= 6 ? [w / 2 - 6, w / 2 + 6] : k === 'hotel' ? [w * 0.25, w * 0.75] : null);
     if (k === 'bigbox') {
       // 大型量販店：前方大停車場（車道從臨路開進來）、後方大倉庫
       const bv = d * 0.45;
@@ -113,7 +121,11 @@ export function lotArt(b) {
         rect(w * 0.45, pv + 2, w * 0.55, d - 4, '#bcd6ee', 8.5 + lv * 2);
       } else rect(w * 0.1, pv + 2, w * 0.9, d - 3, pick(r, ['#93b9df', '#e4c9a8', '#c9d8b6']), 5 + lv, { awning: true, units: 3 });
     } else if (k === 'parking') {
+      // 收費停車場：入口旁的收費亭與 P 字招牌，四角植栽
       parking(2, 2, w - 2, d - 2, w / 2, real, 0.4 + lv * 0.15);
+      rect(w / 2 + 5, 1.2, w / 2 + 8, 4.2, '#e8e2d4', 3, { units: 0 });
+      items.push({ t: 'sign', u: w / 2 - 7, v: 2.2, text: 'P', c: '#1d6fb8', h: 5 });
+      tree(1.5, 1.5, 0.7); tree(w - 1.5, 1.5, 0.7); tree(1.5, d - 1.5, 0.7); tree(w - 1.5, d - 1.5, 0.7);
     } else if (k === 'hotel') {
       // 飯店：高樓主體＋泳池、花園與臨路的落客區
       const s = Math.min(w, d);
@@ -157,15 +169,24 @@ export function lotArt(b) {
     base = '#bab4a7';
     // 工業區：從路邊進入的主幹道，大地塊再加一條橫向道路，建築依功能不同
     const spine = w / 2, cross = b.rows >= 10 ? d * 0.55 : null;
-    // 裝卸用的貨車
-    for (let k = 0; k < 2 + lv; k++) items.push({ t: 'rect', u0: spine + (r() < 0.5 ? -9 : 5) , v0: 8 + r() * (d - 20), du: 2.4, dv: 7, c: pick(r, ['#d8d8d8', '#e0b24f', '#2e6fb7']), h: 0.8, car: true });
+    // 主幹道兩側 3 m 寬的裝卸區（建物從主幹道 8.5 m 外開始），貨車停在畫好的車位上
+    for (const sd of [-1, 1]) {
+      const u0 = sd < 0 ? spine - 7.9 : spine + 5.5;
+      if (u0 < 1 || u0 + 2.4 > w - 1) continue;
+      rect(u0 - 0.2, 4, u0 + 2.6, d - 5, '#9c978b');
+      for (let v = 6; v + 7.5 < d - 6; v += 10) {
+        if (cross && v + 7.5 > cross - 5 && v < cross + 5) continue;
+        line([{ u: u0 - 0.2, v: v - 1 }, { u: u0 + 2.6, v: v - 1 }], 'rgba(255,255,255,0.7)', 0.2);
+        items.push({ t: 'rect', u0, v0: v, du: 2.4, dv: 7.2, c: pick(r, ['#d8d8d8', '#e0b24f', '#2e6fb7', '#c0392b']), h: 0.8, car: true, truck: true, slot: r() });
+      }
+    }
     // 有實際的廠區道路時由路網繪製，這裡只畫裝飾用的
     if (!b.roads) {
       road([{ u: spine, v: 0 }, { u: spine, v: d - 4 }], 7);
       if (cross) road([{ u: 4, v: cross }, { u: w - 4, v: cross }], 7);
     }
     const blocks = [];
-    for (const [u0, u1] of [[3, spine - 5], [spine + 5, w - 3]]) {
+    for (const [u0, u1] of [[3, spine - 8.5], [spine + 8.5, w - 3]]) {
       if (u1 - u0 < 8) continue;
       if (cross) { blocks.push([u0, 3, u1, cross - 5.5], [u0, cross + 5.5, u1, d - 3]); } else blocks.push([u0, 3, u1, d - 3]);
     }
@@ -191,5 +212,8 @@ export function lotArt(b) {
       }
     }
   }
-  return { base, items };
+  // 小客車停車位：依 slot 值排序，前 b.parked 個有車（貨車車位另外依使用率顯示）
+  const slots = items.filter(it => it.slot !== undefined && !it.truck).sort((p, q) => p.slot - q.slot);
+  slots.forEach((it, i) => { it.rank = i; });
+  return { base, items, slots };
 }

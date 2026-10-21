@@ -33,6 +33,11 @@ for (let h = 0; h < 20; h++) {
     if (Number.isNaN(v.v) || Number.isNaN(v.s)) throw new Error('NaN');
   }
 }
+// 停車：住宅一開始有車停在家，車輛出發後停車數減少、回來後增加
+{
+  const hs = g.city.buildings.filter(b => b.zone === 'R' && g.city.slotsOf(b).length);
+  assert(hs.length && hs.every(b => b.parked >= 0 && b.parked <= g.city.slotsOf(b).length), `停車數在合理範圍（${hs.reduce((a, b) => a + b.parked, 0)} 輛停在 ${hs.length} 戶）`);
+}
 const st = g.city.stats;
 console.log(`     20 遊戲小時耗時 ${Date.now() - t0} ms，最多 ${maxVeh} 輛車；成功 ${st.trips}、失敗 ${st.fails}、過境 ${st.through}；人口 ${g.city.pop}`);
 assert(st.trips > 300, '大量行程完成');

@@ -5,6 +5,7 @@ import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, poi
 import { halfWidth, laneOffset } from './network.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
+const SHOW_WILD_TREES = false;
 // 顏色明暗（建物牆面與斜屋頂用），結果快取
 const shadeCache = new Map();
 function shade(hex, f) {
@@ -104,7 +105,6 @@ export class Renderer {
     if (!baked) this.drawTrees(v);
     this.drawBuildings(v);
     this.drawNetwork(v);
-    this.drawCurbCars(v);
     this.drawArrivals(v);
     this.drawGates(v);
     if (g.heatmap) this.drawHeatmap(v);
@@ -129,7 +129,8 @@ export class Renderer {
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(t.getCanvas(), 0, 0, t.size, t.size);
     const r = 3.6;
-    for (let k = 0; k < 3; k++) {
+    // 地圖上零散的樹（綠點）暫不顯示
+    for (let k = 0; k < (SHOW_WILD_TREES ? 3 : 0); k++) {
       ctx.fillStyle = t.biome.tree[k];
       ctx.beginPath();
       for (let i = 0; i < t.treeX.length; i++) {
@@ -163,6 +164,7 @@ export class Renderer {
   }
 
   drawTrees(v) {
+    if (!SHOW_WILD_TREES) return;
     const g = this.game, t = g.terrain, ctx = this.ctx, z = this.cam.z;
     if (z < 0.3) return;
     const cols = t.biome.tree;
@@ -232,7 +234,7 @@ export class Renderer {
       ctx.fill();
       // 依底部（最南端）排序，讓同一地塊內的建物也能正確前後遮擋
       if (!b._art.sorted) {
-        const low = it => (it.t === 'circle' ? P(it.u, it.v).y + it.r : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => p.y)));
+        const low = it => (it.t === 'circle' || it.t === 'sign' ? P(it.u, it.v).y + (it.r || 0) : it.t === 'line' ? -1e9 : Math.max(...(it.car ? box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv) : box(it.u0, it.v0, it.u1, it.v1)).map(p => p.y)));
         // 地面上的東西（鋪面、標線）照產生順序，再畫車，最後是由北往南排序的建物
         const flat = b._art.items.filter(it => !(it.h >= 1) && !it.car), cars = b._art.items.filter(it => it.car);
         const tall = b._art.items.filter(it => it.h >= 1 && !it.car).map(it => [low(it), it]).sort((p, q) => p[0] - q[0]).map(x => x[1]);
@@ -248,7 +250,7 @@ export class Renderer {
       if (detail) {
         ctx.fillStyle = 'rgba(20,24,30,0.24)';
         for (const it of items) {
-          if (!it.h || it.t === 'line' || it.curb || (it.slot !== undefined && it.slot > occ)) continue;
+          if (!it.h || it.t === 'line' || it.t === 'sign' || (it.rank !== undefined ? it.rank >= (b.parked || 0) : it.slot !== undefined && it.slot > occ)) continue;
           const o = it.h * 0.55;
           if (it.t === 'circle') {
             const p = P(it.u, it.v);
@@ -263,8 +265,7 @@ export class Renderer {
       }
       for (const it of items) {
         if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2))) continue;
-        if (it.slot !== undefined && it.slot > occ) continue;
-        if (it.curb) continue;   // 路邊停車在道路之後才畫（否則會被人行道蓋住）
+        if (it.rank !== undefined ? it.rank >= (b.parked || 0) : it.slot !== undefined && it.slot > occ) continue;
         if (it.car) {
           // 停著的車：車身＋前後擋風玻璃
           quad(box(it.u0, it.v0, it.u0 + it.du, it.v0 + it.dv)); ctx.fillStyle = it.c; ctx.fill();
@@ -281,6 +282,14 @@ export class Renderer {
           ctx.setLineDash(it.dash || []);
           ctx.beginPath(); it.pts.forEach((q, i) => { const p = P(q.u, q.v); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }); ctx.stroke();
           ctx.setLineDash([]); ctx.lineCap = 'round';
+          continue;
+        }
+        if (it.t === 'sign') {
+          // 招牌：立柱＋方形牌面
+          const p = P(it.u, it.v), H = it.h * 0.5;
+          ctx.strokeStyle = '#6b6f75'; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - H); ctx.stroke();
+          ctx.fillStyle = it.c; ctx.fillRect(p.x - 1.3, p.y - H - 2.4, 2.6, 2.6);
+          if (z > 1.2) { ctx.fillStyle = '#fff'; ctx.font = 'bold 2.2px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(it.text, p.x, p.y - H - 1.05); ctx.textBaseline = 'alphabetic'; }
           continue;
         }
         if (it.t === 'circle') {
@@ -929,6 +938,7 @@ export class Renderer {
     const ox = d * (this.W / 2 - c.x * z), oy = d * (this.H / 2 - c.y * z);
     const detail = z > 2.2;
     for (const vh of list) {
+      if (vh.hold > 0) continue;   // 還在從停車位開出來（由停車動畫畫出）
       const p = this.vehPose(vh);
       const lat = p.lat;
       const x = p.x - p.dy * lat, y = p.y + p.dx * lat;
@@ -975,42 +985,21 @@ export class Renderer {
     ctx.fillStyle = 'rgba(255,250,220,0.9)'; ctx.fillRect(hl - 0.15, -hw + 0.15, 0.15, 0.35); ctx.fillRect(hl - 0.15, hw - 0.5, 0.15, 0.35);
   }
 
-  // 路邊停車（畫在道路之上）
-  drawCurbCars(v) {
-    const ctx = this.ctx, g = this.game, city = g.city, z = this.cam.z;
-    if (z < 0.9) return;
-    const hour = (g.time % 1440) / 60;
-    for (const b of city.buildings) {
-      if (!b.streetPark || !b._art || b.abandoned || b.x + b.rad < v.x0 || b.x - b.rad > v.x1 || b.y + b.rad < v.y0 || b.y - b.rad > v.y1) continue;
-      const occ = b.zone === 'R' ? (hour >= 8 && hour < 17 ? 0.45 : 0.9) : clamp((b.present + b.custLevel * 1.5) / Math.max(1, city.cap(b) * 0.5), 0.1, 1);
-      const c0 = b.corners[0], P = (u, w) => ({ x: c0.x + b.tx * u + b.nx * w, y: c0.y + b.ty * u + b.ny * w });
-      for (const it of b._art.items) {
-        if (!it.curb || it.slot > occ) continue;
-        const c = [P(it.u0, it.v0), P(it.u0 + it.du, it.v0), P(it.u0 + it.du, it.v0 + it.dv), P(it.u0, it.v0 + it.dv)];
-        ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.beginPath(); c.forEach((p, i) => (i ? ctx.lineTo(p.x + 0.3, p.y + 0.3) : ctx.moveTo(p.x + 0.3, p.y + 0.3))); ctx.fill();
-        ctx.fillStyle = it.c; ctx.beginPath(); c.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.fill();
-        if (z > 1.8) {
-          ctx.fillStyle = 'rgba(30,40,55,0.7)';
-          for (const [f0, f1] of [[0.18, 0.3], [0.68, 0.84]]) {
-            const q = [P(it.u0 + it.du * f0, it.v0 + 0.2), P(it.u0 + it.du * f1, it.v0 + 0.2), P(it.u0 + it.du * f1, it.v0 + it.dv - 0.2), P(it.u0 + it.du * f0, it.v0 + it.dv - 0.2)];
-            ctx.beginPath(); q.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.fill();
-          }
-        }
-      }
-    }
-  }
-
-  // 抵達後靠邊停好、淡出的車
+  // 停車 / 出車中的車：沿貝茲曲線開進或開出停車位
   drawArrivals(v) {
     const ctx = this.ctx, c = this.cam, d = this.dpr, z = c.z, a = d * z;
     const ox = d * (this.W / 2 - c.x * z), oy = d * (this.H / 2 - c.y * z);
     for (const f of this.game.traffic.fx) {
-      const k = Math.min(1, f.t / 1.2), side = 2.6 * (1 - (1 - k) * (1 - k));
-      const x = f.x - f.dy * side, y = f.y + f.dx * side;
+      const k = Math.min(1, f.t / f.dur), e = k * k * (3 - 2 * k), m = 1 - e, [p0, p1, p2, p3] = f.pts;
+      const x = m * m * m * p0.x + 3 * m * m * e * p1.x + 3 * m * e * e * p2.x + e * e * e * p3.x;
+      const y = m * m * m * p0.y + 3 * m * m * e * p1.y + 3 * m * e * e * p2.y + e * e * e * p3.y;
       if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
-      const turn = 0.35 * Math.sin(Math.PI * k), dx = f.dx - f.dy * turn, dy = f.dy + f.dx * turn, L = Math.hypot(dx, dy);
-      ctx.setTransform(a * dx / L, a * dy / L, -a * dy / L, a * dx / L, ox + a * x, oy + a * y);
-      ctx.globalAlpha = Math.max(0, 1 - Math.max(0, f.t - 1.0) / 0.8);
+      const tt = Math.min(0.995, Math.max(0.005, e)), n = 1 - tt;
+      let dx = 3 * n * n * (p1.x - p0.x) + 6 * n * tt * (p2.x - p1.x) + 3 * tt * tt * (p3.x - p2.x);
+      let dy = 3 * n * n * (p1.y - p0.y) + 6 * n * tt * (p2.y - p1.y) + 3 * tt * tt * (p3.y - p2.y);
+      const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
+      ctx.setTransform(a * dx, a * dy, -a * dy, a * dx, ox + a * x, oy + a * y);
+      ctx.globalAlpha = f.garage ? Math.max(0, 1 - Math.max(0, f.t - f.dur * 0.6) / (f.dur * 0.4 + 0.6)) : 1;
       this.carBody(f.color, f.len, f.w, f.truck, z > 2.2);
     }
     ctx.globalAlpha = 1;

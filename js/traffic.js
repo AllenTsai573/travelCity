@@ -99,6 +99,19 @@ export class Traffic {
         v.fadeIn = trip.from.outside ? 1 : 0;   // 從建築出發的車由路邊慢慢出現
         this.place(v, lane, s);
         this.vehicles.push(v);
+        // 從建築出發：先從停車位開出來，到路邊才加入車流
+        const from = trip.from;
+        if (from.zone && !from.dead && from.parked > 0 && !trip.truck && this.game.city) {
+          const slots = this.game.city.slotsOf(from);
+          const sl = slots[Math.min(from.parked, slots.length) - 1];
+          from.parked--;
+          if (sl) {
+            const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
+            const f = this.parkPath(p, sl, v, false, null);
+            this.fx.push(f);
+            v.hold = f.dur;
+          }
+        }
         return 'ok';
       }
       if (!trip.from.outside) break;
@@ -108,11 +121,20 @@ export class Traffic {
 
   finish(v, ok) {
     if (v.dead) return;
-    // 抵達建築：先靠邊停好再消失（開進車庫 / 停車場的感覺）
+    // 抵達建築：開進一個空的停車位停好（車位滿了或沒有車位就開進建物 / 地下停車場）
     const to = v.trip && v.trip.to;
-    if (ok && to && to.zone && v.track && v.track.pts && this.fx.length < 200) {
+    if (ok && to && to.zone && !to.dead && v.track && v.track.pts && this.fx.length < 300) {
       const p = pointAt(v.track.pts, v.track.cum, clamp(v.s - v.len / 2, 0, v.track.len));
-      this.fx.push({ x: p.x, y: p.y, dx: p.dx, dy: p.dy, color: v.color, len: v.len, w: v.w, truck: v.truck, t: 0 });
+      const slots = !v.truck && this.game.city ? this.game.city.slotsOf(to) : [];
+      const reserved = to.parkingIn || 0;
+      if (to.parked + reserved < slots.length) {
+        const sl = slots[to.parked + reserved];
+        to.parkingIn = reserved + 1;
+        this.fx.push(this.parkPath(p, sl, v, true, to));
+      } else {
+        const gx = to.x - p.x, gy = to.y - p.y, L = Math.hypot(gx, gy) || 1, k = Math.min(10, L * 0.5);
+        this.fx.push(this.parkPath(p, { x: p.x + gx / L * k, y: p.y + gy / L * k, ax: gx / L, ay: gy / L }, v, true, null, true));
+      }
     }
     this.removeFromTrack(v);
     v.dead = true;
@@ -515,14 +537,37 @@ export class Traffic {
     }
   }
 
+  // 停車 / 出車的路徑：三次貝茲曲線，起點沿車道方向、終點沿車位方向（車頭朝前開進 / 開出）
+  parkPath(p, sl, v, arrive, b, garage = false) {
+    const dx = sl.x - p.x, dy = sl.y - p.y, dist = Math.hypot(dx, dy) || 1;
+    let ax = sl.ax, ay = sl.ay;
+    if ((arrive ? 1 : -1) * (ax * dx + ay * dy) < 0) { ax = -ax; ay = -ay; }
+    const k0 = Math.min(6, dist / 3), k1 = Math.min(5, dist / 2);
+    const pts = arrive
+      ? [{ x: p.x, y: p.y }, { x: p.x + p.dx * k0, y: p.y + p.dy * k0 }, { x: sl.x - ax * k1, y: sl.y - ay * k1 }, { x: sl.x, y: sl.y }]
+      : [{ x: sl.x, y: sl.y }, { x: sl.x + ax * k1, y: sl.y + ay * k1 }, { x: p.x - p.dx * k0, y: p.y - p.dy * k0 }, { x: p.x, y: p.y }];
+    const dur = clamp(dist * 1.3 / 4, 1.2, 6);
+    return { pts, dur, t: 0, color: v.color, len: v.len, w: v.w, truck: v.truck, arrive, b, garage };
+  }
+
   step(dt) {
     this.updateSignals(dt);
-    for (const f of this.fx) f.t += dt;
-    if (this.fx.length && this.fx[0].t > 1.8) this.fx = this.fx.filter(f => f.t <= 1.8);
+    if (this.fx.length) {
+      for (const f of this.fx) {
+        f.t += dt;
+        if (f.t >= f.dur && !f.done) {
+          f.done = true;
+          if (f.b && f.arrive) { f.b.parkingIn = Math.max(0, (f.b.parkingIn || 0) - 1); if (!f.b.dead) f.b.parked = Math.min(f.b.parked + 1, this.game.city.slotsOf(f.b).length); }
+        }
+      }
+      this.fx = this.fx.filter(f => !f.done || (f.garage && f.t < f.dur + 0.6));
+    }
     const vs = this.vehicles;
     for (const v of vs) if (!v.dead) v.acc = this.computeAccel(v);
     for (const v of vs) {
       if (v.dead) continue;
+      // 還在從停車位開出來：先停在路邊等
+      if (v.hold > 0) { v.hold -= dt; v.v = 0; if (v.hold <= 0) v.fadeIn = 1; continue; }
       if (v.fadeIn < 1) v.fadeIn = Math.min(1, v.fadeIn + dt / 0.8);
       v.lcT -= dt;
       if (v.lcT <= 0) { v.lcT = 0.4 + (v.id % 7) * 0.03; this.tryLaneChange(v); }

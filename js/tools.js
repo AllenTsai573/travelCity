@@ -215,6 +215,11 @@ export class Tools {
       const s = net.segNear(x, y, Math.max(1.5, 8 / z), 'any');
       if (s && Math.abs(s.h - Math.round(s.h)) < 0.2) return { x: s.x, y: s.y, seg: s.seg.id, u: s.u, level: Math.round(s.h) };
     }
+    // 對齊地塊 / 建築的後緣或側邊：道路剛好貼著地塊（中間留 1.5 m 人行道）
+    if (!this.mouse.alt && this.tool === 'road') {
+      const al = this.lotAlign(x, y);
+      if (al) return al;
+    }
     if (this.pts.length && !this.mouse.alt) {
       // 角度吸附以起點所在道路為基準：接近平行 / 45° / 垂直時自動對齊；按 Shift 以 15° 為單位
       const a = this.pts[this.pts.length - 1], ref = this.refAngle(this.pts[0]);
@@ -225,6 +230,25 @@ export class Tools {
     }
     return { x, y, level: this.level };
   }
+  lotAlign(x, y) {
+    const city = this.g.city, z = this.cam.z, tol = Math.max(2.5, 9 / z);
+    const off = halfWidth(ROAD_TYPES[this.roadType]) + 1.5;
+    let best = null;
+    for (const b of [...city.lots, ...city.buildings]) {
+      if (Math.abs(b.x - x) > b.rad + 40 || Math.abs(b.y - y) > b.rad + 40) continue;
+      const c = b.corners;
+      // 後緣（3→2）往外推，左右兩側（0→3、1→2）往外推
+      for (const [a, e, nx, ny] of [[c[3], c[2], b.nx, b.ny], [c[0], c[3], -b.tx, -b.ty], [c[1], c[2], b.tx, b.ty]]) {
+        const ax = a.x + nx * off, ay = a.y + ny * off, dx = e.x - a.x, dy = e.y - a.y, L = Math.hypot(dx, dy);
+        const t = ((x - ax) * dx + (y - ay) * dy) / (L * L);
+        if (t < -1.5 || t > 2.5) continue;
+        const px = ax + dx * t, py = ay + dy * t, d = Math.hypot(x - px, y - py);
+        if (d < tol && (!best || d < best.d)) best = { d, x: px, y: py };
+      }
+    }
+    return best ? { x: best.x, y: best.y, level: this.level, alignLot: true } : null;
+  }
+
   // 起點所在道路的方向（沒有接在道路上時以地圖水平為基準）
   refAngle(p) {
     const net = this.net;
@@ -268,7 +292,7 @@ export class Tools {
         const plan = net.planRoad(a, sn, this.curve ? this.pts[1] : null, this.roadType, this.level);
         this.plan = plan;
         const extra = plan.demolish && plan.demolish.length ? ` · 拆除 ${plan.demolish.length} 棟` : '';
-        const angT = this.curve ? '' : ` · ${this.angleText(a, sn)}`;
+        const angT = (this.curve ? '' : ` · ${this.angleText(a, sn)}`) + (sn.alignLot ? ' · 對齊地塊邊緣' : '');
         if (plan.ok) this.setTip(`${fmtMoney(plan.cost)} · ${Math.round(plan.len)} m${angT}${plan.crossings.length ? ` · ${plan.crossings.length} 個新路口` : ''}${extra}`);
         else this.setTip(plan.reason + (plan.cost ? ` (${fmtMoney(plan.cost)})` : ''), true);
         break;
@@ -299,7 +323,13 @@ export class Tools {
         break;
       }
       case 'zone': {
-        if (this.zStroke) break;
+        if (this.zStroke) {
+          const st = this.zStroke;
+          if (st.rect) { this.setTip(`取消分區：${st.rect.cols}×${st.rect.rows} 格`); break; }
+          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1;
+          this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : ''), !ok.length);
+          break;
+        }
         const a = this.zoneAnchor(m.x, m.y);
         this.hover = a;
         const name = this.zone === 'X' ? '取消分區' : ZONE_TYPES[this.zone].name;
@@ -609,7 +639,7 @@ export class Tools {
         ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.5, 4 / z), 0, Math.PI * 2); ctx.fill();
       }
       if (sn && m.inside) {
-        ctx.strokeStyle = sn.node ? '#ffd25e' : sn.seg ? '#7cf29a' : '#ffffff';
+        ctx.strokeStyle = sn.node ? '#ffd25e' : sn.seg ? '#7cf29a' : sn.alignLot ? '#ffa94d' : '#ffffff';
         ctx.lineWidth = 2 / z;
         ctx.beginPath(); ctx.arc(sn.x, sn.y, Math.max(2.5, 7 / z), 0, Math.PI * 2); ctx.stroke();
       }
@@ -634,7 +664,6 @@ export class Tools {
         ctx.beginPath(); ctx.arc(h.obj.x, h.obj.y, h.obj.radius + 5, 0, Math.PI * 2); ctx.stroke();
       }
     } else if (this.tool === 'zone') {
-      this.drawZoneGrid(ctx, r);
       const quad = (c, fill, stroke) => {
         ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y); ctx.closePath();
         if (fill) { ctx.fillStyle = fill; ctx.fill(); }
@@ -779,7 +808,7 @@ export class Tools {
   drawScreenOverlay() {
     const tip = document.getElementById('tip');
     if (!tip) return;
-    if (this.tip && this.mouse.inside && !this.down) {
+    if (this.tip && this.mouse.inside && (!this.down || this.zStroke)) {
       tip.textContent = this.tip;
       tip.className = this.tipBad ? 'bad' : '';
       tip.style.display = 'block';

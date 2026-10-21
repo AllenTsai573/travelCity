@@ -17,7 +17,8 @@ export function driveway(zone, kind, geo) {
   if (zone === 'I') return geo.cols >= 8 ? { end: d - 6, cross: geo.rows >= 10 ? d * 0.55 : null, through: true } : null;
   // 住宅區的巷道（盡頭迴車，不打通）：低密度兩側是宅地；中 / 高密度兩側是停車格，後面才是建物
   // 公車總站：中央場內車道（兩側是公車停車格）
-  if (zone === 'T') return geo.cols >= 6 ? { end: d - 6 } : null;
+  // 公車總站、計程車行的中央場內車道；鐵路車站、貨運站直接臨路進出
+  if (zone === 'T') return (geo.zt === 'T' || geo.zt === 'TX') && geo.cols >= 6 ? { end: d - 6 } : null;
   // 高密度住宅的地下 / 立體停車場、立體停車場的購物中心：停車場前的單向車道（右進右出）
   const gd = garageDrive(geo.zt, kind, geo.cols, geo.rows);
   if (gd) return { end: gd.cv, lot: { aisles: [gd.ua, gd.ub], oneway: true, front: gd.cv }, garage: true };
@@ -56,6 +57,7 @@ export class City {
     this.byId = new Map();
     this.nextId = 1;
     this.outside = [];
+    this.railOutside = [];   // 外部鐵路連線（只有列車，不產生汽車車流）
     this.scheduled = [];
     this.hourT = 0;
     this.growT = 0;
@@ -135,6 +137,27 @@ export class City {
 
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
   // 分區 zt 的最大地塊格數（0 = 尚未解鎖）：依人口解鎖的上限；給了臨路路段 seg 時再受道路種類限制（ROAD_TYPES.lotMax）
+  // 車站旁的鐵軌（月台位置）：地塊後方或兩側 30 m 內的地面鐵軌上最近的一點；沒有就是 null
+  railNear(geo) {
+    const net = this.game.net, c0 = geo.corners[0];
+    const P = (u, v) => ({ x: c0.x + geo.tx * u + geo.nx * v, y: c0.y + geo.ty * u + geo.ny * v });
+    const pts = [P(geo.w / 2, geo.d), P(geo.w * 0.2, geo.d), P(geo.w * 0.8, geo.d), P(0, geo.d * 0.6), P(geo.w, geo.d * 0.6)];
+    let best = null;
+    for (const s of net.segs.values()) {
+      if (!s.T.rail || s.drawLevel !== 0) continue;
+      for (const q of pts) {
+        const c = closestOnPoly(s.pts, s.cum, q);
+        if (c.d <= 30 && (!best || c.d < best.d)) best = { seg: s.id, u: clamp(c.s, Math.min(s.ra + 2, s.len / 2), Math.max(s.len - s.rb - 2, s.len / 2)), d: c.d };
+      }
+    }
+    return best;
+  }
+  // 車站的月台（隨路網版本快取）
+  platformOf(b) {
+    const ver = this.game.net.version;
+    if (!b._plat || b._plat.ver !== ver) b._plat = { ver, p: this.railNear(b) };
+    return b._plat.p;
+  }
   maxCells(zt, seg = null) { return Math.min(zoneMax(zt, this.unlockPop()), (seg && seg.T.lotMax) || Infinity); }
   // 解鎖用的人口：沙盒模式一開始就全部解鎖，其他難度依曾達到的最高人口
   unlockPop() { const d = this.game.diff; return d && d.unlockAll ? Infinity : this.peakPop; }
@@ -156,7 +179,10 @@ export class City {
       let r = depth, reason = null;
       for (; r >= 2; r--) { reason = this.canPlaceLot(seg, u, side, cols, r); if (!reason) break; }
       const ok = r >= 2;
-      res.push({ zt, seg, u, side, cols, rows: ok ? r : depth, ok, reason, geo: this.lotGeom(seg, u, side, cols, ok ? r : depth) });
+      const item = { zt, seg, u, side, cols, rows: ok ? r : depth, ok, reason, geo: this.lotGeom(seg, u, side, cols, ok ? r : depth) };
+      // 鐵路車站要緊鄰鐵軌
+      if (ok && ZONE_TYPES[zt].rail && !this.railNear(item.geo)) { item.ok = false; item.reason = '車站要緊鄰鐵路：地塊後方或側邊 30 m 內要有地面鐵軌'; }
+      res.push(item);
       start += cols * CELL;
     }
     return res;
@@ -206,7 +232,7 @@ export class City {
     const sl = this.slotsOf(b), rng = this.game.rng;
     // 計程車行 / 招呼站：車位上停著計程車
     b.slotOcc = sl.map(s => (b.zone === 'R' && rng.next() < 0.7 ? s.c : (b.zt === 'TX' || b.zt === 'TS') && rng.next() < 0.85 ? TAXI_COLOR : null));
-    b.tOcc = this.truckSlotsOf(b).map(() => (b.zone === 'I' && rng.next() < 0.4 ? '#d8d0c0' : b.zone === 'T' ? '#d23c2c' : null));
+    b.tOcc = this.truckSlotsOf(b).map(() => ((b.zone === 'I' || b.zt === 'RC') && rng.next() < 0.4 ? '#d8d0c0' : b.zt === 'T' || b.zt === 'RT' ? '#d23c2c' : null));
   }
 
   // 場內道路：工業園區的主幹道（深的再加橫向道路）、停車場的車道；員工、貨車與顧客都開進去
@@ -354,7 +380,7 @@ export class City {
 
   // 建築的停車位（世界座標、車頭方向），與畫面上 lotArt 的停車位一一對應；貨車車位（卸貨區）另外一組（truckSlotsOf）
   slotsOf(b) {
-    const key = b.level + '|' + b.abandoned + '|' + !!b.roads;
+    const key = b.level + '|' + b.abandoned + '|' + !!b.roads + '|' + !!b.busHub;
     if (!b._slots || b._slots.key !== key) {
       const c0 = b.corners[0], art = lotArt(b);
       const P = (u, v) => ({ x: c0.x + b.tx * u + b.nx * v, y: c0.y + b.ty * u + b.ny * v });
@@ -450,7 +476,7 @@ export class City {
       id: this.nextId++, built: true, zone, zt, kind: kind || this.pickKind(zt, cols, rows), seg: seg.id, u, side, level, ...geo,
       streetPark: seg.T.rank <= 1 && !seg.T.internal,
       happy: 0.7, workOK: 0.8, shopOK: 0.8, timeScore: 0.8, pollution: 0, noise: 0,
-      workSat: 0.7, goodsSat: 1, custSat: 0.6, matSat: 1, stock: zone === 'R' ? 0 : 8, custLevel: 0, present: 0,
+      workSat: 0.7, goodsSat: 1, custSat: 0.6, matSat: 1, stock: zone === 'R' ? 0 : zt === 'RC' ? 20 : 8, custLevel: 0, present: 0,
       // 起始累計量隨機，讓各棟建築的出發時間錯開
       acc: { work: this.game.rng.next(), shop: this.game.rng.next(), goods: this.game.rng.next(), mat: this.game.rng.next(), outw: this.game.rng.next() },
       queue: [], spawnCD: 0, highT: 0, lowT: 0,
@@ -548,6 +574,12 @@ export class City {
     this.lots = this.lots.filter(l => net.segs.has(l.seg));
   }
 
+  addRailOutside(node, name) {
+    node.outside = true;
+    const o = { node: node.id, name, rail: true };
+    this.railOutside.push(o);
+    return o;
+  }
   addOutside(node, name) {
     node.outside = true;
     const o = { kind: 'outside', outside: true, node: node.id, seg: null, u: 0, queue: [], spawnCD: 0, name, id: 'o' + node.id };
@@ -569,6 +601,16 @@ export class City {
   liveOutside() {
     const comp = this.mainComponent();
     return this.outside.filter(o => o.seg !== null && comp.has(o.node));
+  }
+  // 最近的鐵路貨運站（要有月台；need：要有原料存貨）
+  nearCargo(b, need) {
+    let best = null, bd = 3000;
+    for (const x of this.buildings) {
+      if (x.zt !== 'RC' || x.dead || x.abandoned || (need && x.stock < 1) || !this.platformOf(x)) continue;
+      const d = Math.hypot(x.x - b.x, x.y - b.y);
+      if (d < bd) { bd = d; best = x; }
+    }
+    return best;
   }
   pickJob(b) {
     return this.roulette(this.buildings.filter(x => (x.zone === 'C' || x.zone === 'I') && !x.abandoned),
@@ -653,7 +695,9 @@ export class City {
         toll = 2;
         break;
       case 'goods':
-        if (!to.dead && to.zone) to.stock = Math.min(40, to.stock + 6);
+        // 送到鐵路貨運站的是外銷商品（等貨運列車載走）
+        if (!to.dead && to.zt === 'RC') to.exports = (to.exports || 0) + 1;
+        else if (!to.dead && to.zone) to.stock = Math.min(40, to.stock + 6);
         // 送貨到商店的貨車卸完貨（停在卸貨區 30～60 分鐘）後開回工廠
         if (!to.dead && to.zone === 'C' && from.zone && !from.dead) this.schedule(g.time + 30 + g.rng.next() * 30, { kind: 'return', from: to, to: from, truck: true });
         toll = 3;
@@ -746,14 +790,18 @@ export class City {
           b.acc.goods -= 1;
           if (b.stock < 1) continue;
           // 約三成商品外銷（貨車開往外部連線）
-          const d = rng.chance(0.3) && this.liveOutside().length ? this.pickOutside(b) : this.pickGoodsDest(b);
+          // 有鐵路貨運站時外銷的商品送到貨運站，由貨運列車載出去
+          const ex = rng.chance(0.3), rc = ex ? this.nearCargo(b, false) : null;
+          const d = rc || (ex && this.liveOutside().length ? this.pickOutside(b) : this.pickGoodsDest(b));
           if (d) { b.stock -= 1; this.pushTrip(b, { kind: 'goods', from: b, to: d, truck: true }); }
         }
         if (b.stock < 12) {
           b.acc.mat += cap / 6 * pFreight * k;
           while (b.acc.mat >= 1) {
             b.acc.mat -= 1;
-            const o = this.pickOutside(b);
+            // 原料：有存貨的鐵路貨運站優先（貨運列車從外地運來），否則貨車從外部連線運來
+            const rc = this.nearCargo(b, true), o = rc || this.pickOutside(b);
+            if (rc) rc.stock -= 1;
             if (o) this.pushTrip(o, { kind: 'mat', from: o, to: b, truck: true });
           }
         }
@@ -1079,15 +1127,17 @@ export class City {
     return {
       nextId: this.nextId,
       buildings: this.buildings.map(b => ({ id: b.id, zone: b.zone, zt: b.zt, kind: b.kind, cols: b.cols, rows: b.rows, seg: b.seg, u: b.u, side: b.side, level: b.level, happy: b.happy, stock: b.stock, abandoned: b.abandoned,
-        roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, parkPlan: b.parkPlan || undefined, links: b.links || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, tOcc: b.tOcc && b.tOcc.some(Boolean) ? b.tOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
+        busHub: b.busHub || undefined, roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, parkPlan: b.parkPlan || undefined, links: b.links || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, tOcc: b.tOcc && b.tOcc.some(Boolean) ? b.tOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
+      railOutside: this.railOutside.map(o => ({ node: o.node, name: o.name })),
       demand: this.demand, stats: this.stats, history: this.history, growStart: this.growStart, peakPop: this.peakPop,
     };
   }
   load(d) {
     const net = this.game.net;
     for (const o of d.outside) this.addOutside(net.nodes.get(o.node), o.name);
+    for (const o of d.railOutside || []) if (net.nodes.get(o.node)) this.addRailOutside(net.nodes.get(o.node), o.name);
     for (const s of d.buildings) {
       const seg = net.segs.get(s.seg);
       if (!seg) continue;
@@ -1096,6 +1146,7 @@ export class City {
       const old = { R: [3, 3], C: [4, 4], I: [5, 5] }[s.zone];
       const geo = s.c0 ? this.geomFrom(...s.c0, s.cols, s.rows) : null;
       const b = this.addBuilding(zt, seg, s.u, s.side, s.cols || old[0], s.rows || old[1], s.level, s.kind, geo);
+      if (s.busHub) b.busHub = true;
       if (s.roads) { b.roads = s.roads; b.front = s.front || null; this.markGate(b); }
       if (s.parkPlan) { b.parkPlan = s.parkPlan; b.links = s.links || {}; }
       const gs = s.gates || (s.gate ? [s.gate] : null);
@@ -1106,7 +1157,7 @@ export class City {
       else if (s.parked !== undefined) b.slotOcc = b.slotOcc.map((_, i) => (i < s.parked ? this.slotsOf(b)[i].c : null));
       if (s.tOcc) b.tOcc = b.tOcc.map((_, i) => s.tOcc[i] || null);
       // 公車總站：存檔時在路上跑的公車不會存，讀檔後全部停回總站重新派車
-      if (b.zone === 'T') b.tOcc = b.tOcc.map(() => '#d23c2c');
+      if (b.zt === 'T' || b.zt === 'RT') b.tOcc = b.tOcc.map(() => '#d23c2c');
     }
     for (const l of d.lots || []) {
       const seg = net.segs.get(l.seg);

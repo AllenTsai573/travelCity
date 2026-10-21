@@ -43,6 +43,25 @@ export function generateWorld(g, opts = {}) {
       break;
     }
   }
+  // 外部鐵路：從還沒有道路的一側（沒有就隨便一側）進入地圖
+  const railSides = [...sides.filter(sd => !g.city.outside.some(o => o.name.startsWith(names[sd]))), ...sides];
+  let railIn = null;
+  for (const side of railSides) {
+    for (let tries = 0; tries < 60 && !railIn; tries++) {
+      const t = rng.range(0.25, 0.75) * S;
+      const P = [{ x: t, y: 4 }, { x: S - 4, y: t }, { x: t, y: S - 4 }, { x: 4, y: t }][side];
+      const D = [{ x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 }, { x: 1, y: 0 }][side];
+      let ok = true;
+      for (let k = 0; k <= 200 && ok; k += 5) if (T.isWater(P.x + D.x * k, P.y + D.y * k)) ok = false;
+      if (!ok || g.city.outside.some(o => { const n = net.nodes.get(o.node); return Math.hypot(n.x - P.x, n.y - P.y) < 300; })) continue;
+      const O = net.addNode(P.x, P.y, 0), I = net.addNode(P.x + D.x * 180, P.y + D.y * 180, 0);
+      net.addSegment(O, I, 'rail', [O, I]);
+      g.city.addRailOutside(O, names[side] + '鐵路');
+      T.clearTreesAlong([O, I], 12);
+      railIn = I;
+    }
+    if (railIn) break;
+  }
   net.rebuild();
   if (opts.blank) { g.money = savedMoney; return; }
 
@@ -63,6 +82,18 @@ export function generateWorld(g, opts = {}) {
   for (const a of xs) street(ys.map(b => P(a, b)), avX.has(a) ? 'avenue' : 'street');
   for (const b of ys) street(xs.map(a => P(a, b)), avY.has(b) ? 'avenue' : 'street');
   net.rebuild();
+
+  // 外部鐵路延伸到小鎮外圍（停在街道外面，不跟街道平面相交），玩家可以在旁邊蓋車站
+  if (railIn) {
+    const dx = c - railIn.x, dy = c - railIn.y, L = Math.hypot(dx, dy);
+    for (const stop of [950, 1100, 1300]) {
+      if (L <= stop + 50) break;
+      const q = { x: railIn.x + dx / L * (L - stop), y: railIn.y + dy / L * (L - stop) };
+      const plan = net.planRoad({ x: railIn.x, y: railIn.y, node: railIn.id }, q, null, 'rail', 0);
+      if (plan.ok && !plan.crossings.length) { net.executeRoad(plan); break; }
+    }
+    net.rebuild();
+  }
 
   // 小鎮最大的連通區
   const comp = new Map();

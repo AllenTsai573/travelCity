@@ -85,6 +85,11 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 - **分區圖**：`g.zonemap`（`M` 鍵 / 「分區圖」按鈕），`render.drawZoneMap` 塗地塊顏色（`zoneColor(zt)`），開啟時不畫建物立體部分；圖例在 `#zonemap`（ui.refreshTop）。
 - **單向場內道路**（`ROAD_TYPES.service1`）：大型停車場（`lotart.oneWayLot`：量販店 / 購物中心 / 超市）與停車樓前的車道（`lotart.garageDrive`：高密度住宅、`mallp` 立體停車場購物中心）。`city.buildParkRoads` 依 `plan.lot.oneway` 依序建造：入口 → 前方分配車道 → 各停車車道 → 後方集散車道 → 出口；入口一律在臨路車道上游端（`-ty·nx + tx·ny > 0` 時在 u 小的那端），`network.genConnections` 讓 service1 與一般道路的左轉進出加上 240 秒的尋路成本（`conn.pen`），平常都右進右出（避免排隊回堵出口造成整個停車場卡死），只有沒有別的路時才左轉（例如停車場在通往地圖邊緣的路上）。室內車位（`indoor`）有 `out`（出口車道位置），`slotRoad(b, i, truck, out)`、`trySpawn` 開出時用 out；`slotBusy` 對室內車位只擋同一條車道。
 - **計程車**：分區 `TX`（計程車行）、`TS`（招呼站），zone 都是 `T`；車位是小客車車位（`slotOcc` 停著黃色計程車 `TAXI_COLOR`）。`transit.callTaxi(trip)` 從 1.6 km 內最近有車的站 `trySpawn({ kind: 'taxi', taxi: 乘客行程 }, 接客點)`；車輛 `v.taxi = { pax, stage }`、目的地沿用 `v.busDest`，到點停 3 秒後 `traffic.nextTaxiStage`：stage 0 接客 → stage 1 下客（乘客 `onTripEnd`）→ 改成 `taxiret` 行程開回 `transit.taxiHome` 找到的空車位。叫車時機：`spawnFrom` 中 `TAXI_SHARE`（有車也叫）、以及沒車可開時公車不行才叫車，再不行才走路。
+- **鐵路**：`ROAD_TYPES.rail`（`rail: true`、rank 5）。`genConnections` 不在鐵路與道路之間建連接，平面相交的節點就是平交道（衝突點照常計算；`canEnter` 中車輛遇到 14 秒內會到的列車一律等）。外部鐵路在 `city.railOutside`（不在 `city.outside`，不產生汽車車流）。車站分區 `RT`（總站）、`RS`（車站）、`RC`（貨運站），zone 都是 `T`、`ZONE_TYPES.rail`；`city.railNear(geo)` 找地塊後方 / 兩側 30 m 內的地面鐵軌，`planStroke` 沒有就不能劃，`city.platformOf(b)` 是月台（快取）。
+  - 客運：`transit.planRail` 每個 RT 一條路線（同一鐵路連通區 `railComp` 的車站，最近鄰排序後來回），站點 id 為 `'r' + 建築 id`，`type: 'rail'`，同時有月台（seg/u，列車用）與站前道路（bseg/bu，公車用，`stopPoint(t, train)`）。列車 `v.train`（沿用 `v.bus` = 路線、`pax`、`exchange`），`traffic.spawnTrain` 從總站月台發車，`trainRoute` 往兩個方向找路，要往回開時換到另一條軌道（在車站折返）。`board()` 對鐵路車站用 `RAIL_WALK = 800`。
+  - 公車轉運站：RT 的 `b.busHub`（資訊面板升級，$8,000），lotArt 在前方畫公車停車格（tslots），`transit.depots()` 包含它，公車路線的轉乘站就是車站本身（公車 ↔ 列車轉乘）。
+  - 貨運：`transit.sendFreight` 每 `FREIGHT_EVERY` 分鐘對接得到外部鐵路的 RC 派 `traffic.spawnFreight`（`v.freight`），到站停 15 秒：`rc.stock += 40`、外銷 `rc.exports` 計入 `shipped`，再開出地圖。`city.nearCargo` 讓工廠的原料（`mat`）從 RC 出發、外銷商品送到 RC。
+  - 列車畫成沿軌道的多節車廂（`render.drawTrain`，含上一段軌道），軌道在路口沿列車的連接線畫枕木與鋼軌。
 - **需求門檻**：`DEMAND_BUILD = 0.2`（空地塊發展）、`DEMAND_ZONE = 0.35`（自動劃設分區），需求條上有虛線。`SEP_RI = 250` m：工業與住宅的最小距離（開局與自動劃設都遵守）。
 - **開局選項**：`newGame({ start: 'town' | 'blank' })`；`blank` 只有外部連線、`autoGrow = false`。小鎮為 3 條大道（`worldgen.js` 的 `avX` / `avY`）的大棋盤，街廓夠深可劃 24×24。
 - **鋪路吸附**：`tools.js` 的 `snap()` 在接到另一條路時讓接點沿該路滑動成垂直 / 45° / 與起點道路平行；`planRoad` 會修掉超出路口不到 12 m 的多餘路段。只有 3 條以上道路的節點才會被選成「路口」（連續鋪路的轉折點不算）。
@@ -112,6 +117,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 10. 日式建築：透天、アパート / 公寓大樓（陽台）、團地與塔式住宅、商店街直立看板、便利商店、櫻花；中密度最大 18×18
 11. 依人口解鎖分區與尺寸、城市稱號六級、高科技工廠、分區圖、忽略工業污染、大型停車場單向一進一出、高密度地下 / 立體停車場、立體停車場購物中心
 12. 擁塞圖改為綠到紅的連續漸層（沿路分段）、臨路道路限制地塊大小（小路 6 / 市區 12 / 大道 18 / 林蔭不限）、里程碑進度表、沙盒全部解鎖、開局高速公路接林蔭大道
+13. 計程車（車行、招呼站）、公車總站劃設提示停車位數、鐵路（軌道、平交道、外部鐵路、總站 / 車站 / 貨運站、客運與貨運列車、總站附設公車轉運站）
 
 ## 已知問題 / 可以繼續的方向
 

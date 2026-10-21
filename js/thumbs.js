@@ -9,6 +9,15 @@ const memo = (k, f) => { if (!cache.has(k)) cache.set(k, f()); return cache.get(
 export function roadThumb(key) {
   return memo('r:' + key, () => {
     const T = ROAD_TYPES[key], W = 50, H = 36;
+    // 鐵路：道碴上兩條軌道（枕木＋鋼軌）
+    if (T.rail) {
+      let s = `<svg class="thumb" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><rect x="0" y="6" width="${W}" height="24" fill="${T.color}" rx="1"/>`;
+      for (const y of [12, 24]) {
+        for (let x = 1; x < W; x += 3.4) s += `<rect x="${x}" y="${y - 4}" width="1.6" height="8" fill="#5b4a3a"/>`;
+        s += `<line x1="0" x2="${W}" y1="${y - 2.4}" y2="${y - 2.4}" stroke="#d6d9dc" stroke-width="1"/><line x1="0" x2="${W}" y1="${y + 2.4}" y2="${y + 2.4}" stroke="#d6d9dc" stroke-width="1"/>`;
+      }
+      return s + '</svg>';
+    }
     const n = T.fwd + T.bwd, med = T.bwd ? Math.min(4, (T.median || 0) * 1.1) : 0;
     const lw = Math.min(5.2, (H - 2 - med) / n);
     const rh = n * lw + med, y0 = (H - rh) / 2;

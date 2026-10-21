@@ -164,6 +164,9 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
   for (seed = 1; seed < 30 && !p; seed++) {
     gz = makeGame(seed, 'temperate', 'normal'); gz.autoGrow = false;
     net = gz.net; c = gz.city; S = gz.terrain.size / 2;
+    // 這組測試只看分區與停車場：先拿掉開局的鐵路，免得剛好擋到測試用的道路
+    for (const rs of [...net.segs.values()].filter(x => x.T.rail)) net.removeSegment(rs);
+    net.rebuild();
     for (const yy of [S + 500, S - 500, S + 800, S - 800]) for (const xx of [S - 1000, S - 400, S + 200]) {
       if (p || !dry(gz, xx, yy)) continue;
       const q = net.planRoad({ x: xx, y: yy }, { x: xx + 800, y: yy }, null, 'boulevard', 0);
@@ -228,8 +231,11 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
 {
   const gg = makeGame(1, 'temperate', 'normal'); gg.autoGrow = false;
   const net = gg.net, c = gg.city, S = gg.terrain.size / 2;
+  for (const rs of [...net.segs.values()].filter(x => x.T.rail)) net.removeSegment(rs);
+  net.rebuild();
   let y = null;
-  for (const yy of [S + 600, S - 600, S + 900, S - 900]) {
+  // 離小鎮夠遠（小鎮旋轉後角落可達約 900 m），前後都沒有其他道路
+  for (const yy of [S + 1050, S - 1100, S + 1250, S - 1300, S + 600, S - 600, S + 900, S - 900]) {
     const p1 = net.planRoad({ x: S - 400, y: yy }, { x: S + 400, y: yy }, null, 'street', 0);
     const p2 = net.planRoad({ x: S - 400, y: yy + 72 }, { x: S + 400, y: yy + 72 }, null, 'street', 0);
     if (p1.ok && p2.ok && !p1.crossings.length && !p2.crossings.length) { net.executeRoad(p1); net.executeRoad(p2); y = yy; break; }
@@ -334,6 +340,41 @@ for (const b of ['desert', 'snow', 'tropical']) {
   for (let i = 0; i < 4000 && !(done && !gx.traffic.vehicles.some(v => v.trip && v.trip.kind === 'taxiret')); i++) step(gx, 1);
   step(gx, 60);
   assert(tx && parked0 > 0 && called && done && gx.transit.stats.taxi >= 1, `計程車接送乘客（車位 ${tx ? C.slotsOf(tx).length : 0}、停著 ${parked0}）`);
+}
+
+// 鐵路：沿開局鐵路的最後 500 m 鋪一條平行街道接回小鎮，劃設鐵路總站、貨運站、車站
+{
+  const { snapAt } = await import('../js/worldgen.js');
+  const gr = makeGame(12345, 'temperate', 'easy', true);
+  connectOutside(gr);
+  const C = gr.city, net = gr.net, c0 = gr.terrain.size / 2;
+  assert(C.railOutside.length === 1 && [...net.segs.values()].some(x => x.T.rail), `開局有外部鐵路（${C.railOutside.map(o => o.name).join('')}）`);
+  const Re = [...net.nodes.values()].filter(n => !n.outside && n.segs.length === 1 && net.segs.get(n.segs[0]).T.rail).sort((a, b) => Math.hypot(a.x - c0, a.y - c0) - Math.hypot(b.x - c0, b.y - c0))[0];
+  const s0 = net.segs.get(Re.segs[0]), far = net.nodes.get(s0.a === Re.id ? s0.b : s0.a);
+  let dx = Re.x - far.x, dy = Re.y - far.y; const L = Math.hypot(dx, dy); dx /= L; dy /= L;
+  const A = { x: Re.x - dx * 520 - dy * 52, y: Re.y - dy * 520 + dx * 52 }, B = { x: Re.x - dy * 52, y: Re.y + dx * 52 };
+  net.executeRoad(net.planRoad(A, B, null, 'street', 0));
+  const town = [...net.nodes.values()].filter(n => !n.outside && n.segs.some(id => net.segs.get(id).T.access && !net.segs.get(id).T.internal) && Math.hypot(n.x - B.x, n.y - B.y) > 5).sort((a, b) => Math.hypot(a.x - B.x, a.y - B.y) - Math.hypot(b.x - B.x, b.y - B.y));
+  for (const t of town.slice(0, 8)) { const p = net.planRoad(snapAt(net, B), { x: t.x, y: t.y, node: t.id }, null, 'street', 0); if (p.ok) { net.executeRoad(p); break; } }
+  net.rebuild();
+  const seg = [...net.segs.values()].filter(x => x.type === 'street' && Math.abs(((x.pts.at(-1).x - x.pts[0].x) * dx + (x.pts.at(-1).y - x.pts[0].y) * dy) / x.len) > 0.95 && Math.hypot((x.pts[0].x + x.pts.at(-1).x) / 2 - (A.x + B.x) / 2, (x.pts[0].y + x.pts.at(-1).y) / 2 - (A.y + B.y) / 2) < 300).sort((a, b) => b.len - a.len)[0];
+  const mid = { x: (seg.pts[0].x + seg.pts.at(-1).x) / 2, y: (seg.pts[0].y + seg.pts.at(-1).y) / 2 }, tx = (seg.pts.at(-1).x - seg.pts[0].x) / seg.len, ty = (seg.pts.at(-1).y - seg.pts[0].y) / seg.len;
+  const side = ((Re.x - mid.x) * -ty + (Re.y - mid.y) * tx) > 0 ? 1 : -1, g0 = C.gridStart(seg), built = {};
+  const put = (zt, a0, cols) => { const q = C.planStroke(zt, seg, side, g0 + a0 * 6, g0 + (a0 + cols) * 6, 6).find(x => x.ok); if (q) built[zt] = C.develop(C.addLot(zt, seg, q.u, side, q.cols, q.rows)); };
+  put('RT', 0, 12); put('RC', 14, 12); put('RS', Math.floor((seg.len - g0) / 6) - 9, 8);
+  const noRail = C.planStroke('RS', seg, -side, g0, g0 + 48, 6);
+  assert(built.RT && built.RC && built.RS && C.platformOf(built.RT) && noRail.every(x => !x.ok), '鐵路車站要緊鄰鐵軌（對面沒有鐵軌的一側不能劃）');
+  assert(![...net.nodes.values()].some(n => n.conns.some(c => !!c.from.seg.T.rail !== !!c.to.seg.T.rail)), '鐵路與道路之間沒有車道連接');
+  built.RT.busHub = true; C.seedParked(built.RT);
+  step(gr, 200);
+  // 從車站出發、到鐵路總站（走路距離 0，一定搭火車）
+  const T = gr.transit;
+  let rode = 0; for (let i = 0; i < 10; i++) if (T.board({ kind: 'work', from: built.RS, to: built.RT, truck: false })) rode++;
+  const stock0 = built.RC.stock;
+  step(gr, 2500);
+  assert(T.lines.some(l => l.rail) && T.lines.some(l => !l.rail && l.depot === built.RT.id) && C.truckSlotsOf(built.RT).length > 0, `鐵路總站發車、附設公車轉運站（${T.lines.map(l => l.name).join('、')}）`);
+  assert(rode === 10 && (T.stats.railRiders || 0) >= 10, `居民搭火車（${T.stats.railRiders || 0} 人次）`);
+  assert((T.stats.freight || 0) >= 1 && built.RC.stock > stock0 - 5, `貨運列車到貨運站（${T.stats.freight || 0} 班，存貨 ${Math.round(stock0)} → ${Math.round(built.RC.stock)}）`);
 }
 
 // 空白地圖開局：只有外部連線，沒有分區與建築

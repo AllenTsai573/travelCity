@@ -418,6 +418,8 @@ export class Network {
           if (deadEnd && !node.outside) cands.push({ outL, ang: Math.PI, cls: 'U' });
           continue;
         }
+        // 鐵路與道路之間沒有車道連接（平交道上車輛與列車各自直行）
+        if (!!outL.seg.T.rail !== !!inL.seg.T.rail) continue;
         const dOut = startTangent(outL.lanes[0]);
         const ang = Math.atan2(dIn.x * dOut.y - dIn.y * dOut.x, dIn.x * dOut.x + dIn.y * dOut.y);
         if (Math.abs(ang) > 2.45) continue; // 超過 140° 的急轉不允許（會畫成打結的迴圈）

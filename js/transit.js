@@ -13,6 +13,9 @@ import { CLOCK } from './config.js';
 const TAXI_RANGE = 1600;
 
 const LINE_COLORS = ['#d23c2c', '#1f6fb5', '#2a9d3f', '#e08a1e', '#7d3c98', '#0f8b8d'];
+const RAIL_COLORS = ['#e8eef2', '#f2e9d6', '#e3f0e6'];
+// 鐵路：車站步行範圍較大；列車載客量；貨運列車的班距（遊戲分鐘）
+const RAIL_WALK = 800, TRAIN_CAP = 300, FREIGHT_EVERY = 240;
 // 時間膨脹：公車繞一圈要好幾個遊戲小時，候車上限以模擬秒計（MAX_WAIT_S）；每條路線最多 MAX_STOPS 站
 const STOP_GAP = 240, WALK = 450, RANGE = 1500, PLAN_EVERY = 1440, MAX_WAIT_S = 240, MAX_STOPS = 9, CAPACITY = 60, HEADWAY = 50;
 export const BUS_LEN = 12, BUS_W = 2.6;
@@ -29,7 +32,25 @@ export class Transit {
   }
   get city() { return this.game.city; }
   get net() { return this.game.net; }
-  depots() { return this.city.buildings.filter(b => b.zt === 'T' && !b.dead && !b.abandoned && this.city.truckSlotsOf(b).length); }
+  // 公車總站（含附設公車轉運站的鐵路總站）
+  depots() { return this.city.buildings.filter(b => (b.zt === 'T' || (b.zt === 'RT' && b.busHub)) && !b.dead && !b.abandoned && this.city.truckSlotsOf(b).length); }
+  railStations() { return this.city.buildings.filter(b => (b.zt === 'RT' || b.zt === 'RS') && !b.dead && !b.abandoned && this.city.platformOf(b)); }
+  // 鐵路的連通區：節點 id → 編號（只沿鐵路路段）
+  railComp() {
+    const net = this.net, comp = new Map();
+    let k = 0;
+    for (const s0 of net.segs.values()) {
+      if (!s0.T.rail || comp.has(s0.a)) continue;
+      k++;
+      const st = [s0.a];
+      comp.set(s0.a, k);
+      while (st.length) {
+        const n = net.nodes.get(st.pop());
+        for (const id of n.segs) { const s = net.segs.get(id); if (!s.T.rail) continue; for (const o of [s.a, s.b]) if (!comp.has(o)) { comp.set(o, k); st.push(o); } }
+      }
+    }
+    return comp;
+  }
   // 計程車行與招呼站
   taxiStands() { return this.city.buildings.filter(b => (b.zt === 'TX' || b.zt === 'TS') && !b.dead && !b.abandoned); }
 
@@ -58,14 +79,18 @@ export class Transit {
   }
   stop(id) { return this.stops.find(t => t.id === id); }
   line(id) { return this.lines.find(l => l.id === id); }
-  stopPoint(t) { return { seg: t.seg, u: t.u }; }
+  // 站點位置：鐵路車站給列車的是月台（鐵軌上），給公車的是站前道路
+  stopPoint(t, train = false) { return t.type === 'rail' && !train ? { seg: t.bseg, u: t.bu } : { seg: t.seg, u: t.u }; }
 
   // dt：遊戲分鐘
   update(dt) {
-    const ds = this.depots(), key = ds.map(b => b.id).join(',');
+    const ds = this.depots(), key = [...ds, ...this.railStations()].map(b => b.id + (b.busHub ? 'h' : '')).join(',');
     this.planT -= dt;
     if (this.planT <= 0 || key !== this._key) { this._key = key; this.planT = PLAN_EVERY; this.plan(); }
     this.dispatch();
+    // 貨運列車：每 FREIGHT_EVERY 分鐘從外部鐵路開一班到每個接得到的貨運站
+    this.freightT = (this.freightT ?? 30) - dt;
+    if (this.freightT <= 0) { this.freightT = FREIGHT_EVERY; this.sendFreight(); }
     // 等太久的乘客改走路
     const now = this.game.time, maxWait = MAX_WAIT_S * CLOCK;
     for (const t of this.stops) {
@@ -74,10 +99,55 @@ export class Transit {
     }
   }
 
+  // 貨運列車：外部鐵路 → 貨運站（卸下原料、裝上外銷商品）→ 開回外部鐵路
+  sendFreight() {
+    const C = this.city, tr = this.game.traffic, comp = this.railComp();
+    for (const rc of C.buildings) {
+      if (rc.zt !== 'RC' || rc.dead || rc.abandoned) continue;
+      const p = C.platformOf(rc);
+      if (!p || tr.vehicles.some(v => v.freight && v.freight.rc === rc.id)) continue;
+      const k = comp.get(this.net.segs.get(p.seg).a), o = C.railOutside.find(o => comp.get(o.node) === k);
+      if (o) tr.spawnFreight(o, rc);
+    }
+  }
+
+  // 鐵路路線：每個鐵路總站發車，依序停靠同一條鐵路上的各車站，到底再折返（來回）
+  planRail(old, li) {
+    const net = this.net, C = this.city, sts = this.railStations(), comp = this.railComp();
+    for (const b of sts) {
+      const p = C.platformOf(b), o = old.find(t => t.id === 'r' + b.id);
+      const t = o || { id: 'r' + b.id, type: 'rail', queue: [] };
+      Object.assign(t, { b: b.id, seg: p.seg, u: p.u, x: b.x, y: b.y, bseg: b.seg, bu: b.u, dx: 0, dy: 0, lines: [] });
+      this.stops.push(t);
+    }
+    let no = 0;
+    for (const T of sts.filter(b => b.zt === 'RT')) {
+      const s0 = this.stop('r' + T.id), k = comp.get(net.segs.get(s0.seg).a);
+      const left = this.stops.filter(t => t.type === 'rail' && t !== s0 && comp.get(net.segs.get(t.seg).a) === k), order = [];
+      if (!left.length) continue;
+      let cur = s0;
+      while (left.length) { left.sort((a, b) => Math.hypot(a.x - cur.x, a.y - cur.y) - Math.hypot(b.x - cur.x, b.y - cur.y)); cur = left.shift(); order.push(cur); }
+      const seq = [s0, ...order, ...order.slice(0, -1).reverse()];
+      li++; no++;
+      // 繞一圈的估計時間（模擬秒）：站間直線距離 × 1.2，平均 20 m/s，每站停 12 秒；列車數依班距約 90 秒，最多 3 列
+      let loop = 0;
+      seq.forEach((t, i) => { const n2 = seq[(i + 1) % seq.length]; loop += Math.hypot(n2.x - t.x, n2.y - t.y) * 1.2 / 20 + 12; });
+      const nt = clamp(Math.round(loop / 90), 1, 3);
+      const line = { id: li, rail: true, name: `鐵路 ${no} 號線`, color: RAIL_COLORS[(no - 1) % RAIL_COLORS.length], depot: T.id, hub: s0.id, stops: seq.map(t => t.id), buses: nt, headway: loop / nt * CLOCK, nextT: 0 };
+      const keys = new Set();
+      seq.forEach((t, i) => { const n2 = seq[(i + 1) % seq.length], r = routeFromPoint(net, { seg: t.seg, u: t.u, id: 'x' }, { seg: n2.seg, u: n2.u, id: 'x' }); if (r) for (const kk of r.path) keys.add(kk); });
+      line.path = [...keys];
+      for (const t of new Set(seq)) t.lines.push(line.id);
+      this.lines.push(line);
+    }
+    return li;
+  }
+
   // 重新規劃站牌與路線
   plan() {
     const net = this.net, C = this.city, depots = this.depots(), old = this.stops;
     this.stops = []; this.lines = [];
+    let li = this.planRail(old, 0);
     if (depots.length) {
       const cands = [];
       for (const b of C.buildings) {
@@ -94,21 +164,20 @@ export class Transit {
         // 附近原本就有站牌（同方向）：沿用原來的站牌，站位不動
         const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t));
         const q = o ? { x: o.x, y: o.y } : p;
-        if (this.stops.some(t => Math.hypot(t.x - q.x, t.y - q.y) < STOP_GAP)) continue;
+        if (this.stops.some(t => t.type !== 'rail' && Math.hypot(t.x - q.x, t.y - q.y) < STOP_GAP)) continue;
         if (o) { o.lines = []; this.stops.push(o); }
         else this.stops.push({ id: this.nextId++, seg: c.seg, u: c.u, x: p.x, y: p.y, dx: p.dx, dy: p.dy, lines: [], queue: [] });
         if (this.stops.length >= 80) break;
       }
-      let li = 0;
       for (const d of depots) {
         const buses = C.truckSlotsOf(d).length;
         // 總站到得了的站牌（同一個路網連通區）
         const from = { seg: d.seg, u: d.u, id: d.id };
-        const mine = this.stops.filter(t => !t.lines.length && Math.hypot(t.x - d.x, t.y - d.y) < RANGE && routeFromPoint(net, from, { seg: t.seg, u: t.u, id: d.id }));
-        if (mine.length < 3) continue;
-        // 轉乘站：離總站最近的站，每條路線都從這裡出發
+        const mine = this.stops.filter(t => t.type !== 'rail' && !t.lines.length && Math.hypot(t.x - d.x, t.y - d.y) < RANGE && routeFromPoint(net, from, { seg: t.seg, u: t.u, id: d.id }));
+        // 轉乘站：離總站最近的站，每條路線都從這裡出發；附設公車轉運站的鐵路總站就是車站本身（公車與列車在這裡轉乘）
         mine.sort((a, b) => Math.hypot(a.x - d.x, a.y - d.y) - Math.hypot(b.x - d.x, b.y - d.y));
-        const hub = mine.shift();
+        const hub = d.zt === 'RT' ? this.stop('r' + d.id) : mine.shift();
+        if (!hub || mine.length < 2) continue;
         const nLines = clamp(Math.ceil(mine.length / (MAX_STOPS - 1)), 1, Math.min(4, Math.floor(mine.length / 2)));
         mine.sort((a, b) => Math.atan2(a.y - d.y, a.x - d.x) - Math.atan2(b.y - d.y, b.x - d.x));
         const per = Math.ceil(mine.length / nLines);
@@ -129,7 +198,7 @@ export class Transit {
           const keys = new Set();
           [from, ...order, order[0]].forEach((p, i, arr) => {
             if (!i) return;
-            const q = arr[i - 1], r = routeFromPoint(net, { seg: q.seg, u: q.u, id: d.id }, { seg: p.seg, u: p.u, id: d.id });
+            const q = i === 1 ? from : this.stopPoint(arr[i - 1]), pp = this.stopPoint(p), r = routeFromPoint(net, { seg: q.seg, u: q.u, id: d.id }, { seg: pp.seg, u: pp.u, id: d.id });
             if (r) for (const k of r.path) keys.add(k);
           });
           line.path = [...keys];
@@ -137,8 +206,8 @@ export class Transit {
           this.lines.push(line);
         }
       }
-      this.stops = this.stops.filter(t => t.lines.length);
     }
+    this.stops = this.stops.filter(t => t.lines.length);
     // 等車的乘客：站牌取消、或原本的路線到不了目的地的，重新找站牌（找不到就走路）
     const again = [];
     for (const t of old) {
@@ -153,7 +222,7 @@ export class Transit {
       const L = this.line(v.bus);
       if (!L) { tr.retireBus(v); continue; }
       const i = v.busDest ? L.stops.indexOf(v.busDest.stop) : -1;
-      if (i >= 0) { v.stopIdx = i; const t = this.stop(L.stops[i]); if (v.busDest.seg !== t.seg) { v.busDest = { ...v.busDest, seg: t.seg, u: t.u }; tr.reroute(v); } }
+      if (i >= 0) { v.stopIdx = i; const pt = this.stopPoint(this.stop(L.stops[i]), v.train); if (v.busDest.seg !== pt.seg) { v.busDest = { ...v.busDest, seg: pt.seg, u: pt.u }; if (v.train) tr.trainRoute(v); else tr.reroute(v); } }
       else if (!v.dwell) { v.stopIdx = -1; tr.nextBusStop(v); }
     }
   }
@@ -166,8 +235,8 @@ export class Transit {
       if (!d || d.dead) continue;
       const running = tr.vehicles.filter(v => v.bus === line.id && !v.dead).length;
       if (running >= line.buses || line.nextT > this.game.time || (d._busCD || 0) > this.game.time) continue;
-      // 依發車間隔派車，公車才不會擠成一串
-      if (tr.spawnBus(d, line) === 'ok') { line.nextT = this.game.time + line.headway; d._busCD = this.game.time + 8; }
+      // 依發車間隔派車，公車才不會擠成一串；列車從總站月台發車
+      if ((line.rail ? tr.spawnTrain(d, line) : tr.spawnBus(d, line)) === 'ok') { line.nextT = this.game.time + line.headway; d._busCD = this.game.time + 8; }
       else d._busCD = this.game.time + 2;
     }
   }
@@ -177,8 +246,10 @@ export class Transit {
   board(trip, t0 = this.game.time) {
     const a = trip.from, b = trip.to;
     if (!a || !b || a.outside || b.outside || !this.stops.length) return false;
-    const s1s = this.stops.map(t => [t, Math.hypot(t.x - a.x, t.y - a.y)]).filter(e => e[1] <= WALK);
-    const s2s = this.stops.map(t => [t, Math.hypot(t.x - b.x, t.y - b.y)]).filter(e => e[1] <= WALK);
+    // 鐵路車站的步行範圍較大（RAIL_WALK）
+    const R = t => (t.type === 'rail' ? RAIL_WALK : WALK);
+    const s1s = this.stops.map(t => [t, Math.hypot(t.x - a.x, t.y - a.y)]).filter(e => e[1] <= R(e[0]));
+    const s2s = this.stops.map(t => [t, Math.hypot(t.x - b.x, t.y - b.y)]).filter(e => e[1] <= R(e[0]));
     let best = null;
     for (const [s1, d1] of s1s) for (const [s2, d2] of s2s) {
       if (s2 === s1) continue;
@@ -210,14 +281,15 @@ export class Transit {
       n++;
       // 轉乘：在這站排下一條路線
       if (p.next) { stop.queue.push({ trip: p.trip, to: p.next.to, line: p.next.line, t: p.t }); this.stats.transfers = (this.stats.transfers || 0) + 1; continue; }
-      this.stats.riders++; this.city.onTripEnd(p.trip, true, Math.max(60, (this.game.time - p.t) / CLOCK));
+      this.stats.riders++; if (v.train) this.stats.railRiders = (this.stats.railRiders || 0) + 1;
+      this.city.onTripEnd(p.trip, true, Math.max(60, (this.game.time - p.t) / CLOCK));
     }
     const keep = [];
     for (const p of stop.queue) {
       // 剛在這站下車要轉乘的乘客不會又上同一輛車（路線不同）
-      if (p.line === v.bus && p.to !== stop.id && v.pax.length < CAPACITY) { v.pax.push(p); n++; } else keep.push(p);
+      if (p.line === v.bus && p.to !== stop.id && v.pax.length < (v.train ? TRAIN_CAP : CAPACITY)) { v.pax.push(p); n++; } else keep.push(p);
     }
     stop.queue = keep;
-    return clamp(4 + n * 0.25, 4, 10);
+    return v.train ? clamp(8 + n * 0.05, 8, 15) : clamp(4 + n * 0.25, 4, 10);
   }
 }

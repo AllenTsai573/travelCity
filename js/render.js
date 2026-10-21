@@ -650,6 +650,17 @@ export class Renderer {
   // 道路標線（依道路類型沿中心線產生）
   markingsFor(T, core) {
     const lines = [];
+    // 鐵路：兩條軌道，每條是一排枕木（寬虛線）加兩條鋼軌
+    if (T.rail) {
+      const o = (T.median || 0) / 2 + LANE_W / 2;
+      for (const d of [-1, 1]) {
+        const c = offsetPoly(core, d * o);
+        lines.push({ pts: c, c: '#5b4a3a', w: 2.5, dash: [0.28, 0.42], median: true });
+        lines.push({ pts: offsetPoly(c, 0.72), c: '#d6d9dc', w: 0.13, dash: null });
+        lines.push({ pts: offsetPoly(c, -0.72), c: '#d6d9dc', w: 0.13, dash: null });
+      }
+      return lines;
+    }
     // 場內道路與停車場鋪面融為一體，不畫標線
     if (T.internal) return lines;
     const hw = halfWidth(T);
@@ -1189,7 +1200,15 @@ export class Renderer {
         // 路口前的轉向箭頭（依實際車道連接，玩家調整後會跟著改變）
         if (z > 1.6) for (const n of nodes) {
           if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring))) continue;
-          for (const Lk of net.inLinks(n)) if (!Lk.seg.T.internal) for (const lane of Lk.lanes) if (lane.len > 18) this.turnArrows(lane);
+          for (const Lk of net.inLinks(n)) if (!Lk.seg.T.internal && !Lk.seg.T.rail) for (const lane of Lk.lanes) if (lane.len > 18) this.turnArrows(lane);
+        }
+        // 鐵路穿過路口（彎道接點、平交道）：沿列車的連接線畫枕木與鋼軌，軌道不會在路口中斷
+        for (const n of nodes) for (const c of n.conns) {
+          if (!c.from.seg.T.rail || c.turn === 'U' || c.len < 0.5) continue;
+          ctx.setLineDash([0.28, 0.42]); ctx.lineCap = 'butt'; ctx.strokeStyle = '#5b4a3a'; ctx.lineWidth = 2.5; this.strokePoly(c.pts);
+          ctx.setLineDash([]); ctx.strokeStyle = '#d6d9dc'; ctx.lineWidth = 0.13;
+          this.strokePoly(offsetPoly(c.pts, 0.72)); this.strokePoly(offsetPoly(c.pts, -0.72));
+          ctx.lineCap = 'round';
         }
       }
       if (tunnel) {
@@ -1222,6 +1241,8 @@ export class Renderer {
         dx = p.dx - p.dy * k; dy = p.dy + p.dx * k;
         const L = Math.hypot(dx, dy); dx /= L; dy /= L;
       }
+      // 列車：沿軌道畫成一節一節的車廂（每節約 20 m），彎道上也會順著軌道
+      if (vh.train) { this.drawTrain(vh, detail); continue; }
       this.localTf(x, y, dx, dy);
       const hl = vh.len / 2, hw = vh.w / 2;
       if (vh.fadeIn !== undefined && vh.fadeIn < 1) ctx.globalAlpha = vh.fadeIn;
@@ -1234,6 +1255,23 @@ export class Renderer {
           ctx.fillRect(-hl - 0.1, hw - 0.5, 0.35, 0.5);
         }
       }
+    }
+    this.worldTf();
+  }
+
+  // 列車：車頭往後每 cars 節車廂各自取軌道上的位置與方向（含上一段軌道），車廂之間留 0.8 m
+  drawTrain(vh, detail) {
+    const ctx = this.ctx, n = vh.cars || 3, cl = (vh.len - (n - 1) * 0.8) / n;
+    const at = back => {
+      let tr = vh.track, s = vh.s - back;
+      if (s < 0 && vh.prevTrack && !vh.prevTrack.dead && vh.prevTrack.pts) { tr = vh.prevTrack; s = tr.len + s; }
+      return pointAt(tr.pts, tr.cum, clamp(s, 0, tr.len));
+    };
+    for (let k = n - 1; k >= 0; k--) {
+      const f = at(k * (cl + 0.8)), r = at(k * (cl + 0.8) + cl);
+      let dx = f.x - r.x, dy = f.y - r.y; const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
+      this.localTf((f.x + r.x) / 2, (f.y + r.y) / 2, dx, dy);
+      this.carBody(k === 0 ? shade(vh.color, 0.85) : vh.color, cl, vh.w, vh.freight ? 'freight' : 'bus', detail, dx, dy);
     }
     this.worldTf();
   }
@@ -1258,6 +1296,11 @@ export class Renderer {
     ctx.fillStyle = color;
     if (detail && ctx.roundRect) { ctx.beginPath(); ctx.roundRect(-hl, -hw, len, w, 0.45); ctx.fill(); } else ctx.fillRect(-hl, -hw, len, w);
     if (!detail) return;
+    if (truck === 'freight') {
+      // 貨運列車：貨櫃車廂（一節兩個貨櫃）
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(-0.1, -hw, 0.2, w);
+      return;
+    }
     if (truck === 'bus') {
       // 公車：兩側一長排車窗、前後擋風玻璃、車頂空調
       ctx.fillStyle = 'rgba(30,40,55,0.8)';

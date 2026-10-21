@@ -347,6 +347,34 @@ export function lotArt(b) {
       }
       rect(2, Math.min(d - 6, bd + 1.5), w - 2, d - 1.5, '#d9d3c4', 6, { wall: '#efe9dc', win: true, units: 1 });
     }
+  } else if (b.zt === 'RT' || b.zt === 'RS') {
+    // 鐵路車站：後方是月台與雨棚（鐵軌在地塊後面），中間是站房，前方是站前廣場（計程車 / 接送車位）；
+    // 總站的站房較大、有玻璃大廳；附設公車轉運站時，前方改為一排公車停車格
+    base = '#cfc9bd';
+    const big = b.zt === 'RT', pv = d - 7;
+    rect(1, pv, w - 1, d - 0.5, '#bdb6a8', 0.6);
+    rect(2, pv + 1.5, w - 2, d - 1.5, '#7e8a92', 5, { wall: '#9aa3a9', deco: true });
+    let fv = 0.4;
+    if (big && b.busHub && d >= 34) {
+      for (let u = 1.5; u + 4 <= w - 1.5; u += 4.4) { rect(u, 0.4, u + 4, 13.9, '#8a8d91'); car(u + 0.65, 0.8, 2.7, 12.2, { c: '#d23c2c', h: 1, truck: true, bus: true }); }
+      fv = 15;
+    } else if (d >= 24) { frontBays(1, w * 0.4); fv = 7; }
+    const hv0 = fv + 2, hv1 = Math.max(hv0 + 6, pv - 2);
+    if (big) {
+      rect(w * 0.12, hv0, w * 0.88, hv1, '#b9b6ae', 9 + lv * 2, { wall: pick(r, TILEWALL), win: true, units: 3 });
+      rect(w * 0.35, hv0 - 0.5, w * 0.65, hv1, '#bcd6ee', 11 + lv * 2, { glass: true, mull: true });
+    } else rect(w * 0.25, hv0, w * 0.75, Math.min(hv1, hv0 + 12), pick(r, KAWARA), 6, { roof: 'hip', ridge: 'u', wall: pick(r, JWALL), win: true, door: true });
+    items.push({ t: 'sign', u: w * 0.12, v: hv0 - 1, text: '駅', c: big ? '#1d6fb8' : '#2a9d3f', h: 6 });
+    if (w > 30) { tree(w * 0.92, fv + 4, 0.8); tree(w * 0.06, fv + 4, 0.8); }
+  } else if (b.zt === 'RC') {
+    // 鐵路貨運站：臨路一排貨車卸貨位，中間貨櫃堆場與門式起重機，後方是貨物月台與倉庫
+    base = '#bab4a7';
+    for (let u = 1; u + 3.4 <= w - 1 && u < 1 + 6 * 3.8; u += 3.8) loadingBay(u);
+    const pv = d - 8;
+    rect(1, pv, w - 1, d - 0.5, '#a39c90', 1.2);
+    if (pv - 11 > 6) yard(2, 11, w * 0.62, pv - 1.5);
+    rect(w * 0.66, 11, w - 2, Math.max(15, pv - 1.5), '#9aa3a9', 8 + lv, { wall: pick(r, METALWALL), sky: true, docks: true });
+    for (const u of [w * 0.15, w * 0.5]) if (u < w * 0.62) rect(u, 9.5, u + 1.2, pv, '#d9a400', 14, { wall: '#c99700' });
   } else if (b.zt === 'TX' || b.zt === 'TS') {
     // 計程車：招呼站是臨路一排計程車位＋候車亭；車行夠大時中央場內車道兩側是計程車位，後方是車行辦公室
     base = '#c4c2bb';

@@ -29,10 +29,12 @@ export const ROAD_TYPES = {
   service:   { name: '場內道路',       short: '場內', fwd: 1, bwd: 1, speed: 30,  rank: 0, cost: 0,  median: 0,   access: false, color: '#878a8f', unlock: 0, internal: true },
   // 單向場內道路：大型停車場的單向環狀動線（一進一出）
   service1:  { name: '場內道路（單向）', short: '場內', fwd: 1, bwd: 0, speed: 30,  rank: 0, cost: 0,  median: 0,   access: false, color: '#878a8f', unlock: 0, internal: true },
+  // 鐵路（雙線）：只有列車行駛；與一般道路平面相交時是平交道（車輛讓列車）
+  rail:      { name: '鐵路（雙線）', short: '鐵路', fwd: 1, bwd: 1, speed: 90, rank: 5, cost: 45, median: 1.5, access: false, color: '#9b9488', unlock: 0, rail: true },
   freeway4:  { name: '單向高速（4 線）', short: '單高4', fwd: 4, bwd: 0, speed: 110, rank: 3, cost: 36, median: 0,   access: false, color: '#3a3d42', unlock: 0 },
 };
 // lotMax：沿這種道路劃設的地塊最大格數（小路 6、市區道路 12、大道 18；林蔭大道不限，只看分區本身的上限）
-export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'ramp2', 'express', 'highway', 'highway4', 'freeway1', 'freeway4'];
+export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'ramp2', 'express', 'highway', 'highway4', 'freeway1', 'freeway4', 'rail'];
 
 // 高度層級：-2 深隧道、-1 路塹/隧道、0 地面、1~3 高架
 export const LEVELS = [
@@ -51,9 +53,9 @@ export const SLOPE_LEN = 45;        // 每升降一層所需最短距離
 // 城市稱號：依「曾達到的最高人口」升級（人口減少不會降級），unlock 為這一級解鎖的內容（升級時通知）
 export const MILESTONES = [
   { pop: 0,    name: '小村莊', unlock: '低密度住宅、商業、工業（最大 12×12）' },
-  { pop: 750,  name: '小鎮',   unlock: '大眾運輸（公車總站 12×12）' },
-  { pop: 1000, name: '市鎮',   unlock: '中密度住宅（12×12）' },
-  { pop: 2500, name: '城市',   unlock: '商業 18×18、中密度 18×18、公車總站 16×16' },
+  { pop: 750,  name: '小鎮',   unlock: '大眾運輸（公車總站 12×12、計程車行與招呼站）' },
+  { pop: 1000, name: '市鎮',   unlock: '中密度住宅（12×12）、鐵路總站與車站' },
+  { pop: 2500, name: '城市',   unlock: '商業 18×18、中密度 18×18、公車總站 16×16、鐵路貨運站' },
   { pop: 3000, name: '大城市', unlock: '高密度住宅（12×12）、工業 32×32、高科技工廠（半導體、電池）' },
   { pop: 5000, name: '大都會', unlock: '商業 30×30、高密度 24×24' },
 ];
@@ -67,6 +69,9 @@ export const ZONE_UNLOCK = {
   T:  [[750, 12], [2500, 16]],
   TX: [[750, 10]],
   TS: [[750, 4]],
+  RT: [[1000, 16]],
+  RS: [[1000, 8]],
+  RC: [[2500, 16]],
 };
 export const HITECH_POP = 3000;   // 高科技工廠（半導體、電池）出現的人口
 // 人口 pop 時分區 zt 的最大地塊格數（0 = 尚未解鎖）
@@ -132,8 +137,12 @@ export const ZONE_TYPES = {
   // 計程車：車行（總站，停很多台）與招呼站（小站，路邊幾個車位）；居民叫車時從最近有車的站派車
   TX: { zone: 'T', name: '計程車行', short: '計程車行', max: 10, per: [0.1, 0.12, 0.15], color: '#d9a400' },
   TS: { zone: 'T', name: '計程車招呼站', short: '招呼站', max: 4, per: [0.05, 0.06, 0.08], color: '#f2c230' },
+  // 鐵路：總站（發車、可升級附設公車轉運站）、車站、貨運站；都要蓋在鐵軌旁（地塊後方或側邊 30 m 內）
+  RT: { zone: 'T', name: '鐵路總站', short: '鐵路總站', max: 16, per: [0.1, 0.12, 0.15], color: '#8a5a3c', rail: true },
+  RS: { zone: 'T', name: '鐵路車站', short: '車站', max: 8, per: [0.05, 0.06, 0.08], color: '#b07a4e', rail: true },
+  RC: { zone: 'T', name: '鐵路貨運站', short: '貨運站', max: 16, per: [0.1, 0.12, 0.15], color: '#5e5148', rail: true },
 };
-export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T', 'TX', 'TS'];
+export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T', 'TX', 'TS', 'RT', 'RS', 'RC'];
 export const TAXI_COLOR = '#f2c230';
 // 商業：15×15 格以上才有機會出現大型量販店 / 購物中心；工業的功能隨機
 export const SHOP_KINDS = {

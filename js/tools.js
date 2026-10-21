@@ -378,6 +378,8 @@ export class Tools {
           const want = Math.min(Math.max(2, st.rows), Z.max), short = ok.find(p => p.rows < want);
           if (short) why.push('往內' + (this.g.city.canPlaceLot(st.seg, short.u, short.side, short.cols, short.rows + 1) || '受限'));
           if (st.past) why.push('這段路到路口為止，跨過路口要另外畫');
+          const railWhy = (st.plan || []).find(p => !p.ok && p.reason && p.reason.includes('鐵路'));
+          if (railWhy) why.push(railWhy.reason);
           // 公車總站：說明會有幾個公車停車位（＝最多能派出幾台公車）
           const busInfo = this.zone === 'T' && ok.length ? '｜公車停車位 ' + ok.map(p => lotArt({ id: 0, zt: 'T', zone: 'T', kind: null, cols: p.cols, rows: p.rows, level: 1 }).tslots.length).join(' + ') + ' 個（最多派出同樣台數的公車）' : '';
           this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + busInfo + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : '') + (why.length ? `（${why.join('；')}）` : ''), !ok.length);
@@ -462,6 +464,7 @@ export class Tools {
       return { ok: false, text: '已是此道路類型' };
     }
     if (seg.ring) return { ok: false, text: '圓環道路無法升級' };
+    if (!!seg.T.rail !== !!T.rail) return { ok: false, text: '鐵路與道路不能互相改建（要先拆除再鋪設）' };
     const A = net.nodes.get(seg.a), B = net.nodes.get(seg.b);
     if ((A.outside && A.segs.length === 1) || (B.outside && B.segs.length === 1)) return { ok: false, text: '外部連線道路無法變更' };
     const cost = Math.max(100, Math.round(seg.len * T.cost * (levelMul(A.level) + levelMul(B.level)) / 2 * 0.8));

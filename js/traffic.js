@@ -61,6 +61,7 @@ export class Traffic {
     this.insertSorted(track, v);
   }
   moveTo(v, track, s) {
+    v.prevTrack = v.track;
     this.removeFromTrack(v);
     this.place(v, track, s);
   }

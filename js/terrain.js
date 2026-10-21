@@ -107,7 +107,7 @@ export class Terrain {
       for (const t of arr) {
         if (!this.treeAlive[t]) continue;
         const dx = this.treeX[t] - x, dy = this.treeY[t] - y;
-        if (dx * dx + dy * dy < r * r) this.treeAlive[t] = 0;
+        if (dx * dx + dy * dy < r * r && this.treeAlive[t]) { this.treeAlive[t] = 0; this.treesDirty = true; }
       }
     }
   }

@@ -18,7 +18,9 @@ export class Renderer {
   constructor(game, canvas) {
     this.game = game;
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    // 不透明畫布：瀏覽器合成時不需做 alpha 混合（GPU 合成較省）
+    this.ctx = canvas.getContext('2d', { alpha: false });
+    this.bake = null;
     this.cam = { x: 1200, y: 1200, z: 1 };
     this.dpr = 1;
     this.W = 0; this.H = 0;
@@ -70,12 +72,14 @@ export class Renderer {
     ctx.fillRect(0, 0, this.W, this.H);
     this.worldTf();
     ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(g.terrain.getCanvas(), 0, 0, g.terrain.size, g.terrain.size);
+    // 縮小檢視時使用預先繪好的地形＋樹木圖層，放大時才逐棵畫樹
+    const baked = z < 1.3 ? this.bakedLayer() : null;
+    ctx.drawImage(baked || g.terrain.getCanvas(), 0, 0, g.terrain.size, g.terrain.size);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 3 / z;
     ctx.strokeRect(0, 0, g.terrain.size, g.terrain.size);
     const v = this.view(40);
-    this.drawTrees(v);
+    if (!baked) this.drawTrees(v);
     this.drawBuildings(v);
     this.drawNetwork(v);
     if (g.heatmap) this.drawHeatmap(v);
@@ -84,6 +88,53 @@ export class Renderer {
     this.screenTf();
     this.drawLabels(v);
     g.tools.drawScreenOverlay(ctx, this);
+  }
+
+  // 地形與樹木的快取圖層（1 像素 = 1 公尺），樹木變動時才重繪
+  bakedLayer() {
+    const t = this.game.terrain;
+    const now = performance.now();
+    if (this.bake && this.bake.terrain === t && (!t.treesDirty || now - this.bake.at < 800)) return this.bake.canvas;
+    let cv = this.bake && this.bake.canvas;
+    if (!cv || cv.width !== t.size) {
+      cv = document.createElement('canvas');
+      cv.width = t.size; cv.height = t.size;
+    }
+    const ctx = cv.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(t.getCanvas(), 0, 0, t.size, t.size);
+    const r = 3.6;
+    for (let k = 0; k < 3; k++) {
+      ctx.fillStyle = t.biome.tree[k];
+      ctx.beginPath();
+      for (let i = 0; i < t.treeX.length; i++) {
+        if (!t.treeAlive[i] || t.treeK[i] !== k) continue;
+        ctx.moveTo(t.treeX[i] + r, t.treeY[i]);
+        ctx.arc(t.treeX[i], t.treeY[i], r * (0.8 + (i % 5) * 0.08), 0, Math.PI * 2);
+      }
+      ctx.fill();
+    }
+    t.treesDirty = false;
+    this.bake = { canvas: cv, terrain: t, at: now };
+    return cv;
+  }
+
+  // 車輛的繪製位置：以剩餘的模擬時間外插，並跨越路段交界，讓移動在每一幀都連續
+  vehPose(vh) {
+    const g = this.game;
+    const extra = g.paused || g.ui.modalOpen ? 0 : Math.min(g.simAcc, 0.1);
+    let tr = vh.track, s = vh.s + vh.v * extra - vh.len / 2;
+    if (s > tr.len) {
+      const nxt = tr.kind === 'lane' ? (vh.committed ? vh.nextConn : null) : tr.to;
+      if (nxt && !nxt.dead && nxt.pts) { s -= tr.len; tr = nxt; }
+      if (s > tr.len) s = tr.len;
+    } else if (s < 0 && vh.prevTrack && !vh.prevTrack.dead && vh.prevTrack.pts) {
+      tr = vh.prevTrack;
+      s = Math.max(0, tr.len + s);
+    }
+    const p = pointAt(tr.pts, tr.cum, s);
+    p.lat = vh.lat ? vh.lat * Math.exp(-2.2 * extra) : 0;
+    return p;
   }
 
   drawTrees(v) {
@@ -318,13 +369,13 @@ export class Renderer {
     const ox = d * (this.W / 2 - c.x * z), oy = d * (this.H / 2 - c.y * z);
     const detail = z > 2.2;
     for (const vh of list) {
-      const tr = vh.track;
-      const p = pointAt(tr.pts, tr.cum, vh.s - vh.len / 2);
-      const x = p.x - p.dy * vh.lat, y = p.y + p.dx * vh.lat;
+      const p = this.vehPose(vh);
+      const lat = p.lat;
+      const x = p.x - p.dy * lat, y = p.y + p.dx * lat;
       if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
       let dx = p.dx, dy = p.dy;
-      if (vh.lat) {
-        const k = -vh.lat * 0.08;
+      if (lat) {
+        const k = -lat * 0.08;
         dx = p.dx - p.dy * k; dy = p.dy + p.dx * k;
         const L = Math.hypot(dx, dy); dx /= L; dy /= L;
       }
@@ -415,7 +466,7 @@ export class Renderer {
         if (!L || !L.lanes.length) continue;
         this.strokePoly(L.lanes[L.lanes.length - 1].pts);
       }
-      const tr = vh.track, p = pointAt(tr.pts, tr.cum, vh.s - vh.len / 2);
+      const p = this.vehPose(vh);
       ctx.strokeStyle = '#50dcff';
       ctx.lineWidth = 2 / z;
       ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.stroke();

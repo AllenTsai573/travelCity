@@ -8,6 +8,21 @@ import { clamp, pointAt } from './util.js';
 import { laneOffset } from './network.js';
 
 const FREE = { gap: Infinity, lv: 0 };
+
+// 停車 / 出車動畫在進度 k（0~1）時的位置與車頭方向
+// 曲線參數用三次 Hermite 緩動：起點斜率 f.ea、終點斜率 f.eb（都是 0 時為 smoothstep）；
+// 停進車位時 ea > 0（接續車子原本的速度，一路減速停好），開出車位時 eb > 0（加速，到路上時接上車流）
+export function fxAt(f, k) {
+  const a = f.ea || 0, b = f.eb || 0, e = a * k + (3 - 2 * a - b) * k * k + (a + b - 2) * k * k * k, m = 1 - e;
+  const [p0, p1, p2, p3] = f.pts;
+  const x = m * m * m * p0.x + 3 * m * m * e * p1.x + 3 * m * e * e * p2.x + e * e * e * p3.x;
+  const y = m * m * m * p0.y + 3 * m * m * e * p1.y + 3 * m * e * e * p2.y + e * e * e * p3.y;
+  const t = Math.min(0.995, Math.max(0.005, e)), n = 1 - t;
+  const dx = 3 * n * n * (p1.x - p0.x) + 6 * n * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x);
+  const dy = 3 * n * n * (p1.y - p0.y) + 6 * n * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y);
+  const L = Math.hypot(dx, dy) || 1;
+  return { x, y, dx: dx / L, dy: dy / L };
+}
 const MAX_VEHICLES = 3000;
 
 export class Traffic {
@@ -123,7 +138,10 @@ export class Traffic {
       }
       // 有停著的車但旁邊正有車在進出：等一下，不要從建物憑空開出一輛
       if (!leaves.length && parked.length) return 'wait';
+      // 住家的車都開走了（或去程就是搭大眾運輸）：這趟不開車
+      if (!truck && !leaves.length && (trip.transit || (from.zone === 'R' && city.slotsOf(from).length))) return 'transit';
     }
+    if (trip.transit && !truck) return 'transit';
     if (!leaves.length) leaves.push(null);
     // 目的地是建築：先預約一個空車位（貨車預約卸貨區），開到車位對應的路邊
     let slotIdx = null, slotPt = null;
@@ -163,14 +181,14 @@ export class Traffic {
             const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
             const f = this.parkPath(p, leave.slot, v, false, from, leave.idx);
             this.fx.push(f);
-            v.hold = f.dur;
+            v.hold = f.dur; v.holdV = f.vOut;
           } else if (from.zone && !from.dead && this.fx.length < 300) {
             // 沒有停著的車（停在建物裡 / 地下室）：從建物入口開出來
             const p = pointAt(lane.pts, lane.cum, clamp(s - v.len / 2, 0, lane.len));
             const gx = from.x - p.x, gy = from.y - p.y, L = Math.hypot(gx, gy) || 1, k = Math.min(10, L * 0.5);
             const f = this.parkPath(p, { x: p.x + gx / L * k, y: p.y + gy / L * k, ax: gx / L, ay: gy / L, indoor: true }, v, false);
             this.fx.push(f);
-            v.hold = f.dur;
+            v.hold = f.dur; v.holdV = f.vOut;
           }
           return 'ok';
         }
@@ -200,13 +218,11 @@ export class Traffic {
     } else if (hasSlot) res[v.slotIdx] = false;
     // 轉進車位時車身還壓在車道上：先留在車道上（不畫出來）擋住後面的車，直到沿曲線開離車道（橫向超過 3.2 m）
     if (f && v.track.kind === 'lane') {
-      const [p0, p1, p2, p3] = f.pts, dx = p1.x - p0.x, dy = p1.y - p0.y, L = Math.hypot(dx, dy) || 1;
+      const [p0, p1] = f.pts, dx = p1.x - p0.x, dy = p1.y - p0.y, L = Math.hypot(dx, dy) || 1;
       let kk = 1;
       for (let k = 0.05; k <= 1; k += 0.05) {
-        const e = k * k * (3 - 2 * k), m = 1 - e;
-        const x = m * m * m * p0.x + 3 * m * m * e * p1.x + 3 * m * e * e * p2.x + e * e * e * p3.x;
-        const y = m * m * m * p0.y + 3 * m * m * e * p1.y + 3 * m * e * e * p2.y + e * e * e * p3.y;
-        if (Math.abs((x - p0.x) * dy - (y - p0.y) * dx) / L > 3.2) { kk = k; break; }
+        const q = fxAt(f, k);
+        if (Math.abs((q.x - p0.x) * dy - (q.y - p0.y) * dx) / L > 3.2) { kk = k; break; }
       }
       v.leaving = f.dur * kk + 0.2; v.finishOk = ok; v.v = 0; v.acc = 0;
       v.s = Math.min(v.s, v.track.len - 0.05);
@@ -243,10 +259,12 @@ export class Traffic {
       }
     }
     // 車位靠近路口（例如停車場車道的交叉口）：路口裡正在轉彎的車離開後才進出
+    // （停在路口裡的車多半是在等我們，不算，否則雙方互等）
     for (const nid of [seg.a, seg.b]) {
       const n = net.nodes.get(nid);
       if (!n || Math.hypot(n.x - p.x, n.y - p.y) > n.radius + 16) continue;
       for (const c of n.conns) for (const w of c.vehs) {
+        if (w.v < 1) continue;
         const q = pointAt(c.pts, c.cum, clamp(w.s - w.len / 2, 0, c.len));
         if (Math.hypot(q.x - p.x, q.y - p.y) < len + 6) return false;
       }
@@ -465,8 +483,8 @@ export class Traffic {
       }
     }
     if (!this.hasSpace(c, v)) return false;
-    // 等越久越願意接受較短的車距（駕駛不耐煩）
-    const gapT = 4.5 - 2.3 * clamp(v.waitT / 30, 0, 1);
+    // 等越久越願意接受較短的車距（駕駛不耐煩）；從停車場 / 園區開出來的車接受較短的車距、也更快不耐煩
+    const gapT = c.from.seg.T.internal ? 3.2 - 1.6 * clamp(v.waitT / 15, 0, 1) : 4.5 - 2.3 * clamp(v.waitT / 30, 0, 1);
     for (const cf of c.conflicts) {
       const oc = cf.c;
       if (cf.type === 'cross' && oc.vehs.length) return false;
@@ -684,7 +702,11 @@ export class Traffic {
       : [{ x: sl.x, y: sl.y }, { x: sl.x + ax * k1, y: sl.y + ay * k1 }, { x: p.x - p.dx * k0, y: p.y - p.dy * k0 }, { x: p.x, y: p.y }];
     // 開出時車子已在車道上等，限制在 3 秒內以免擋到後面的車
     const dur = clamp(dist * 1.2 / 5.5, 1.2, arrive ? 7 : 3);
-    return { pts, dur, t: 0, color: v.color, len: v.len, w: v.w, truck: v.truck, arrive, b, idx, indoor: !!sl.indoor };
+    // 速度銜接（不會開到車位前突然停住、再從靜止起步）：停進時起點速度 = 車子當下的速度；
+    // 開出時終點速度約 4 m/s，車子之後以這個速度加入車流（vOut）
+    const vIn = arrive ? Math.min(v.v, 8) : 0, vOut = arrive ? 0 : Math.min(4, dist * 1.8 / dur);
+    const ea = clamp(vIn * dur / (3 * k0), 0, 3), eb = clamp(vOut * dur / (3 * k0), 0, 3);
+    return { pts, dur, t: 0, ea, eb, vOut: eb * 3 * k0 / dur, color: v.color, len: v.len, w: v.w, truck: v.truck, arrive, b, idx, indoor: !!sl.indoor };
   }
 
   step(dt) {
@@ -705,7 +727,7 @@ export class Traffic {
     for (const v of vs) {
       if (v.dead || v.leaving > 0) continue;
       // 還在從停車位開出來：先停在路邊等
-      if (v.hold > 0) { v.hold -= dt; v.v = 0; if (v.hold <= 0) v.fadeIn = 1; continue; }
+      if (v.hold > 0) { v.hold -= dt; v.v = 0; if (v.hold <= 0) { v.fadeIn = 1; v.v = v.holdV || 0; } continue; }
       if (v.fadeIn < 1) v.fadeIn = Math.min(1, v.fadeIn + dt / 0.8);
       v.lcT -= dt;
       if (v.lcT <= 0) { v.lcT = 0.4 + (v.id % 7) * 0.03; this.tryLaneChange(v); }
@@ -728,9 +750,9 @@ export class Traffic {
       if (v.dead) { anyDead = true; continue; }
       const tr = v.track;
       if (tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === this.destOf(v).seg && v.s >= this.destS(v)) {
-        // 車位在路的另一側：停在原地等要橫越的車道淨空（最多 15 秒）
+        // 車位在路的另一側：停在原地等要橫越的車道淨空（最多 6 秒，免得停車場裡互等）
         const ahead = v.idx > 0 ? tr.vehs[v.idx - 1] : null;
-        if (v.slotPt && (v.parkWait || 0) < 15 && (!this.sideClear(tr, v.s, v.slotPt, v.len) || this.slotBusy(v.trip.to, v.slotPt) || (ahead && ahead.s - ahead.len - v.s < 6))) { v.parkWait = (v.parkWait || 0) + dt; v.s = this.destS(v); v.v = 0; continue; }
+        if (v.slotPt && (v.parkWait || 0) < 6 && (!this.sideClear(tr, v.s, v.slotPt, v.len) || this.slotBusy(v.trip.to, v.slotPt) || (ahead && ahead.s - ahead.len - v.s < 6))) { v.parkWait = (v.parkWait || 0) + dt; v.s = this.destS(v); v.v = 0; continue; }
         this.finish(v, true); anyDead = true; continue;
       }
       v.rerouteT -= dt;

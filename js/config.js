@@ -2,9 +2,13 @@
 
 export const LANE_W = 3.5;          // 車道寬（公尺）
 export const SIM_DT = 0.1;          // 模擬步長（秒）
-export const CLOCK = 1.5;           // 每 1 模擬秒推進的遊戲分鐘數（一天 = 16 分鐘 @1x）
+// 每 1 模擬秒推進的遊戲分鐘數。參考 Cities: Skylines：時鐘走得比車子快很多（車子照常速開，穿越城市卻要好幾個遊戲小時）
+// 一般速度（1.5 倍模擬速度）下一天約 4 分鐘、▶▶ 約 2 分鐘、▶▶▶ 約 45 秒
+export const CLOCK = 4;
 // 行程產生率以「每模擬秒」為準：時鐘加快時，每個遊戲小時產生的行程相對減少，路上車量不變
 export const TRIP_SCALE = 0.5 / CLOCK;
+// 每個遊戲小時的行程數相對於原始調校（時鐘 1.5）的比例；以「每小時到了幾個人」計算的滿意度門檻要乘上它
+export const TRIP_REF = 1.5 / CLOCK;
 export const MAP_SIZE = 3600;       // 地圖邊長（公尺）；舊存檔沿用 2400
 
 // 13 種道路類型。rank 越高越有路權；access=false 表示沿線不可建築（封閉式道路）

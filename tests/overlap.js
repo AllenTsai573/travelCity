@@ -2,6 +2,7 @@
 // 當成矩形兩兩檢查是否重疊，依情況分類統計。node tests/overlap.js [遊戲小時] [種子]
 import { makeGame, step, connectOutside } from './harness.js';
 import { pointAt } from '../js/util.js';
+import { fxAt } from '../js/traffic.js';
 
 // 回傳 { 類別: 次數 }，以及最多 examples 筆範例
 export function scanOverlaps(g, maxEx = 40) {
@@ -18,15 +19,9 @@ export function scanOverlaps(g, maxEx = 40) {
     add(x, y, p.dx, p.dy, v.len, v.w, tr.kind === 'lane' ? '路上' : '路口', tr.drawLevel || 0, v);
   }
   for (const f of g.traffic.fx) {
-    const k = Math.min(1, f.t / f.dur), e = k * k * (3 - 2 * k), m = 1 - e, [p0, p1, p2, p3] = f.pts;
-    const x = m * m * m * p0.x + 3 * m * m * e * p1.x + 3 * m * e * e * p2.x + e * e * e * p3.x;
-    const y = m * m * m * p0.y + 3 * m * m * e * p1.y + 3 * m * e * e * p2.y + e * e * e * p3.y;
-    const t = Math.min(0.995, Math.max(0.005, e)), n = 1 - t;
-    let dx = 3 * n * n * (p1.x - p0.x) + 6 * n * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x);
-    let dy = 3 * n * n * (p1.y - p0.y) + 6 * n * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y);
-    const L = Math.hypot(dx, dy) || 1;
+    const k = Math.min(1, f.t / f.dur), { x, y, dx, dy } = fxAt(f, k);
     if (f.indoor && (f.arrive ? k > 0.65 : k < 0.35)) continue;   // 已淡出 / 還沒淡入
-    add(x, y, dx / L, dy / L, f.len, f.w, f.arrive ? '停車中' : '出車中', 0, f);
+    add(x, y, dx, dy, f.len, f.w, f.arrive ? '停車中' : '出車中', 0, f);
   }
   for (const b of g.city.buildings) {
     for (const truck of [false, true]) {

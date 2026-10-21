@@ -248,6 +248,16 @@ export class Network {
     if (segs.length <= 1) return 0;
     let maxHW = 0;
     for (const s of segs) maxHW = Math.max(maxHW, halfWidth(s.T));
+    // 只有場內道路相接（停車場 / 園區車道的交叉口與轉角）：像真的停車場一樣用小轉角，
+    // 否則每段車道會被路口吃掉大半（19 m 的車道只剩 4 m，連一台車都放不下，車子一格一格慢慢挪）
+    if (segs.every(s => s.T.internal)) {
+      if (segs.length === 2) {
+        const d1 = this.segDirAt(segs[0], node.id), d2 = this.segDirAt(segs[1], node.id);
+        if ((d1.x * d2.x + d1.y * d2.y) / ((Math.hypot(d1.x, d1.y) * Math.hypot(d2.x, d2.y)) || 1) < -0.985) return 0.3;
+        return maxHW * 0.8 + 1;
+      }
+      return maxHW + 0.5;
+    }
     if (segs.length === 2) {
       const [s1, s2] = segs;
       const d1 = this.segDirAt(s1, node.id), d2 = this.segDirAt(s2, node.id);
@@ -333,8 +343,9 @@ export class Network {
         c.from.conns.push(c);
         c.from.outLinks.add(c.to.link.key);
         const delay = n.control === 'signal' ? 9 : n.control === 'stop' ? 5 : (c.conflicts.length && c.score < maxScore ? 2.5 : 0.2);
-        // 死路迴轉：除非沒有其他路線，否則駕駛不會選擇
-        const cost = c.len / c.speed + delay + (c.turn === 'U' ? 30 : 0);
+        // 死路迴轉：除非沒有其他路線，否則駕駛不會選擇（成本要高於「前方塞住」的繞行加成，
+        // 否則停車場出口稍微塞住時，車子會開到旁邊車道的盡頭迴轉再回來）
+        const cost = c.len / c.speed + delay + (c.turn === 'U' ? 300 : 0);
         const L = c.from.link, prev = L.next.get(c.to.link.key);
         if (prev === undefined || cost < prev) L.next.set(c.to.link.key, cost);
       }
@@ -454,7 +465,8 @@ export class Network {
     if (node.jinfo && node.jinfo.pairs.length === 1) {
       const main = new Set(node.jinfo.pairs[0]);
       const ms = node.jinfo.pairs[0][0];
-      if (ms.T.bwd > 0 && (!ms.T.access || node.jinfo.ramp)) {
+      // 場內道路（停車場、園區車道）雖然不能沿線建築，但不是封閉式道路，可以左轉
+      if (ms.T.bwd > 0 && ((!ms.T.access && !ms.T.internal) || node.jinfo.ramp)) {
         for (const [inL, cands] of per) {
           for (let i = cands.length - 1; i >= 0; i--) {
             const c = cands[i];

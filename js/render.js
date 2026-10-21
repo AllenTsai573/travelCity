@@ -1,8 +1,9 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
 import { lotArt } from './lotart.js';
-import { LANE_W, LEVEL_H, ZONES } from './config.js';
+import { LANE_W, LEVEL_H, ZONES, CLOCK } from './config.js';
 import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly, closestOnPoly } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
+import { fxAt } from './traffic.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
 const SHOW_WILD_TREES = false;
@@ -44,9 +45,11 @@ export class Renderer {
     // 不透明畫布：瀏覽器合成時不需做 alpha 混合（GPU 合成較省）
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.bake = null;
-    // rot：視角旋轉（弧度）；畫面 = R(rot) ×（世界 − 鏡頭）× z
-    this.cam = { x: 1200, y: 1200, z: 1, rot: 0 };
+    // rot：視角旋轉（弧度）；畫面 = S(tilt) × R(rot) ×（世界 − 鏡頭）× z
+    // tilt：俯角，0 = 正上方俯視（地面不壓縮、建物畫成實際高度的一半，約 63° 斜投影）、1 = 45° 斜看（地面壓縮成 0.71 倍、建物較高）
+    this.cam = { x: 1200, y: 1200, z: 1, rot: 0, tilt: 1 };
     this.rotTarget = null;
+    this.tiltTarget = null;
     this.dpr = 1;
     this.W = 0; this.H = 0;
     this.basis();
@@ -59,9 +62,21 @@ export class Renderer {
     const r = this.cam.rot || 0, c = Math.cos(r), s = Math.sin(r);
     this.rc = c; this.rs = s;
     this.right = { x: c, y: -s }; this.down = { x: s, y: c }; this.up = { x: -s, y: -c };
+    // 俯角：sy 為畫面上下方向的壓縮比例，hs 為高度倍率（建物的高度常數以俯視為準：hs = 1）
+    const t = this.tilt();
+    this.sy = 1 + (Math.SQRT1_2 - 1) * t;
+    this.hs = 1 + t;
   }
-  // 往畫面上方抬高 h
-  lift(p, h) { return { x: p.x + this.up.x * h, y: p.y + this.up.y * h }; }
+  tilt() { return this.cam.tilt ?? 0; }
+  // 切換俯視 / 45° 斜看（平滑過渡）
+  toggleTilt() { this.tiltTarget = (this.tiltTarget ?? this.tilt()) > 0.5 ? 0 : 1; }
+  stepTilt(dt) {
+    if (this.tiltTarget === null) return;
+    const d = this.tiltTarget - this.tilt();
+    if (Math.abs(d) < 0.003) { this.cam.tilt = this.tiltTarget; this.tiltTarget = null; } else this.cam.tilt = this.tilt() + d * Math.min(1, dt * 7);
+  }
+  // 往畫面上方抬高 h（依俯角調整高度倍率）
+  lift(p, h) { const k = h * this.hs; return { x: p.x + this.up.x * k, y: p.y + this.up.y * k }; }
   // 沿畫面方向位移（右 rx、下 dy）
   so(p, rx, dy) { return { x: p.x + this.right.x * rx + this.down.x * dy, y: p.y + this.right.y * rx + this.down.y * dy }; }
   // 點在畫面上的深度（越大越靠近鏡頭、越晚畫）
@@ -87,22 +102,23 @@ export class Renderer {
   }
 
   toWorld(sx, sy) {
-    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r);
-    const dx = (sx - this.W / 2) / c.z, dy = (sy - this.H / 2) / c.z;
+    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), k = 1 + (Math.SQRT1_2 - 1) * this.tilt();
+    const dx = (sx - this.W / 2) / c.z, dy = (sy - this.H / 2) / (c.z * k);
     return { x: c.x + cs * dx + sn * dy, y: c.y - sn * dx + cs * dy };
   }
   toScreen(wx, wy) {
-    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), dx = wx - c.x, dy = wy - c.y;
-    return { x: (cs * dx - sn * dy) * c.z + this.W / 2, y: (sn * dx + cs * dy) * c.z + this.H / 2 };
+    const c = this.cam, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), dx = wx - c.x, dy = wy - c.y, k = 1 + (Math.SQRT1_2 - 1) * this.tilt();
+    return { x: (cs * dx - sn * dy) * c.z + this.W / 2, y: (sn * dx + cs * dy) * c.z * k + this.H / 2 };
   }
   // 螢幕位移換成世界位移（拖曳平移、WASD 用）
   screenDelta(dx, dy) {
     const r = this.cam.rot || 0, cs = Math.cos(r), sn = Math.sin(r);
+    dy /= 1 + (Math.SQRT1_2 - 1) * this.tilt();
     return { x: cs * dx + sn * dy, y: -sn * dx + cs * dy };
   }
   worldTf() {
-    const c = this.cam, d = this.dpr, k = d * c.z, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r);
-    const A = k * cs, B = k * sn, C = -k * sn, D = k * cs;
+    const c = this.cam, d = this.dpr, k = d * c.z, r = c.rot || 0, cs = Math.cos(r), sn = Math.sin(r), q = 1 + (Math.SQRT1_2 - 1) * this.tilt();
+    const A = k * cs, B = k * sn * q, C = -k * sn, D = k * cs * q;
     const E = d * this.W / 2 - (A * c.x + C * c.y), F = d * this.H / 2 - (B * c.x + D * c.y);
     this.M = [A, B, C, D, E, F];
     this.ctx.setTransform(A, B, C, D, E, F);
@@ -392,7 +408,7 @@ export class Renderer {
           }
           if (it.stack && detail && b.happy > 0.4 && !b.abandoned) {
             ctx.fillStyle = 'rgba(225,225,225,0.35)';
-            const t = (g.time * 0.6 + b.id) % 6, sp = this.lift(this.so(top, t, 0), t * 1.2);
+            const t = (g.time / CLOCK * 0.9 + b.id) % 6, sp = this.lift(this.so(top, t, 0), t * 1.2);
             ctx.beginPath(); ctx.arc(sp.x, sp.y, 1.5 + t * 0.4, 0, Math.PI * 2); ctx.fill();
           }
           continue;
@@ -1146,17 +1162,11 @@ export class Renderer {
   drawArrivals(v) {
     const ctx = this.ctx, z = this.cam.z;
     for (const f of this.game.traffic.fx) {
-      const k = Math.min(1, f.t / f.dur), e = k * k * (3 - 2 * k), m = 1 - e, [p0, p1, p2, p3] = f.pts;
-      const x = m * m * m * p0.x + 3 * m * m * e * p1.x + 3 * m * e * e * p2.x + e * e * e * p3.x;
-      const y = m * m * m * p0.y + 3 * m * m * e * p1.y + 3 * m * e * e * p2.y + e * e * e * p3.y;
+      const k = Math.min(1, f.t / f.dur), { x, y, dx, dy } = fxAt(f, k);
       if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
-      const tt = Math.min(0.995, Math.max(0.005, e)), n = 1 - tt;
-      let dx = 3 * n * n * (p1.x - p0.x) + 6 * n * tt * (p2.x - p1.x) + 3 * tt * tt * (p3.x - p2.x);
-      let dy = 3 * n * n * (p1.y - p0.y) + 6 * n * tt * (p2.y - p1.y) + 3 * tt * tt * (p3.y - p2.y);
-      const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
       this.localTf(x, y, dx, dy);
-      // 開進 / 開出車庫：在車庫門口淡出 / 淡入
-      ctx.globalAlpha = !f.indoor ? 1 : f.arrive ? clamp((1 - k) / 0.35, 0, 1) : clamp(k / 0.35, 0, 1);
+      // 開進 / 開出地下停車場：只在坡道最裡面一小段淡出 / 淡入
+      ctx.globalAlpha = !f.indoor ? 1 : f.arrive ? clamp((1 - k) / 0.15, 0, 1) : clamp(k / 0.15, 0, 1);
       this.carBody(f.color, f.len, f.w, f.truck, z > 2.2);
     }
     ctx.globalAlpha = 1;

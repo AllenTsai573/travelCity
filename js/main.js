@@ -78,10 +78,12 @@ class Game {
 
   newGame({ seed, biome, difficulty }) {
     this.setup(seed, biome, difficulty);
-    generateWorld(this);
+    // 開局：小鎮的道路與分區已規劃好，先不蓋建築；6 個遊戲小時後才開始有人進駐（避免一開始就有分區荒廢）
+    generateWorld(this, { empty: true });
+    this.city.growStart = this.time + 360;
     Object.assign(this.renderer.cam, { x: MAP_SIZE / 2, y: MAP_SIZE / 2, z: 1.1 });
     this.afterLoad();
-    this.notify(`歡迎來到${this.terrain.biome.name}！把地圖邊緣的外部連線接到市區吧。`, 'good');
+    this.notify(`歡迎來到${this.terrain.biome.name}！小鎮的分區已經劃好，約 6 個遊戲小時後開始有人進駐。`, 'good');
   }
 
   afterLoad() {

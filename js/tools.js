@@ -182,6 +182,7 @@ export class Tools {
     else if (k === '2') this.g.setSpeed(3);
     else if (k === '3') this.g.setSpeed(8);
     else if (k === 'h') this.g.toggleHeatmap();
+    else if (k === 't') { this.g.renderer.toggleTilt(); }
     else if (k === 'c') { this.curve = !this.curve; this.pts = this.pts.slice(0, 1); this.g.ui.refreshToolbar(); }
     else if (k === 'pageup' || k === ']') { this.changeLevel(1); }
     else if (k === 'pagedown' || k === '[') { this.changeLevel(-1); }
@@ -212,8 +213,8 @@ export class Tools {
     if (k.has('s') || k.has('arrowdown')) my += 1;
     if (k.has('a') || k.has('arrowleft')) mx -= 1;
     if (k.has('d') || k.has('arrowright')) mx += 1;
-    const r = this.g.renderer, rotating = r.rotTarget !== null || (this.down && this.down.btn === 1);
-    r.stepRotation(dt);
+    const r = this.g.renderer, rotating = r.rotTarget !== null || r.tiltTarget !== null || (this.down && this.down.btn === 1);
+    r.stepRotation(dt); r.stepTilt(dt);
     if (mx || my || rotating) {
       // WASD 依畫面方向移動（旋轉視角後一樣是往畫面上 / 下 / 左 / 右）
       const w0 = r.screenDelta(mx * sp, my * sp);

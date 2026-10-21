@@ -1,5 +1,5 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
-import { TRIP_SCALE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
+import { TRIP_SCALE, TRIP_REF, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap, closestOnPoly } from './util.js';
 import { halfWidth } from './network.js';
 import { lotArt, lotAisles, lotParkArea } from './lotart.js';
@@ -50,6 +50,7 @@ export class City {
     this.scheduled = [];
     this.hourT = 0;
     this.growT = 0;
+    this.growStart = 0;   // 這個遊戲時間之後才開始發展（開局先讓路網跑一陣子）
     this.demand = { R: 0.7, C: 0.3, I: 0.4 };
     this.pop = 0; this.jobsC = 0; this.jobsI = 0;
     this.stats = { trips: 0, fails: 0, through: 0, tripTimeSum: 0, hourTrips: 0, hourFails: 0, hourIncome: 0, hourExpense: 0, lastIncome: 0, lastExpense: 0, lastTrips: 0, lastFails: 0 };
@@ -210,7 +211,11 @@ export class City {
         for (const a of plan.lot.aisles) {
           const q = P(a, cv), n = net.nodeNear(q.x, q.y, 2, 0), sn = n ? null : net.segNear(q.x, q.y, 2, 0);
           const from = n ? { x: n.x, y: n.y, node: n.id } : sn ? { x: sn.x, y: sn.y, seg: sn.seg.id, u: sn.u } : null;
-          if (from) build(from, P(a, plan.lot.top));
+          if (!from) continue;
+          // 每條平行車道一路接到前面的道路，成為停車場的另一個出入口
+          // （只有一個出入口時所有車都擠在同一個路口，停車場裡大排長龍；車道盡頭也不再是死路）；接不上才做成盡頭車道
+          const f = P(a, -(halfWidth(seg.T) + 1.5)), fs = net.segNear(f.x, f.y, 4, 0);
+          if (!(fs && !fs.seg.T.internal && build(from, { x: fs.x, y: fs.y, seg: fs.seg.id, u: fs.u }))) build(from, P(a, plan.lot.top));
         }
       }
       net.rebuild();
@@ -518,7 +523,7 @@ export class City {
   }
   pickJob(b) {
     return this.roulette(this.buildings.filter(x => (x.zone === 'C' || x.zone === 'I') && !x.abandoned),
-      x => this.cap(x) * this.near(b, x, 700) * (x.present < this.cap(x) * 0.5 ? 1.5 : 0.4));
+      x => this.cap(x) * this.near(b, x, 700) * (x.present < this.cap(x) * 0.5 * TRIP_REF ? 1.5 : 0.4));
   }
   pickShop(b) {
     return this.roulette(this.buildings.filter(x => x.zone === 'C' && !x.abandoned), x => this.cap(x) * (SHOP_KINDS[x.kind]?.shop || 1) * this.near(b, x, x.kind === 'bigbox' || x.kind === 'mall' ? 900 : 450));
@@ -575,7 +580,7 @@ export class City {
           const day = Math.floor(g.time / 1440) * 1440;
           let dep = day + 17 * 60 + 20 + g.rng.gauss() * 80;
           if (dep < g.time + 120) dep = g.time + 240 + g.rng.next() * 120;
-          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: !!to.zone });
+          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: !!to.zone, transit: trip.transit });
         }
         break;
       }
@@ -584,7 +589,7 @@ export class City {
         if (!to.dead) {
           to.custLevel += 1;
           to.stock = Math.max(0, to.stock - 0.4);
-          this.schedule(g.time + 25 + g.rng.next() * 60, { kind: 'home', from: to, to: from, truck: false });
+          this.schedule(g.time + 40 + g.rng.next() * 90, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit });
         }
         toll = 1;
         break;
@@ -599,8 +604,8 @@ export class City {
         break;
       case 'goods':
         if (!to.dead && to.zone) to.stock = Math.min(40, to.stock + 6);
-        // 送貨到商店的貨車卸完貨（停在卸貨區）後開回工廠
-        if (!to.dead && to.zone === 'C' && from.zone && !from.dead) this.schedule(g.time + 15 + g.rng.next() * 25, { kind: 'return', from: to, to: from, truck: true });
+        // 送貨到商店的貨車卸完貨（停在卸貨區 30～60 分鐘）後開回工廠
+        if (!to.dead && to.zone === 'C' && from.zone && !from.dead) this.schedule(g.time + 30 + g.rng.next() * 30, { kind: 'return', from: to, to: from, truck: true });
         toll = 3;
         break;
       case 'mat':
@@ -731,7 +736,7 @@ export class City {
     this.growT += dt;
     if (this.growT >= 30) {
       this.growT = 0;
-      if ((this.jam || 0) < 0.35) { this.developLots(); if (g.autoGrow) this.autoGrow(); }
+      if ((this.jam || 0) < 0.35 && g.time >= this.growStart) { this.developLots(); if (g.autoGrow) this.autoGrow(); }
     }
   }
 
@@ -745,6 +750,11 @@ export class City {
       if (trip.to.dead || (trip.to.outside && trip.to.seg === null) || o.seg === null) { o.queue.shift(); this.recordFail(trip); continue; }
       const r = tr.trySpawn(trip);
       if (r === 'ok') { o.queue.shift(); o.spawnCD = cd; }
+      else if (r === 'transit') {
+        // 家裡的車都開走了：搭大眾運輸 / 走路（不產生車，行程照樣完成；回程也不開車）
+        o.queue.shift(); trip.transit = true;
+        this.onTripEnd(trip, true, 300);
+      }
       else if (r === 'noroute') {
         // 外部連線尚未接通時，外地來的行程直接取消，不算失敗
         o.queue.shift();
@@ -784,10 +794,10 @@ export class City {
         b.happy = 0.35 * b.workOK + 0.15 * b.shopOK + 0.2 * (1 - b.pollution) + 0.1 * (1 - b.noise) + 0.2 * b.timeScore;
         income += cap * 0.8 * b.happy;
       } else {
-        if (workHours) b.workSat = ema(b.workSat, clamp(b.present / Math.max(1, cap / 3 * 0.6), 0, 1), 0.25);
+        if (workHours) b.workSat = ema(b.workSat, clamp(b.present / Math.max(1, cap / 3 * 0.6 * TRIP_REF), 0, 1), 0.25);
         if (b.zone === 'C') {
           b.goodsSat = ema(b.goodsSat, b.stock > 0.5 ? 1 : 0, 0.2);
-          b.custSat = ema(b.custSat, clamp(b.custLevel / Math.max(1, cap * 0.2), 0, 1), 0.2);
+          b.custSat = ema(b.custSat, clamp(b.custLevel / Math.max(1, cap * 0.2 * TRIP_REF), 0, 1), 0.2);
           b.custLevel *= 0.75;
           b.happy = 0.35 * b.workSat + 0.3 * b.goodsSat + 0.35 * b.custSat;
           income += cap * 1.4 * b.happy;
@@ -806,7 +816,8 @@ export class City {
         b.highT += 1;
         if (b.highT > 8) { b.level++; b.highT = 0; g.notify(`${ZONES[b.zone].name}建築升級至 ${b.level} 級`, 'minor'); }
       } else b.highT = Math.max(0, b.highT - 0.5);
-      if (b.happy < 0.3 && g.time - b.born > 360) {
+      // 新蓋的建築有一天的緩衝期，不會一開始還沒有員工 / 顧客就被判定衰退
+      if (b.happy < 0.3 && g.time - b.born > 1440) {
         b.lowT += 1;
         if (b.lowT > 14) {
           b.lowT = 0;
@@ -958,7 +969,7 @@ export class City {
         roads: b.roads || undefined, front: b.front || undefined, gates: b.gates || undefined, parkPlan: b.parkPlan || undefined, links: b.links || undefined, slotOcc: b.slotOcc && b.slotOcc.some(Boolean) ? b.slotOcc : undefined, tOcc: b.tOcc && b.tOcc.some(Boolean) ? b.tOcc : undefined, c0: b.roads ? [b.corners[0].x, b.corners[0].y, b.tx, b.ty, b.nx, b.ny] : undefined })),
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
-      demand: this.demand, stats: this.stats, history: this.history,
+      demand: this.demand, stats: this.stats, history: this.history, growStart: this.growStart,
     };
   }
   load(d) {
@@ -992,6 +1003,7 @@ export class City {
     Object.assign(this.demand, d.demand);
     Object.assign(this.stats, d.stats);
     this.history = d.history || [];
+    this.growStart = d.growStart || 0;
     this.afterRebuild();
     this.recount();
   }

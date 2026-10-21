@@ -172,7 +172,7 @@ export function lotArt(b) {
 
   if (b.zt === 'R1') {
     base = '#a3c98c';
-    // 每戶一塊 12 m 寬的宅地：前院樹籬、前院並排兩個室外停車位（直接從道路 / 巷道開進去）
+    // 每戶一塊 12 m 寬的宅地：前院樹籬、前院並排三個室外停車位（直接從道路 / 巷道開進去）
     // home(o, t, n, W, D)：o 為宅地臨路邊的起點，t 沿臨路方向，n 往宅地內，W 寬、D 深（都在 u/v 座標，方向只會是 ±u / ±v）
     let homes = 0;
     const home = (ou, ov, tu, tv, nu, nv, W, D) => {
@@ -183,7 +183,7 @@ export function lotArt(b) {
       const alongT = tu ? 'u' : 'v', alongN = tu ? 'v' : 'u';
       if (homes > 0 && r() > fill + 0.1) { const c = P(W / 2, D / 2); tree(c.u, c.v); if (r() < 0.6) { const c2 = P(W * 0.25, D * 0.3); tree(c2.u, c2.v, 0.8); } return; }
       homes++;
-      const setback = 5.8, pw = 5.4, hw = Math.min(W - 2.2, 6.5 + r() * 2), hd = Math.min(D - 7, 7 + r() * 2.5);
+      const setback = 5.8, pw = 8.1, hw = Math.min(W - 2.2, 6.5 + r() * 2), hd = Math.min(D - 7, 7 + r() * 2.5);
       const left = r() < 0.5, ha = left ? W - 1 - hw : 1, pa = left ? 0.6 : W - 0.6 - pw;
       const roofC = tileOrSlate(0.85), wall = r() < 0.15 ? pick(r, BRICK) : facadeCol(), hh = 5 + lv * 0.7 + r();
       R(ha, setback, ha + hw, setback + hd, roofC, hh, {
@@ -195,9 +195,9 @@ export function lotArt(b) {
         const wa = left ? ha : ha + hw * 0.45;
         R(wa, setback + hd - 0.5, wa + hw * 0.55, setback + hd + 4, roofC, hh * 0.9, { roof: 'gable', ridge: alongN, wall, win: true });
       }
-      // 前院並排兩個停車位（不再有車庫，也不會前後擋住）
+      // 前院並排三個停車位（不再有車庫，也不會前後擋住）
       R(pa, 0, pa + pw, setback - 0.4, '#bdb8ae');
-      C(pa + 0.35, 0.4, pa + 2.35, 5.0); C(pa + 3.05, 0.4, pa + 5.05, 5.0);
+      for (let k = 0; k < 3; k++) C(pa + 0.35 + k * 2.7, 0.4, pa + 2.35 + k * 2.7, 5.0);
       // 前院樹籬（停車位處留開口）
       if (r() < 0.75) { R(0.3, 0.2, pa - 0.3, 1, '#4c7a39', 1.3, { wall: '#43703a', deco: true }); R(pa + pw + 0.3, 0.2, W - 0.3, 1, '#4c7a39', 1.3, { wall: '#43703a', deco: true }); }
       if (r() < 0.8) { const c = P(ha + hw / 2, Math.min(D - 2, setback + hd + 2.5)); tree(c.u, c.v, 0.8); }

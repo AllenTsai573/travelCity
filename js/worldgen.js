@@ -10,7 +10,8 @@ export function snapAt(net, p) {
   return { x: p.x, y: p.y };
 }
 
-export function generateWorld(g) {
+// opts.empty：初始分區只劃好、先不蓋建築（遊戲開局用；測試沿用直接蓋好的小鎮）
+export function generateWorld(g, opts = {}) {
   const net = g.net, T = g.terrain, S = T.size, c = S / 2;
   const rng = new RNG(g.seed + 77);
   const savedMoney = g.money;
@@ -125,9 +126,12 @@ export function generateWorld(g) {
       const geo = city.lotGeom(s, uu, side, cols, r);
       // 工業放在小鎮外圍，住宅與工業保持距離
       if (zt === 'I' && Math.hypot(geo.x - c, geo.y - c) < 300) continue;
-      if (zt === 'I' && city.buildings.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110 + geo.rad)) continue;
-      if (zt !== 'I' && zt !== 'C' && city.buildings.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 90 + b.rad)) continue;
-      city.develop(city.addLot(zt, s, uu, side, cols, r));
+      // 住宅與工業保持距離（建築或還沒蓋的分區都算）
+      const placed = [...city.buildings, ...city.lots];
+      if (zt === 'I' && placed.some(b => b.zone === 'R' && Math.hypot(b.x - geo.x, b.y - geo.y) < 110 + geo.rad)) continue;
+      if (zt !== 'I' && zt !== 'C' && placed.some(b => b.zone === 'I' && Math.hypot(b.x - geo.x, b.y - geo.y) < 90 + b.rad)) continue;
+      const lot = city.addLot(zt, s, uu, side, cols, r);
+      if (!opts.empty) city.develop(lot);
       n++;
     }
   };

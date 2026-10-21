@@ -1,6 +1,6 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
 import { LANE_W, LEVEL_H, ZONES } from './config.js';
-import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull } from './util.js';
+import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
@@ -227,8 +227,8 @@ export class Renderer {
   markingsFor(T, core) {
     const lines = [];
     const hw = halfWidth(T);
-    lines.push({ pts: offsetPoly(core, hw - 0.75), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
-    lines.push({ pts: offsetPoly(core, -(hw - 0.75)), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
+    lines.push({ pts: offsetPoly(core, hw - 0.75), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null, edge: true });
+    lines.push({ pts: offsetPoly(core, -(hw - 0.75)), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null, edge: true });
     if (T.bwd > 0) {
       if ((T.median || 0) > 1) {
         lines.push({ pts: core, c: T.green ? '#6f9e4f' : '#9a9a92', w: T.median - 0.4, dash: null, median: true });
@@ -302,7 +302,8 @@ export class Renderer {
       }
     }
     cuts.sort((a, b) => a - b);
-    const marks = this.markings(seg);
+    let marks = this.markings(seg);
+    const openings = [A, B].flatMap(nd => (nd.jinfo && nd.jinfo.ramp ? (this.jointGeom(nd)?.openings || []) : []));
     const coreLen = Math.max(0.01, len - seg.ra - seg.rb);
     const shadowOf = h => (h <= 0.5 ? 0 : h < 1 ? (h - 0.5) * 2 : h) * LEVEL_H;
     for (let i = 0; i < cuts.length - 1; i++) {
@@ -318,12 +319,15 @@ export class Renderer {
       const C = Renderer.withNormals(ss.map(t => { const q = pointAt(seg.pts, seg.cum, t); return { x: q.x, y: q.y, w: hw, h: hAt(t) }; }));
       const lvm = hAt((s0 + s1) / 2);
       const lv = lvm >= 0.5 ? Math.round(lvm) : lvm <= -0.5 ? Math.round(lvm) : 0;
-      const f0 = clamp((s0 - seg.ra) / coreLen, 0, 1), f1 = clamp((s1 - seg.ra) / coreLen, 0, 1);
-      const mk = f1 - f0 < 1e-3 ? [] : marks.map(m => {
+      // 高度切點處路面有重疊，標線也一起往回延伸，避免被上層路面蓋住而斷開
+      const mk0 = i > 0 ? s0 - 0.9 : s0;
+      const f0 = clamp((mk0 - seg.ra) / coreLen, 0, 1), f1 = clamp((s1 - seg.ra) / coreLen, 0, 1);
+      let mk = f1 - f0 < 1e-3 ? [] : marks.map(m => {
         if (f0 <= 0 && f1 >= 1) return m;
         const ml = m.cum[m.cum.length - 1];
         return { ...m, pts: cutPoly(m.pts, m.cum, f0 * ml, f1 * ml) };
       });
+      if (openings.length) mk = Renderer.splitEdges(mk, openings);
       pieces.push({
         lv, mk, col: roadColor(seg.T),
         grad: hA !== hB ? { p0: C[0], p1: C[C.length - 1], h0: C[0].h, h1: C[C.length - 1].h } : null,
@@ -416,11 +420,16 @@ export class Renderer {
                 const dd = a.dx * b.dx + a.dy * b.dy;
                 if (dd > bd) { bd = dd; best = c; }
               }
-              if (best) strips.push(...this.rampMergeGeom(best, merge, o.hw, n.level));
+              if (best) {
+                const mainHW = Math.max(...pairs[0].map(e => e.hw));
+                strips.push(this.rampMergeGeom(best, merge, o.hw, n.level, n, mainHW, info.mainDir));
+              }
             }
           }
         }
         j = { kind: 'hub', col: roadColor(widest.T), strips, hull, ribbons };
+        j.openings = strips.filter(st => st.opening).map(st => st.opening);
+        if (j.openings.length) for (const st of strips) if (!st.opening) st.mk = Renderer.splitEdges(st.mk, j.openings);
       }
       if (j.kind === 'hub') j.mk = j.strips.flatMap(st => st.mk);
     }
@@ -448,16 +457,58 @@ export class Renderer {
   }
 
   // 匝道與主線的銜接：匝道寬度漸變到一個車道寬的匯流帶，加上沿主線外側的漸變車道
-  rampMergeGeom(c, merge, rampHW, level) {
-    const curbW = level > 0 ? 0.5 : 0.5;
-    const laneHW = LANE_W / 2 + 0.25;
+  // 匝道匯流帶：維持匝道寬度沿匯入 / 分出軌跡接到主線外側，並畫出匝道標線
+  // - 外側邊線一路延續，最後與主線邊線接上
+  // - 內側邊線畫到碰到主線路面為止（形成三角槽化區的尖端）
+  rampMergeGeom(c, merge, rampHW, level, node, mainHW, mainDir) {
+    const endHW = LANE_W / 2 + 0.8;
     const sm = t => t * t * (3 - 2 * t);
-    const n = c.pts.length;
     const C = Renderer.withNormals(c.pts.map((p, i) => {
       const f = sm(c.cum[i] / (c.len || 1));
-      return { x: p.x, y: p.y, w: merge ? rampHW + (laneHW - rampHW) * f : laneHW + (rampHW - laneHW) * f, h: level };
+      return { x: p.x, y: p.y, w: merge ? rampHW + (endHW - rampHW) * f : endHW + (rampHW - endHW) * f, h: level };
     }));
-    const out = [{ body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, curbW), mk: [] }];
+    const lat = p => Math.abs(mainDir.x * (p.y - node.y) - mainDir.y * (p.x - node.x));
+    const mid = C[Math.floor(C.length / 2)];
+    // 外側 = 離主線較遠的一側
+    const outer = lat({ x: mid.x + mid.nx, y: mid.y + mid.ny }) > lat({ x: mid.x - mid.nx, y: mid.y - mid.ny }) ? 1 : -1;
+    const line = sgn => C.map(q => ({ x: q.x + q.nx * sgn * (q.w - 0.75), y: q.y + q.ny * sgn * (q.w - 0.75) }));
+    const mk = [];
+    mk.push({ pts: line(outer), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
+    const inner = line(-outer).filter(p => lat(p) > mainHW - 0.75 + 0.15);
+    if (inner.length >= 2) mk.push({ pts: inner, c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
+    for (const m of mk) m.cum = polyCum(m.pts);
+    const body = Renderer.ribbonPoly(C, 0);
+    return { body, curbs: Renderer.ribbonPoly(C, 0.5), mk, opening: Renderer.ribbonPoly(C, 0.4) };
+  }
+
+  // 邊線遇到匝道開口時改為虛線（車輛可跨越匯入 / 分出）
+  static splitEdges(marks, openings) {
+    if (!openings || !openings.length) return marks;
+    const out = [];
+    for (const m of marks) {
+      if (!m.edge) { out.push(m); continue; }
+      const dense = [];
+      for (let i = 0; i < m.pts.length - 1; i++) {
+        const a = m.pts[i], b = m.pts[i + 1];
+        const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y)));
+        for (let k = 0; k < n; k++) dense.push({ x: a.x + (b.x - a.x) * k / n, y: a.y + (b.y - a.y) * k / n });
+      }
+      dense.push(m.pts[m.pts.length - 1]);
+      let run = [], runIn = null;
+      const flush = () => {
+        if (run.length >= 2) {
+          const r = { ...m, pts: run, dash: runIn ? [2, 2.5] : m.dash };
+          r.cum = polyCum(r.pts);
+          out.push(r);
+        }
+      };
+      for (const p of dense) {
+        const inside = openings.some(o => pointInPoly(p, o));
+        if (runIn === null) runIn = inside;
+        if (inside !== runIn) { run.push(p); flush(); run = [p]; runIn = inside; } else run.push(p);
+      }
+      flush();
+    }
     return out;
   }
 
@@ -548,7 +599,7 @@ export class Renderer {
         ctx.strokeStyle = 'rgba(255,255,255,0.85)';
         ctx.lineWidth = 0.4;
         for (const n of nodes) {
-          if (n.control === 'auto' && n.segs.length < 3) continue;
+          if (n.control === 'auto' && (n.segs.length < 3 || (n.jinfo && n.jinfo.ramp))) continue;
           const ins = net.inLinks(n);
           let maxRank = -Infinity;
           if (n.control === 'auto') for (const Lk of ins) maxRank = Math.max(maxRank, net.approachRank(n, Lk));

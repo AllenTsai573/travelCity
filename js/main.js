@@ -47,7 +47,7 @@ class Game {
     for (let i = MILESTONES.length - 1; i > this.milestone; i--) {
       if (this.city.pop >= MILESTONES[i].pop) {
         this.milestone = i;
-        this.notify(`🎉 城市成長為「${MILESTONES[i].name}」！解鎖新的道路類型與高度層級`, 'good');
+        this.notify(`🎉 城市成長為「${MILESTONES[i].name}」！`, 'good');
         this.ui.refreshToolbar();
         break;
       }
@@ -68,7 +68,7 @@ class Game {
     this.terrain = new Terrain(seed, biome, MAP_SIZE);
     this.time = 7 * 60;
     this.money = this.diff.money;
-    this.milestone = this.diff.unlockAll ? MILESTONES.length - 1 : 0;
+    this.milestone = 0;
     this.net = new Network(this);
     this.city = new City(this);
     this.traffic = new Traffic(this);

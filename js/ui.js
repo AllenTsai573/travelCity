@@ -392,7 +392,7 @@ export class UI {
       <h4>生態系</h4>
       <div class="cards" data-group="biome">${Object.entries(BIOMES).map(([k, b], i) => `<label class="cardopt"><input type="radio" name="biome" value="${k}" ${i === 0 ? 'checked' : ''}><span class="sw" style="background:linear-gradient(135deg, ${b.land[0]}, ${b.land[2]} 60%, ${b.waterC[0]})"></span>${b.name}</label>`).join('')}</div>
       <h4>難度</h4>
-      <div class="cards">${Object.entries(DIFFICULTY).map(([k, d]) => `<label class="cardopt"><input type="radio" name="diff" value="${k}" ${k === 'normal' ? 'checked' : ''}><b>${d.name}</b><small>${d.unlockAll ? '無限資金・全部解鎖' : fmtMoney(d.money)}</small></label>`).join('')}</div>
+      <div class="cards">${Object.entries(DIFFICULTY).map(([k, d]) => `<label class="cardopt"><input type="radio" name="diff" value="${k}" ${k === 'normal' ? 'checked' : ''}><b>${d.name}</b><small>${d.unlockAll ? '無限資金' : fmtMoney(d.money)}</small></label>`).join('')}</div>
       <h4>地圖種子</h4>
       <div class="row"><input id="ng-seed" type="number" value="${seed}"><button data-m="rand">🎲</button></div>
       <div class="btns end"><button data-m="${first ? 'help' : 'close'}">${first ? '直接遊玩目前地圖' : '取消'}</button>${this.g.hasSave() ? '<button data-m="load">讀取存檔</button>' : ''}<button class="primary" data-m="start">開始建設</button></div>`);
@@ -414,7 +414,7 @@ export class UI {
   showHelp() {
     this.openModal(`<h2>操作說明</h2>
       <div class="help">
-      <p><b>目標</b>：城市會依需求自動成長，居民要上班、購物，工廠要原料、商店要商品，外部連線還有過境車流。打造順暢的路網，讓行程成功、平均車速維持高水準，就能賺取稅收與過路費並解鎖更多道路。</p>
+      <p><b>目標</b>：城市會依需求自動成長，居民要上班、購物，工廠要原料、商店要商品，外部連線還有過境車流。打造順暢的路網，讓行程成功、平均車速維持高水準，就能賺取稅收與過路費，城市也會一路從小村莊成長為大都會。所有道路類型與高度一開始就能使用。</p>
       <ul>
         <li><b>道路（R）</b>：無網格自由鋪設，連續點擊即可延伸；開啟「彎道」可用三點畫出曲線。交會處自動產生路口。</li>
         <li><b>高度</b>：用 <kbd>[</kbd> <kbd>]</kbd> 切換隧道 / 地面 / 高架層，不同高度的道路交叉時不會相連，可建造立體交流道。每升降一層需約 45 公尺坡道。</li>

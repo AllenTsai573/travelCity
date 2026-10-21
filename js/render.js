@@ -1,9 +1,12 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
 import { LANE_W, LEVEL_H, ZONES } from './config.js';
-import { pointAt, offsetPoly, polyCum, clamp } from './util.js';
+import { pointAt, offsetPoly, polyCum, cutPoly, clamp } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
+const ASPHALT = '#46494e';
+// 鋪面道路統一柏油色，銜接處不會出現色差；鄉間小路為碎石色
+const roadColor = T => (T.rank === 0 ? T.color : ASPHALT);
 
 function heatColor(r) {
   r = clamp(r, 0, 1);
@@ -243,47 +246,160 @@ export class Renderer {
         lines.push({ pts: offsetPoly(core, o), c: 'rgba(255,255,255,0.8)', w: 0.14, dash: [3, 5] });
       }
     }
+    for (const m of lines) m.cum = polyCum(m.pts);
     seg._mk = { ver: net.version, lines };
     return lines;
+  }
+
+  // 路段繪製幾何（快取）：
+  // - 依高度切段：坡道下半段畫在地面層、上半段畫在高架層，與相接道路融為一體
+  // - 可變寬度：與較窄道路相接的一端，在路口範圍內平滑收窄
+  roadGeom(seg) {
+    const net = this.game.net;
+    if (seg._rg && seg._rg.ver === net.version) return seg._rg.pieces;
+    const A = net.nodes.get(seg.a), B = net.nodes.get(seg.b);
+    const hw = halfWidth(seg.T), len = seg.len;
+    const endHW = node => {
+      if (node.segs.length !== 2) return hw;
+      const o = net.segs.get(node.segs.find(id => id !== seg.id));
+      return o ? Math.min(hw, halfWidth(o.T)) : hw;
+    };
+    const hwA = endHW(A), hwB = endHW(B);
+    const ta = Math.max(seg.ra, 0.01), tb = Math.max(seg.rb, 0.01);
+    const sm = t => t * t * (3 - 2 * t);
+    const hwAt = t => {
+      let w = hw;
+      if (hwA < hw && t < ta) w = Math.min(w, hwA + (hw - hwA) * sm(t / ta));
+      if (hwB < hw && t > len - tb) w = Math.min(w, hwB + (hw - hwB) * sm((len - t) / tb));
+      return w;
+    };
+    const hA = A.level, hB = B.level;
+    const hAt = t => hA + (hB - hA) * t / len;
+    const cuts = [0, len];
+    if (hA !== hB) {
+      for (let b = Math.min(hA, hB) + 0.5; b < Math.max(hA, hB); b += 1) cuts.push((b - hA) / (hB - hA) * len);
+    }
+    cuts.sort((a, b) => a - b);
+    const marks = this.markings(seg);
+    const coreLen = Math.max(0.01, len - seg.ra - seg.rb);
+    const pieces = [];
+    for (let i = 0; i < cuts.length - 1; i++) {
+      const s0 = cuts[i], s1 = cuts[i + 1];
+      if (s1 - s0 < 0.01) continue;
+      const set = new Set([s0, s1]);
+      for (const c of seg.cum) if (c > s0 && c < s1) set.add(c);
+      const fine = hA !== hB ? 6 : 0;
+      for (let t = s0 + 3; t < s1; t += 3) {
+        if ((hwA < hw && t < ta) || (hwB < hw && t > len - tb) || (fine && t % fine < 3)) set.add(t);
+      }
+      // 高度切點處前後多延伸一點，避免兩段之間出現接縫
+      if (s0 > 0) set.add(Math.max(0, s0 - 0.8));
+      if (s1 < len) set.add(Math.min(len, s1 + 0.8));
+      const ss = [...set].sort((a, b) => a - b);
+      const C = ss.map(t => { const q = pointAt(seg.pts, seg.cum, t); return { x: q.x, y: q.y, w: hwAt(t), h: hAt(t) }; });
+      // 以前後點求法向量，轉角處較平順
+      for (let k = 0; k < C.length; k++) {
+        const a = C[Math.max(0, k - 1)], b = C[Math.min(C.length - 1, k + 1)];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const L = Math.hypot(dx, dy) || 1;
+        C[k].nx = -dy / L; C[k].ny = dx / L;
+      }
+      // 陰影偏移：在高度 0.5（切點）處從 0 開始，與下半段無縫銜接
+      const sh = h => (h <= 0.5 ? 0 : h < 1 ? (h - 0.5) * 2 : h);
+      const poly = (extra, shadow) => {
+        const out = [];
+        for (const c of C) {
+          const ox = shadow ? sh(c.h) * LEVEL_H * 0.55 : 0, oy = shadow ? sh(c.h) * LEVEL_H * 0.85 : 0;
+          out.push({ x: c.x + c.nx * (c.w + extra) + ox, y: c.y + c.ny * (c.w + extra) + oy });
+        }
+        for (let k = C.length - 1; k >= 0; k--) {
+          const c = C[k];
+          const ox = shadow ? sh(c.h) * LEVEL_H * 0.55 : 0, oy = shadow ? sh(c.h) * LEVEL_H * 0.85 : 0;
+          out.push({ x: c.x - c.nx * (c.w + extra) + ox, y: c.y - c.ny * (c.w + extra) + oy });
+        }
+        return out;
+      };
+      const lvm = hAt((s0 + s1) / 2);
+      const lv = lvm >= 0.5 ? Math.round(lvm) : lvm <= -0.5 ? Math.round(lvm) : 0;
+      const f0 = clamp((s0 - seg.ra) / coreLen, 0, 1), f1 = clamp((s1 - seg.ra) / coreLen, 0, 1);
+      const mk = f1 - f0 < 1e-3 ? [] : marks.map(m => {
+        if (f0 <= 0 && f1 >= 1) return m;
+        const ml = m.cum[m.cum.length - 1];
+        return { ...m, pts: cutPoly(m.pts, m.cum, f0 * ml, f1 * ml) };
+      });
+      pieces.push({
+        lv, C, mk,
+        body: poly(0, false), curb: poly(lv > 0 ? 0.6 : 0.4, false),
+        shadow: lv > 0 ? poly(0, true) : null,
+        left: C.map(c => ({ x: c.x + c.nx * c.w, y: c.y + c.ny * c.w })),
+        right: C.map(c => ({ x: c.x - c.nx * c.w, y: c.y - c.ny * c.w })),
+        bbox: seg.bbox, seg,
+      });
+    }
+    seg._rg = { ver: net.version, pieces };
+    return pieces;
+  }
+
+  fillPoly(pts) {
+    const ctx = this.ctx;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // 節點銜接圓：死路為圓頭，兩路相接取較窄寬度，路口取最寬
+  nodeJoint(n) {
+    const net = this.game.net;
+    let max = 0, min = Infinity, col = ASPHALT;
+    for (const sid of n.segs) {
+      const s = net.segs.get(sid);
+      if (!s) continue;
+      const w = halfWidth(s.T);
+      if (w > max) { max = w; col = roadColor(s.T); }
+      min = Math.min(min, w);
+    }
+    if (!max) return null;
+    return { r: n.segs.length === 2 ? min : max, col };
+  }
+
+  vehLevel(vh) {
+    const tr = vh.track;
+    if (tr.kind !== 'lane') return tr.drawLevel;
+    if (tr.h0 === tr.h1) return tr.drawLevel;
+    const h = tr.h0 + (tr.h1 - tr.h0) * clamp(vh.s / tr.len, 0, 1);
+    return h >= 0.5 ? Math.round(h) : h <= -0.5 ? Math.round(h) : 0;
   }
 
   drawNetwork(v) {
     const g = this.game, ctx = this.ctx, net = g.net, z = this.cam.z;
     const byLevel = new Map(DRAW_LEVELS.map(l => [l, []]));
-    for (const s of net.segs.values()) if (this.inView(s.bbox, v)) byLevel.get(s.drawLevel)?.push(s);
+    for (const s of net.segs.values()) {
+      if (!this.inView(s.bbox, v)) continue;
+      for (const pc of this.roadGeom(s)) byLevel.get(pc.lv)?.push(pc);
+    }
     const nodesBy = new Map(DRAW_LEVELS.map(l => [l, []]));
     for (const n of net.nodes.values()) if (n.x > v.x0 && n.x < v.x1 && n.y > v.y0 && n.y < v.y1) nodesBy.get(n.level)?.push(n);
     const vehBy = new Map(DRAW_LEVELS.map(l => [l, []]));
-    for (const vh of g.traffic.vehicles) vehBy.get(vh.track.drawLevel)?.push(vh);
+    for (const vh of g.traffic.vehicles) vehBy.get(this.vehLevel(vh))?.push(vh);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (const L of DRAW_LEVELS) {
-      const segs = byLevel.get(L), nodes = nodesBy.get(L);
-      if (!segs.length && !vehBy.get(L).length) continue;
+      const pieces = byLevel.get(L), nodes = nodesBy.get(L);
+      if (!pieces.length && !nodes.length && !vehBy.get(L).length) continue;
       const tunnel = L < 0;
       if (L > 0) {
-        // 陰影與橋墩
-        // 依各點高度偏移的陰影（坡道陰影逐漸收斂）
-        ctx.strokeStyle = 'rgba(0,0,0,0.28)';
-        for (const s of segs) {
-          ctx.lineWidth = halfWidth(s.T) * 2;
-          const sh = [];
-          for (let t = 0; t <= s.len; t += Math.max(4, s.len / 30)) {
-            const p = pointAt(s.pts, s.cum, t), h = Math.max(0, net.segHeightAt(s, t));
-            sh.push({ x: p.x + h * LEVEL_H * 0.55, y: p.y + h * LEVEL_H * 0.85 });
-          }
-          const pe = s.pts[s.pts.length - 1], he = Math.max(0, net.segHeightAt(s, s.len));
-          sh.push({ x: pe.x + he * LEVEL_H * 0.55, y: pe.y + he * LEVEL_H * 0.85 });
-          this.strokePoly(sh);
-        }
-        for (const s of segs) {
+        // 陰影（依各點高度偏移）與橋墩
+        ctx.fillStyle = 'rgba(0,0,0,0.26)';
+        for (const pc of pieces) this.fillPoly(pc.shadow);
+        ctx.strokeStyle = '#7d7a72';
+        ctx.lineWidth = 2.2;
+        for (const pc of pieces) {
+          const s = pc.seg;
           for (let t = 12; t < s.len - 4; t += 28) {
-            const h = net.segHeightAt(s, t);
-            if (h < 0.4) continue;
-            const p = pointAt(s.pts, s.cum, t);
-            const w = halfWidth(s.T) * 0.7;
-            ctx.strokeStyle = '#7d7a72';
-            ctx.lineWidth = 2.2;
+            if (net.segHeightAt(s, t) < 0.5) continue;
+            const p = pointAt(s.pts, s.cum, t), w = halfWidth(s.T) * 0.7;
             ctx.beginPath();
             ctx.moveTo(p.x - p.dy * w, p.y + p.dx * w);
             ctx.lineTo(p.x + p.dy * w, p.y - p.dx * w);
@@ -292,36 +408,28 @@ export class Renderer {
         }
       }
       ctx.globalAlpha = tunnel ? 0.35 : 1;
-      // 路肩
-      for (const s of segs) {
-        ctx.strokeStyle = tunnel ? '#222' : (L > 0 ? '#9c9a93' : '#6d6a63');
-        ctx.lineWidth = halfWidth(s.T) * 2 + (L > 0 ? 1.2 : 0.8);
-        this.strokePoly(s.pts);
-      }
+      // 路肩（先畫全部路肩，再畫柏油，接縫處不會出現邊線）
+      const curbCol = tunnel ? '#222' : (L > 0 ? '#a3a199' : '#6d6a63');
+      ctx.fillStyle = curbCol;
+      for (const pc of pieces) this.fillPoly(pc.curb);
+      const joints = [];
       for (const n of nodes) {
-        if (n.segs.length < 3) continue;
-        let r = 0;
-        for (const sid of n.segs) { const s = net.segs.get(sid); if (s) r = Math.max(r, halfWidth(s.T)); }
-        ctx.fillStyle = ctx.strokeStyle;
-        ctx.beginPath(); ctx.arc(n.x, n.y, r + 0.4, 0, Math.PI * 2); ctx.fill();
+        const j = this.nodeJoint(n);
+        if (!j) continue;
+        joints.push([n, j]);
+        ctx.fillStyle = curbCol;
+        ctx.beginPath(); ctx.arc(n.x, n.y, j.r + (L > 0 ? 0.6 : 0.4), 0, Math.PI * 2); ctx.fill();
       }
       // 柏油
-      for (const s of segs) {
-        ctx.strokeStyle = s.T.color;
-        ctx.lineWidth = halfWidth(s.T) * 2;
-        this.strokePoly(s.pts);
-      }
-      for (const n of nodes) {
-        if (n.segs.length < 3) continue;
-        let r = 0, col = '#45484d';
-        for (const sid of n.segs) { const s = net.segs.get(sid); if (s && halfWidth(s.T) > r) { r = halfWidth(s.T); col = s.T.color; } }
-        ctx.fillStyle = col;
-        ctx.beginPath(); ctx.arc(n.x, n.y, r - 0.1, 0, Math.PI * 2); ctx.fill();
+      for (const pc of pieces) { ctx.fillStyle = roadColor(pc.seg.T); this.fillPoly(pc.body); }
+      for (const [n, j] of joints) {
+        ctx.fillStyle = j.col;
+        ctx.beginPath(); ctx.arc(n.x, n.y, j.r, 0, Math.PI * 2); ctx.fill();
       }
       // 標線
       if (z > 0.9 && !tunnel) {
-        for (const s of segs) {
-          for (const m of this.markings(s)) {
+        for (const pc of pieces) {
+          for (const m of pc.mk) {
             ctx.strokeStyle = m.c;
             ctx.lineWidth = m.w;
             ctx.lineCap = m.median ? 'butt' : 'round';
@@ -350,10 +458,7 @@ export class Renderer {
         ctx.setLineDash([4, 4]);
         ctx.strokeStyle = '#2a2a2a';
         ctx.lineWidth = 0.6;
-        for (const s of segs) {
-          this.strokePoly(offsetPoly(s.pts, halfWidth(s.T)));
-          this.strokePoly(offsetPoly(s.pts, -halfWidth(s.T)));
-        }
+        for (const pc of pieces) { this.strokePoly(pc.left); this.strokePoly(pc.right); }
         ctx.setLineDash([]);
       }
       ctx.globalAlpha = tunnel ? 0.6 : 1;

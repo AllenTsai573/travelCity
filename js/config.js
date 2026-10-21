@@ -10,24 +10,24 @@ export const ROAD_TYPES = {
   dirt:      { name: '鄉間小路',       short: '小路', fwd: 1, bwd: 1, speed: 30,  rank: 0, cost: 6,  median: 0,   access: true,  color: '#7d7466', unlock: 0 },
   street:    { name: '市區道路',       short: '市區', fwd: 1, bwd: 1, speed: 50,  rank: 1, cost: 12, median: 0,   access: true,  color: '#4a4d52', unlock: 0 },
   oneway1:   { name: '單行道（1 線）', short: '單1', fwd: 1, bwd: 0, speed: 50,  rank: 1, cost: 9,  median: 0,   access: true,  color: '#4a4d52', unlock: 0 },
-  oneway2:   { name: '單行道（2 線）', short: '單2', fwd: 2, bwd: 0, speed: 60,  rank: 2, cost: 18, median: 0,   access: true,  color: '#45484d', unlock: 1 },
+  oneway2:   { name: '單行道（2 線）', short: '單2', fwd: 2, bwd: 0, speed: 60,  rank: 2, cost: 18, median: 0,   access: true,  color: '#45484d', unlock: 0 },
   avenue:    { name: '大道（2+2）',    short: '大道', fwd: 2, bwd: 2, speed: 60,  rank: 2, cost: 28, median: 0.6, access: true,  color: '#45484d', unlock: 0 },
-  boulevard: { name: '林蔭大道（3+3）', short: '林蔭', fwd: 3, bwd: 3, speed: 60,  rank: 2, cost: 42, median: 2.5, access: true,  color: '#43464b', unlock: 1, green: true },
+  boulevard: { name: '林蔭大道（3+3）', short: '林蔭', fwd: 3, bwd: 3, speed: 60,  rank: 2, cost: 42, median: 2.5, access: true,  color: '#43464b', unlock: 0, green: true },
   ramp:      { name: '匝道',           short: '匝道', fwd: 1, bwd: 0, speed: 70,  rank: 2, cost: 20, median: 0,   access: false, color: '#3f4247', unlock: 0 },
-  express:   { name: '快速道路（2+2）', short: '快速', fwd: 2, bwd: 2, speed: 90,  rank: 3, cost: 55, median: 2,   access: false, color: '#3c3f44', unlock: 1 },
-  highway:   { name: '高速公路（3+3）', short: '國道', fwd: 3, bwd: 3, speed: 110, rank: 3, cost: 80, median: 3,   access: false, color: '#3a3d42', unlock: 2 },
-  freeway1:  { name: '單向高速（3 線）', short: '單高', fwd: 3, bwd: 0, speed: 110, rank: 3, cost: 45, median: 0,   access: false, color: '#3a3d42', unlock: 2 },
+  express:   { name: '快速道路（2+2）', short: '快速', fwd: 2, bwd: 2, speed: 90,  rank: 3, cost: 55, median: 2,   access: false, color: '#3c3f44', unlock: 0 },
+  highway:   { name: '高速公路（3+3）', short: '國道', fwd: 3, bwd: 3, speed: 110, rank: 3, cost: 80, median: 3,   access: false, color: '#3a3d42', unlock: 0 },
+  freeway1:  { name: '單向高速（3 線）', short: '單高', fwd: 3, bwd: 0, speed: 110, rank: 3, cost: 45, median: 0,   access: false, color: '#3a3d42', unlock: 0 },
 };
 export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'express', 'highway', 'freeway1'];
 
 // 高度層級：-2 深隧道、-1 路塹/隧道、0 地面、1~3 高架
 export const LEVELS = [
-  { lv: -2, name: '深層隧道', mul: 5.0, unlock: 2 },
+  { lv: -2, name: '深層隧道', mul: 5.0, unlock: 0 },
   { lv: -1, name: '隧道',     mul: 3.5, unlock: 0 },
   { lv: 0,  name: '地面',     mul: 1.0, unlock: 0 },
   { lv: 1,  name: '高架',     mul: 2.5, unlock: 0 },
-  { lv: 2,  name: '高架二層', mul: 3.2, unlock: 1 },
-  { lv: 3,  name: '高架三層', mul: 4.0, unlock: 2 },
+  { lv: 2,  name: '高架二層', mul: 3.2, unlock: 0 },
+  { lv: 3,  name: '高架三層', mul: 4.0, unlock: 0 },
 ];
 export const levelMul = lv => (LEVELS.find(l => l.lv === lv) || LEVELS[2]).mul;
 export const LEVEL_H = 6;           // 每層高度（公尺），用於陰影

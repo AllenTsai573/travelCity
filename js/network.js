@@ -180,6 +180,8 @@ export class Network {
       const c = (d1.x * d2.x + d1.y * d2.y) / ((Math.hypot(d1.x, d1.y) * Math.hypot(d2.x, d2.y)) || 1);
       const sameLanes = s1.T.fwd + s1.T.bwd === s2.T.fwd + s2.T.bwd && s1.T.median === s2.T.median;
       if (sameLanes && c < -0.985) return 0.3;
+      // 車道數不同：拉長銜接區，讓路面逐漸收窄 / 加寬
+      if (!sameLanes) return maxHW * 1.4 + 4;
       return maxHW * 0.9 + 2.5;
     }
     return maxHW + 3;

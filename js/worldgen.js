@@ -79,6 +79,28 @@ export function generateWorld(g, opts = {}) {
   // 接上一條外部高速公路：接到小鎮的大道（優先接大道的端點，高速公路車流直接延續到大道上，不會灌進小街造成塞車）；
   // 直線過不去就試著繞（兩段都可行才鋪）
   const aveCount = n => n.segs.filter(id => net.segs.get(id).type === 'avenue').length;
+  // 高速公路接進小鎮的那條市區道路（從接點沿高速公路方向一路直走）改為林蔭大道（3+3）：
+  // 與高速公路車道數相同，車流進市區時不會因為少一條車道而回堵
+  const boulevardFrom = (e, prev) => {
+    const ids = [];
+    let n = e, dx = e.x - prev.x, dy = e.y - prev.y, L = Math.hypot(dx, dy) || 1;
+    dx /= L; dy /= L;
+    for (let k = 0; k < 40; k++) {
+      // 第一段：接點上的大道（沒有大道才用其他道路）中最順著高速公路方向的；之後沿同一直線往前
+      let best = null, bd = k ? 0.85 : -Infinity;
+      for (const id of n.segs) {
+        const sg = net.segs.get(id);
+        if (ids.includes(id) || sg.type === 'highway' || sg.T.internal || !sg.T.access) continue;
+        const o = net.nodes.get(sg.a === n.id ? sg.b : sg.a), ox = o.x - n.x, oy = o.y - n.y, ol = Math.hypot(ox, oy) || 1;
+        const dot = (ox * dx + oy * dy) / ol + (!k && sg.type === 'avenue' ? 10 : 0);
+        if (dot > bd) { bd = dot; best = { id, o, ox: ox / ol, oy: oy / ol }; }
+      }
+      if (!best) break;
+      ids.push(best.id); n = best.o; dx = best.ox; dy = best.oy;
+    }
+    for (const id of ids) { const sg = net.segs.get(id); if (sg) net.replaceSegment(sg, 'boulevard'); }
+    net.rebuild();
+  };
   for (const o of g.city.outside) {
     const on = net.nodes.get(o.node), s0 = on && net.segs.get(on.segs[0]);
     if (!s0 || s0.type !== 'highway') continue;
@@ -90,7 +112,7 @@ export function generateWorld(g, opts = {}) {
     for (const e of cands) {
       const to = { x: e.x, y: e.y, node: e.id }, from = { x: inner.x, y: inner.y, node: inner.id };
       const direct = net.planRoad(from, to, null, 'highway', 0);
-      if (direct.ok) { net.executeRoad(direct); ok = true; break; }
+      if (direct.ok) { net.executeRoad(direct); ok = true; boulevardFrom(e, inner); break; }
       for (const off of [300, -300, 600, -600]) {
         const mx = (inner.x + e.x) / 2, my = (inner.y + e.y) / 2, L = Math.hypot(e.x - inner.x, e.y - inner.y) || 1;
         const w = { x: mx - (e.y - inner.y) / L * off, y: my + (e.x - inner.x) / L * off };
@@ -98,7 +120,7 @@ export function generateWorld(g, opts = {}) {
         if (!p1.ok || !p2.ok) continue;
         const mid = net.executeRoad(p1);
         const p3 = net.planRoad({ x: mid.x, y: mid.y, node: mid.id }, to, null, 'highway', 0);
-        if (p3.ok) { net.executeRoad(p3); ok = true; }
+        if (p3.ok) { net.executeRoad(p3); ok = true; boulevardFrom(e, mid); }
         break;
       }
       if (ok) break;

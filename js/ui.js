@@ -3,13 +3,19 @@ import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, BIOMES, DIFFICULTY, MILESTONES }
 import { fmtMoney, fmtTime, clamp } from './util.js';
 import { ZONE_COST } from './tools.js';
 import { TEMPLATES, TEMPLATE_ORDER } from './interchange.js';
+import { roadThumb, roundaboutThumb, interchangeThumb } from './thumbs.js';
 
-const TOOLS = [
-  { id: 'select', icon: '🖱️', name: '選取', key: 'V' },
+// 道路、圓環、交流道、升級合併成同一個「道路建設」工具，在副工具列切換
+const BUILD = [
   { id: 'road', icon: '🛣️', name: '道路', key: 'R' },
   { id: 'roundabout', icon: '⭕', name: '圓環', key: 'O' },
   { id: 'interchange', icon: '🔀', name: '交流道', key: 'I' },
   { id: 'upgrade', icon: '⬆️', name: '升級', key: 'U' },
+];
+const isBuild = id => BUILD.some(b => b.id === id);
+const TOOLS = [
+  { id: 'select', icon: '🖱️', name: '選取', key: 'V' },
+  { id: 'build', icon: '🛣️', name: '道路建設', key: 'R' },
   { id: 'junction', icon: '🚦', name: '路口', key: 'J' },
   { id: 'zone', icon: '🏘️', name: '分區', key: 'Z' },
   { id: 'bulldoze', icon: '🚧', name: '拆除', key: 'B' },
@@ -51,9 +57,11 @@ export class UI {
     document.getElementById('btn-menu').onclick = () => this.showMenu();
     this.toolbar.addEventListener('click', e => {
       const b = e.target.closest('[data-tool]');
-      if (b) g.tools.setTool(b.dataset.tool);
+      if (b) g.tools.setTool(b.dataset.tool === 'build' ? (isBuild(g.tools.tool) ? g.tools.tool : this.lastBuild || 'road') : b.dataset.tool);
     });
     this.subbar.addEventListener('click', e => {
+      const m = e.target.closest('[data-mode]');
+      if (m) { g.tools.setTool(m.dataset.mode); return; }
       const b = e.target.closest('[data-sub]');
       if (!b) return;
       const t = g.tools, [k, v] = [b.dataset.sub, b.dataset.v];
@@ -89,14 +97,17 @@ export class UI {
 
   refreshToolbar() {
     const g = this.g, t = g.tools;
-    this.toolbar.innerHTML = TOOLS.map(x => `<button data-tool="${x.id}" class="${t.tool === x.id ? 'on' : ''}" title="${x.name}（${x.key}）"><span class="ic">${x.icon}</span><span>${x.name}</span><kbd>${x.key}</kbd></button>`).join('');
+    if (isBuild(t.tool)) this.lastBuild = t.tool;
+    const on = x => (x.id === 'build' ? isBuild(t.tool) : t.tool === x.id);
+    this.toolbar.innerHTML = TOOLS.map(x => `<button data-tool="${x.id}" class="${on(x) ? 'on' : ''}" title="${x.name}（${x.key}）"><span class="ic">${x.icon}</span><span>${x.name}</span><kbd>${x.key}</kbd></button>`).join('');
     let html = '';
+    if (isBuild(t.tool)) html += `<div class="grp modes">` + BUILD.map(b => `<button data-mode="${b.id}" class="${t.tool === b.id ? 'on' : ''}" title="${b.name}（${b.key}）">${b.icon} ${b.name}<kbd>${b.key}</kbd></button>`).join('') + `</div><div class="brk"></div>`;
     if (t.tool === 'road' || t.tool === 'upgrade') {
       html += `<div class="grp types">` + ROAD_ORDER.map(k => {
         const T = ROAD_TYPES[k], locked = !g.unlocked(T.unlock);
-        const lanes = T.bwd ? `${T.fwd}+${T.bwd}` : `${T.fwd}→`;
-        return `<button data-sub="type" data-v="${k}" class="${t.roadType === k ? 'on' : ''} ${locked ? 'locked' : ''}" title="${T.name}｜${T.speed} km/h｜$${T.cost}/m${T.access ? '' : '｜不可沿線建築'}">
-          <b>${locked ? '🔒' : ''}${T.short}</b><small>${lanes} · ${T.speed}</small></button>`;
+        const lanes = T.bwd ? `${T.fwd}+${T.bwd}` : `單向 ${T.fwd}`;
+        return `<button data-sub="type" data-v="${k}" class="th ${t.roadType === k ? 'on' : ''} ${locked ? 'locked' : ''}" title="${T.name}｜${T.bwd ? '雙向' : '單向'}｜${T.speed} km/h｜$${T.cost}/m${T.access ? '' : '｜不可沿線建築'}">
+          ${roadThumb(k)}<b>${locked ? '🔒' : ''}${T.short}</b><small>${lanes} · ${T.speed}</small></button>`;
       }).join('') + `</div>`;
       if (t.tool === 'road') {
         html += `<div class="grp levels">` + [...LEVELS].reverse().map(L => `<button data-sub="level" data-v="${L.lv}" class="${t.level === L.lv ? 'on' : ''} ${g.unlocked(L.unlock) ? '' : 'locked'}" title="成本 ×${L.mul}">${L.lv > 0 ? '▲' : L.lv < 0 ? '▼' : '■'} ${L.name}</button>`).join('') + `</div>`;
@@ -107,11 +118,11 @@ export class UI {
       html += `<div class="grp">` + ['R', 'C', 'I'].map(z => `<button data-sub="zone" data-v="${z}" class="zone-${z} ${t.zone === z ? 'on' : ''}"><b>${ZONES[z].name}</b><small>${fmtMoney(ZONE_COST[z])}</small></button>`).join('') + `</div>`;
       html += `<div class="hint">在道路旁點擊或拖曳劃設分區。住宅怕工業污染與高速公路噪音。</div>`;
     } else if (t.tool === 'roundabout') {
-      html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="${t.rbR === r ? 'on' : ''}">半徑 ${r} m</button>`).join('') + `</div>`;
+      html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="th ${t.rbR === r ? 'on' : ''}">${roundaboutThumb(r)}<b>半徑 ${r} m</b></button>`).join('') + `</div>`;
       html += `<div class="hint">點擊既有路口將其改建為圓環，或在空地放置圓環。環道車輛擁有路權。</div>`;
     } else if (t.tool === 'interchange') {
       const groups = [...new Set(TEMPLATE_ORDER.map(k => TEMPLATES[k].group))];
-      html += groups.map(gr => `<div class="grp ix"><span class="lbl">${gr}</span>` + TEMPLATE_ORDER.filter(k => TEMPLATES[k].group === gr).map(k => `<button data-sub="ix" data-v="${k}" class="${t.ixType === k ? 'on' : ''}" title="${TEMPLATES[k].desc}"><b>${TEMPLATES[k].name}</b></button>`).join('') + `</div>`).join('');
+      html += groups.map(gr => `<div class="grp ix"><span class="lbl">${gr}</span>` + TEMPLATE_ORDER.filter(k => TEMPLATES[k].group === gr).map(k => `<button data-sub="ix" data-v="${k}" class="th ix ${t.ixType === k ? 'on' : ''}" title="${TEMPLATES[k].desc}">${interchangeThumb(k)}<b>${TEMPLATES[k].name}</b></button>`).join('') + `</div>`).join('');
       html += `<div class="grp"><button data-sub="rot" data-v="-1" title="Q">↺</button><button data-sub="rot" data-v="1" title="E">↻</button></div>`;
       html += `<div class="hint">${TEMPLATES[t.ixType].desc}。移到兩條不同高度道路的交叉處可直接套用；空地上則連主線一起建造。${TEMPLATES[t.ixType].freeOnly || TEMPLATES[t.ixType].tee ? '（此型式只能建在空地）' : ''}</div>`;
     } else if (t.tool === 'junction') {

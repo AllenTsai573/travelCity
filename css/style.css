@@ -47,7 +47,8 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 #demand i.negd { opacity: 0.35; }
 
 /* 底部工具列 */
-#bottom { position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 5; max-width: calc(100vw - 16px); }
+#bottom { position: fixed; left: 8px; right: 8px; bottom: 10px; display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 5; pointer-events: none; }
+#bottom > * { pointer-events: auto; }
 #toolbar { display: flex; gap: 4px; padding: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; max-width: 100%; }
 #toolbar button { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 62px; padding: 5px 6px; background: transparent; border: 1px solid transparent; border-radius: 10px; }
 #toolbar button:hover { background: rgba(255,255,255,0.06); }
@@ -62,6 +63,17 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 #subbar button.on { border-color: var(--acc); background: rgba(90,200,255,0.2); }
 #subbar button.locked { opacity: 0.45; }
 #subbar .levels button { flex-direction: row; font-size: 12px; }
+#subbar .brk { flex-basis: 100%; height: 0; }
+#subbar .modes button { flex-direction: row; gap: 4px; font-size: 13px; padding: 4px 10px; }
+#subbar .modes kbd { font-size: 9px; }
+#subbar button.th { padding: 3px 5px 4px; gap: 1px; }
+#subbar button.th .thumb { display: block; border-radius: 3px; }
+#subbar button.th b { font-size: 12px; }
+#subbar button.ix { width: 76px; }
+#subbar button.ix b { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+#subbar { max-height: 46vh; overflow-y: auto; max-width: min(900px, calc(100vw - 16px)); }
+#subbar .grp.ix { flex-wrap: nowrap; }
+@media (max-width: 900px) { #subbar .grp.ix { flex-wrap: wrap; } }
 #subbar .grp.ix { align-items: center; padding: 2px 6px 2px 4px; border: 1px dashed var(--line); border-radius: 10px; }
 #subbar .grp.ix .lbl { font-size: 11px; color: var(--dim); margin-right: 3px; white-space: nowrap; }
 #subbar .zone-R.on { border-color: var(--R); background: rgba(95,174,104,0.25); }

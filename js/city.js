@@ -134,13 +134,13 @@ export class City {
   }
 
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
-  // 目前人口下分區 zt 的最大地塊格數（0 = 尚未解鎖）
-  maxCells(zt) { return zoneMax(zt, this.unlockPop()); }
+  // 分區 zt 的最大地塊格數（0 = 尚未解鎖）：依人口解鎖的上限；給了臨路路段 seg 時再受道路種類限制（ROAD_TYPES.lotMax）
+  maxCells(zt, seg = null) { return Math.min(zoneMax(zt, this.unlockPop()), (seg && seg.T.lotMax) || Infinity); }
   // 解鎖用的人口：沙盒模式一開始就全部解鎖，其他難度依曾達到的最高人口
   unlockPop() { const d = this.game.diff; return d && d.unlockAll ? Infinity : this.peakPop; }
 
   planStroke(zt, seg, side, u0, u1, rows) {
-    const Z = { max: this.maxCells(zt) };
+    const Z = { max: this.maxCells(zt, seg) };
     if (!Z.max) return [];
     // 起點對齊格線
     const g0 = this.gridStart(seg);
@@ -1058,7 +1058,7 @@ export class City {
     const rng = this.game.rng, pop = this.pop;
     const R = (a, b) => rng.int(a, b);
     // 只用已解鎖的分區與尺寸
-    const fit = o => { const m = this.maxCells(o.zt); return { zt: o.zt, cols: Math.min(o.cols, m), rows: Math.min(o.rows, m) }; };
+    const fit = o => { const m = this.maxCells(o.zt, seg); return { zt: o.zt, cols: Math.min(o.cols, m), rows: Math.min(o.rows, m) }; };
     if (zone === 'R') {
       const zt = this.maxCells('R3') && seg.T.rank >= 2 && rng.chance(0.35) ? 'R3' : this.maxCells('R2') && rng.chance(0.45) ? 'R2' : 'R1';
       return fit(zt === 'R3' ? { zt, cols: R(4, 8), rows: R(4, 7) } : { zt, cols: R(3, 6), rows: R(3, 5) });

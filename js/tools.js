@@ -368,10 +368,12 @@ export class Tools {
         if (this.zStroke) {
           const st = this.zStroke;
           if (st.rect) { this.setTip(`取消分區：${st.rect.cols}×${st.rect.rows} 格`); break; }
-          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1, Z = { name: ZONE_TYPES[this.zone].name, max: this.g.city.maxCells(this.zone) };
+          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1, Z = { name: ZONE_TYPES[this.zone].name, max: this.g.city.maxCells(this.zone, st.seg), zmax: this.g.city.maxCells(this.zone) };
           // 說明是什麼限制了大小：分區最深格數、後方的道路 / 分區 / 建築 / 水域、這段路到路口為止
           const why = [];
-          if (st.rows > Z.max) { const nx = zoneNext(this.zone, this.g.city.unlockPop()); why.push(`${Z.name}目前最深 ${Z.max} 格` + (nx ? `，人口 ${nx[0]} 時放大到 ${nx[1]} 格` : '')); }
+          // 受道路種類限制（小路 6、市區道路 12、大道 18）或依人口解鎖的上限
+          if ((st.rows > Z.max || cols > Z.max) && Z.max < Z.zmax) why.push(`${st.seg.T.name}旁的地塊最大 ${Z.max}×${Z.max} 格（大道 18、林蔭大道不限）`);
+          else if (st.rows > Z.max) { const nx = zoneNext(this.zone, this.g.city.unlockPop()); why.push(`${Z.name}目前最深 ${Z.max} 格` + (nx ? `，人口 ${nx[0]} 時放大到 ${nx[1]} 格` : '')); }
           const want = Math.min(Math.max(2, st.rows), Z.max), short = ok.find(p => p.rows < want);
           if (short) why.push('往內' + (this.g.city.canPlaceLot(st.seg, short.u, short.side, short.cols, short.rows + 1) || '受限'));
           if (st.past) why.push('這段路到路口為止，跨過路口要另外畫');
@@ -515,7 +517,7 @@ export class Tools {
     if (!st) return;
     // 只點一下：依分區給一塊預設大小的地塊
     if (!st.moved && !dragged && this.zone !== 'X') {
-      const cols = Math.min(city.maxCells(this.zone), this.zone === 'R1' || this.zone === 'R2' ? 4 : 6);
+      const cols = Math.min(city.maxCells(this.zone, st.seg), this.zone === 'R1' || this.zone === 'R2' ? 4 : 6);
       const i0 = clamp(st.i0 - Math.floor((cols - 1) / 2), 0, Math.max(0, Math.floor((st.seg.len - st.seg.rb - st.g0) / CELL) - cols));
       st.plan = city.planStroke(this.zone, st.seg, st.side, st.g0 + i0 * CELL, st.g0 + (i0 + cols) * CELL, cols);
     }

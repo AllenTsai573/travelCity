@@ -345,7 +345,7 @@ export class Network {
         const delay = n.control === 'signal' ? 9 : n.control === 'stop' ? 5 : (c.conflicts.length && c.score < maxScore ? 2.5 : 0.2);
         // 死路迴轉：除非沒有其他路線，否則駕駛不會選擇（成本要高於「前方塞住」的繞行加成，
         // 否則停車場出口稍微塞住時，車子會開到旁邊車道的盡頭迴轉再回來）
-        const cost = c.len / c.speed + delay + (c.turn === 'U' ? 300 : 0);
+        const cost = c.len / c.speed + delay + (c.turn === 'U' ? 300 : 0) + (c.pen || 0);
         const L = c.from.link, prev = L.next.get(c.to.link.key);
         if (prev === undefined || cost < prev) L.next.set(c.to.link.key, cost);
       }
@@ -427,11 +427,12 @@ export class Network {
       }
       per.set(inL, cands);
     }
-    // 大型停車場的單向出入口（service1 接一般道路）：只能右進右出，左轉的車改走別條路
+    // 大型停車場 / 停車樓的單向出入口（service1 接一般道路）：盡量右進右出，左轉進出在尋路時加重成本（pen），
+    // 只有沒有別的路時才會左轉（例如停車場在通往地圖邊緣的路上，右轉出去只會離開城市）
     // （左轉進出的車會停在主要道路上等，排隊回堵到出口時整個停車場會卡死）
-    for (const [inL, cands] of per) for (let i = cands.length - 1; i >= 0; i--) {
-      const o = cands[i].outL, oneIn = o.seg.type === 'service1' && !inL.seg.T.internal, oneOut = inL.seg.type === 'service1' && !o.seg.T.internal;
-      if ((oneIn || oneOut) && cands[i].ang < -0.55) cands.splice(i, 1);
+    for (const [inL, cands] of per) for (const c of cands) {
+      const o = c.outL, oneIn = o.seg.type === 'service1' && !inL.seg.T.internal, oneOut = inL.seg.type === 'service1' && !o.seg.T.internal;
+      if ((oneIn || oneOut) && c.ang < -0.55) c.pen = 240;
     }
     // 同一進入方向有多個直行 → 角度最小者為直行，其餘依方向判為左/右轉（分流）
     for (const cands of per.values()) {
@@ -504,7 +505,7 @@ export class Network {
         }
         const straight = c.cls === 'S' || (cands.length === 1 && c.cls !== 'MR' && c.cls !== 'ML' && c.cls !== 'U');
         const pairs = straight && inIdx.length === n && outIdx.length === m ? alignLanes(n, m) : mapLanes(inIdx, outIdx);
-        for (const [i, j] of pairs) conns.push(this.makeConn(node, inL.lanes[i], c.outL.lanes[j], c.cls));
+        for (const [i, j] of pairs) { const cn = this.makeConn(node, inL.lanes[i], c.outL.lanes[j], c.cls); if (c.pen) cn.pen = c.pen; conns.push(cn); }
       }
     }
     node.conns = conns;

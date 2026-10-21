@@ -57,6 +57,8 @@ export class UI {
     document.getElementById('btn-rotr').onclick = () => g.renderer.rotate(Math.PI / 2);
     document.getElementById('btn-grow').onclick = () => { g.autoGrow = !g.autoGrow; this.refreshTop(); };
     document.getElementById('btn-stats').onclick = () => this.showStats();
+    document.getElementById('btn-ms').onclick = () => this.showMilestones();
+    document.getElementById('s-ms').onclick = () => this.showMilestones();
     document.getElementById('btn-menu').onclick = () => this.showMenu();
     this.toolbar.addEventListener('click', e => {
       const b = e.target.closest('[data-tool]');
@@ -130,7 +132,7 @@ export class UI {
         return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''} ${m ? '' : 'locked'}" title="${Z.name}：${m ? `最大 ${m}×${m} 格（每格 6 m）` : `人口達到 ${nx[0]} 才能解鎖`}${nx && m ? `；人口 ${nx[0]} 時放大到 ${nx[1]}×${nx[1]}` : ''}｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>${sub}</small></button>`;
       }).join('')
         + `<button data-sub="zone" data-v="X" class="${t.zone === 'X' ? 'on' : ''}" title="拖曳範圍內的空分區取消"><b>✕ 取消分區</b><small>僅空地</small></button></div>`;
-      html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕高速公路噪音。各分區的最大尺寸隨人口解鎖放大。</div>`;
+      html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕高速公路噪音。各分區的最大尺寸隨人口解鎖放大，也受臨路道路限制：小路 6×6、市區道路 12×12、大道 18×18、林蔭大道不限。</div>`;
     } else if (t.tool === 'roundabout') {
       html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="th ${t.rbR === r ? 'on' : ''}">${roundaboutThumb(r)}<b>半徑 ${r} m</b></button>`).join('') + `</div>`;
       html += `<div class="hint">點擊既有路口將其改建為圓環，或在空地放置圓環。環道車輛擁有路權。</div>`;
@@ -171,11 +173,16 @@ export class UI {
     $('s-day').textContent = `第 ${t.day} 天`;
     $('s-time').textContent = t.clock;
     $('s-ms').textContent = MILESTONES[g.milestone].name;
+    // 稱號下方的進度條：往下一個里程碑的人口進度
+    const msN = MILESTONES[g.milestone + 1], msC = MILESTONES[g.milestone];
+    $('s-msbar').firstChild.style.width = (msN ? clamp((c.peakPop - msC.pop) / (msN.pop - msC.pop), 0, 1) * 100 : 100) + '%';
+    if (this.modalOpen && this.msOpen) this.renderMilestones();
     for (const b of document.querySelectorAll('#speedbtns button')) {
       const s = Number(b.dataset.speed);
       b.classList.toggle('on', s === 0 ? g.paused : !g.paused && g.speed === s);
     }
     $('btn-heat').classList.toggle('on', g.heatmap);
+    $('heatlegend').classList.toggle('hidden', !g.heatmap);
     $('btn-zmap').classList.toggle('on', g.zonemap);
     // 分區圖圖例：各分區的建築數、空地塊數與面積（格）
     $('zonemap').classList.toggle('hidden', !g.zonemap);
@@ -497,6 +504,27 @@ export class UI {
       <p><b>小技巧</b>：高速公路與快速道路沿線不能蓋房子，但適合連接外部連線；匝道路權低於主線，會自動讓路併入。</p>
       </div>
       <div class="btns end"><button data-m="close">了解</button></div>`);
+  }
+
+  // 里程碑進度表：每一階段的人口、解鎖內容與目前進度
+  showMilestones() {
+    this.openModal('<div id="ms-body"></div><div class="btns end"><button data-m="close">關閉</button></div>');
+    this.msOpen = true;
+    this.renderMilestones();
+  }
+  renderMilestones() {
+    const g = this.g, c = g.city, el = document.getElementById('ms-body');
+    if (!el) { this.msOpen = false; return; }
+    const peak = c.peakPop, cur = g.milestone, nx = MILESTONES[cur + 1];
+    const pct = nx ? clamp((peak - MILESTONES[cur].pop) / (nx.pop - MILESTONES[cur].pop), 0, 1) : 1;
+    el.innerHTML = `<h2>城市發展里程碑</h2>
+      <p class="ms-now">目前：<b>${MILESTONES[cur].name}</b>　人口 ${c.pop.toLocaleString()}（最高 ${peak.toLocaleString()}）${g.diff.unlockAll ? '　<small>沙盒模式：分區已全部解鎖</small>' : ''}</p>
+      ${nx ? `<div class="ms-next">下一階段「${nx.name}」還差 ${(nx.pop - peak).toLocaleString()} 人<i class="ms-bar"><i style="width:${(pct * 100).toFixed(1)}%"></i></i></div>` : '<div class="ms-next">已達最高階段 🎉</div>'}
+      <ol class="ms-list">${MILESTONES.map((m, i) => {
+        const done = i <= cur, next = i === cur + 1, p = i === 0 ? 1 : clamp((peak - MILESTONES[i - 1].pop) / (m.pop - MILESTONES[i - 1].pop), 0, 1);
+        return `<li class="${done ? 'done' : next ? 'next' : 'lock'}"><span class="ic">${done ? '✔' : next ? '▶' : '🔒'}</span>
+          <div><b>${m.name}</b><small>人口 ${m.pop.toLocaleString()}</small><div class="ul">解鎖：${m.unlock}</div>${!done ? `<i class="ms-bar"><i style="width:${(p * 100).toFixed(1)}%"></i></i>` : ''}</div></li>`;
+      }).join('')}</ol>`;
   }
 
   showStats() {

@@ -23,7 +23,7 @@
       <div class="stat"><label>失敗/時</label><span id="s-fails">—</span></div>
       <div class="stat"><label>收支/時</label><span id="s-net">—</span></div>
     </div>
-    <div class="clock"><span id="s-day"></span><b id="s-time"></b><span id="s-ms"></span></div>
+    <div class="clock"><span id="s-day"></span><b id="s-time"></b><span id="s-ms" title="城市發展進度（點擊查看各階段解鎖）"></span><i id="s-msbar"><i></i></i></div>
     <div class="speed" id="speedbtns">
       <button data-speed="0" title="暫停（空白鍵）">⏸</button>
       <button data-speed="1.5" title="一般速度（1）">▶</button>
@@ -34,15 +34,17 @@
       <button id="btn-rotl" title="視角左轉 90°（Q）；按住滑鼠中鍵左右拖曳可自由旋轉">⟲</button>
       <button id="btn-rotr" title="視角右轉 90°（E）">⟳</button>
       <button id="btn-tilt" title="切換 55° 斜看 / 正上方俯視（T）">視角</button>
-      <button id="btn-heat" title="壅塞熱圖（H）">熱圖</button>
+      <button id="btn-heat" title="道路擁塞程度：綠（暢通）→ 黃 → 紅（壅塞）（H）">擁塞圖</button>
       <button id="btn-zmap" title="分區圖：每塊地是什麼分區（M）">分區圖</button>
       <button id="btn-grow" title="城市依需求自動長出建築">自動發展</button>
+      <button id="btn-ms" title="城市發展里程碑：各階段人口與解鎖內容">里程碑</button>
       <button id="btn-stats">統計</button>
       <button id="btn-menu">選單</button>
     </div>
   </header>
 
   <div id="zonemap" class="hidden"></div>
+  <div id="heatlegend" class="hidden"><b>道路擁塞程度</b><i class="bar"></i><div class="lbl"><span>暢通</span><span>車多</span><span>壅塞</span></div></div>
   <div id="demand" title="分區需求：住宅 / 商業 / 工業（超過虛線才會蓋房子；自動發展時需求更高才會自動劃新分區）">
     <div class="col"><div class="track"><i id="d-R"></i></div><span>住</span></div>
     <div class="col"><div class="track"><i id="d-C"></i></div><span>商</span></div>

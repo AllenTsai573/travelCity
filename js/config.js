@@ -13,11 +13,11 @@ export const MAP_SIZE = 3600;       // 地圖邊長（公尺）；舊存檔沿�
 
 // 13 種道路類型。rank 越高越有路權；access=false 表示沿線不可建築（封閉式道路）
 export const ROAD_TYPES = {
-  dirt:      { name: '鄉間小路',       short: '小路', fwd: 1, bwd: 1, speed: 30,  rank: 0, cost: 6,  median: 0,   access: true,  color: '#7d7466', unlock: 0 },
-  street:    { name: '市區道路',       short: '市區', fwd: 1, bwd: 1, speed: 50,  rank: 1, cost: 12, median: 0,   access: true,  color: '#4a4d52', unlock: 0 },
-  oneway1:   { name: '單行道（1 線）', short: '單1', fwd: 1, bwd: 0, speed: 50,  rank: 1, cost: 9,  median: 0,   access: true,  color: '#4a4d52', unlock: 0 },
-  oneway2:   { name: '單行道（2 線）', short: '單2', fwd: 2, bwd: 0, speed: 60,  rank: 2, cost: 18, median: 0,   access: true,  color: '#45484d', unlock: 0 },
-  avenue:    { name: '大道（2+2）',    short: '大道', fwd: 2, bwd: 2, speed: 60,  rank: 2, cost: 22, median: 0.6, access: true,  color: '#45484d', unlock: 0 },
+  dirt:      { name: '鄉間小路',       short: '小路', fwd: 1, bwd: 1, speed: 30,  rank: 0, cost: 6,  median: 0,   access: true,  color: '#7d7466', unlock: 0, lotMax: 6 },
+  street:    { name: '市區道路',       short: '市區', fwd: 1, bwd: 1, speed: 50,  rank: 1, cost: 12, median: 0,   access: true,  color: '#4a4d52', unlock: 0, lotMax: 12 },
+  oneway1:   { name: '單行道（1 線）', short: '單1', fwd: 1, bwd: 0, speed: 50,  rank: 1, cost: 9,  median: 0,   access: true,  color: '#4a4d52', unlock: 0, lotMax: 12 },
+  oneway2:   { name: '單行道（2 線）', short: '單2', fwd: 2, bwd: 0, speed: 60,  rank: 2, cost: 18, median: 0,   access: true,  color: '#45484d', unlock: 0, lotMax: 18 },
+  avenue:    { name: '大道（2+2）',    short: '大道', fwd: 2, bwd: 2, speed: 60,  rank: 2, cost: 22, median: 0.6, access: true,  color: '#45484d', unlock: 0, lotMax: 18 },
   boulevard: { name: '林蔭大道（3+3）', short: '林蔭', fwd: 3, bwd: 3, speed: 60,  rank: 2, cost: 34, median: 2.5, access: true,  color: '#43464b', unlock: 0, green: true },
   ramp:      { name: '匝道',           short: '匝道', fwd: 1, bwd: 0, speed: 70,  rank: 2, cost: 12, median: 0,   access: false, color: '#3f4247', unlock: 0 },
   express:   { name: '快速道路（2+2）', short: '快速', fwd: 2, bwd: 2, speed: 90,  rank: 3, cost: 36, median: 2,   access: false, color: '#3c3f44', unlock: 0 },
@@ -31,6 +31,7 @@ export const ROAD_TYPES = {
   service1:  { name: '場內道路（單向）', short: '場內', fwd: 1, bwd: 0, speed: 30,  rank: 0, cost: 0,  median: 0,   access: false, color: '#878a8f', unlock: 0, internal: true },
   freeway4:  { name: '單向高速（4 線）', short: '單高4', fwd: 4, bwd: 0, speed: 110, rank: 3, cost: 36, median: 0,   access: false, color: '#3a3d42', unlock: 0 },
 };
+// lotMax：沿這種道路劃設的地塊最大格數（小路 6、市區道路 12、大道 18；林蔭大道不限，只看分區本身的上限）
 export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'ramp2', 'express', 'highway', 'highway4', 'freeway1', 'freeway4'];
 
 // 高度層級：-2 深隧道、-1 路塹/隧道、0 地面、1~3 高架

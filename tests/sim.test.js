@@ -166,12 +166,12 @@ assert(g2.traffic.vehicles.length > 0, '讀檔後車流恢復');
     net = gz.net; c = gz.city; S = gz.terrain.size / 2;
     for (const yy of [S + 500, S - 500, S + 800, S - 800]) for (const xx of [S - 1000, S - 400, S + 200]) {
       if (p || !dry(gz, xx, yy)) continue;
-      const q = net.planRoad({ x: xx, y: yy }, { x: xx + 800, y: yy }, null, 'avenue', 0);
+      const q = net.planRoad({ x: xx, y: yy }, { x: xx + 800, y: yy }, null, 'boulevard', 0);
       if (q.ok && !q.crossings.length) { p = q; y = yy; x0 = xx; }
     }
   }
   net.executeRoad(p); net.rebuild();
-  const seg = [...net.segs.values()].find(s => s.type === 'avenue' && Math.abs(s.pts[0].y - y) < 1 && s.len > 600);
+  const seg = [...net.segs.values()].find(s => s.type === 'boulevard' && Math.abs(s.pts[0].y - y) < 1 && s.len > 600);
   const money = gz.money;
   const r1 = c.planStroke('R1', seg, 1, seg.ra, seg.ra + 30 * 6, 20);
   assert(r1.length === 3 && r1.every(l => l.cols === 10 && l.rows <= 12), `低密度住宅：30 格切成 3 塊 10 格、深度不超過 12（${r1.map(l => l.cols + '×' + l.rows).join(' ')}）`);
@@ -283,6 +283,15 @@ for (const b of ['desert', 'snow', 'tropical']) {
   for (let h = 0; h < 36; h++) { step(gt, 150); maxRun = Math.max(maxRun, gt.traffic.vehicles.filter(v => v.bus).length); }
   assert(gt.transit.lines.length >= 1 && gt.transit.lines.every(l => l.stops.length >= 2), `自動規劃公車路線（${gt.transit.lines.map(l => l.name + ' ' + l.stops.length + ' 站').join('、')}）`);
   assert(maxRun >= 1 && gt.transit.stats.riders > 0, `公車開出並載到乘客（最多 ${maxRun} 輛，累計 ${gt.transit.stats.riders} 人）`);
+}
+
+// 臨路道路限制地塊大小：小路 6、市區道路 12、大道 18、林蔭大道不限（只看分區上限）
+{
+  const gr = makeGame(4321, 'temperate', 'sandbox', true), C = gr.city;
+  const long = t => [...gr.net.segs.values()].filter(x => x.type === t && x.len > 160).sort((a, b) => b.len - a.len)[0];
+  const deepest = (t, zt) => { const s = long(t); if (!s) return null; const g0 = C.gridStart(s); return Math.max(...[1, -1].flatMap(sd => C.planStroke(zt, s, sd, g0, g0 + 30 * 6, 30).map(p => Math.max(p.cols, p.rows)))); };
+  const st = deepest('street', 'R3'), av = deepest('avenue', 'R3');
+  assert(st === 12 && av === 18 && C.maxCells('R3', { T: { lotMax: 6 } }) === 6 && C.maxCells('C', { T: {} }) === 30, `市區道路旁最大 12 格（${st}）、大道 18 格（${av}）、小路 6 格、林蔭大道不限`);
 }
 
 // 依人口解鎖：開局只有低密度、商業、工業（最大 12×12），人口越多解鎖越多

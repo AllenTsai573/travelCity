@@ -31,13 +31,14 @@ function curbColor(h) {
   return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',')})`;
 }
 
-function heatColor(r) {
-  r = clamp(r, 0, 1);
-  if (r > 0.75) return '#3ccf5a';
-  if (r > 0.5) return '#c6d93b';
-  if (r > 0.3) return '#f2a33a';
-  if (r > 0.15) return '#e8572e';
-  return '#b01e2e';
+// 擁塞程度 0（暢通，綠）→ 0.5（車多，黃）→ 0.75（橘）→ 1（壅塞，紅），中間連續漸層
+const HEAT_STOPS = [[0, [60, 207, 90]], [0.5, [242, 198, 59]], [0.75, [238, 122, 46]], [1, [200, 30, 50]]];
+export function heatColor(c) {
+  c = clamp(c, 0, 1);
+  let i = 1;
+  while (i < HEAT_STOPS.length - 1 && c > HEAT_STOPS[i][0]) i++;
+  const [a0, ca] = HEAT_STOPS[i - 1], [a1, cb] = HEAT_STOPS[i], t = (c - a0) / (a1 - a0);
+  return `rgb(${ca.map((v, k) => Math.round(v + (cb[k] - v) * t)).join(',')})`;
 }
 
 export class Renderer {
@@ -1341,21 +1342,44 @@ export class Renderer {
     ctx.setLineDash([]);
   }
 
+  // 道路擁塞程度：每個行車方向沿路切成一小段一小段（放大時約 12 m），依段內車子的減速程度與車多不多算出 0～1，
+  // 隨時間平滑（不會一閃一閃），相鄰小段之間用漸層銜接，路口前排隊回堵時會看到由紅漸漸轉綠
   drawHeatmap(v) {
-    const ctx = this.ctx, net = this.game.net;
+    const ctx = this.ctx, net = this.game.net, z = this.cam.z, BIN = Math.max(12, 30 / z);
     ctx.lineCap = 'butt';
     for (const s of net.segs.values()) {
-      if (!this.inView(s.bbox, v)) continue;
+      if (!this.inView(s.bbox, v) || !s.core || s.core.length < 2) continue;
+      const len = polyCum(s.core).at(-1);
+      if (len < 1) continue;
       for (const dir of [1, -1]) {
         const L = s.links[dir];
         if (!L.lanes.length) continue;
-        const ratio = L.count ? L.flow / L.limit : 1;
-        ctx.strokeStyle = heatColor(ratio);
-        ctx.globalAlpha = L.count ? 0.85 : 0.35;
-        const n = L.lanes.length;
+        const nb = Math.max(1, Math.round(len / BIN)), slow = new Array(nb).fill(0), cnt = new Array(nb).fill(0);
+        // 依路段 a → b 的位置分段（往 -1 方向行駛的車道位置要反過來）
+        for (const lane of L.lanes) for (const w of lane.vehs) {
+          const t = clamp(w.s / lane.len, 0, 0.9999), i = Math.floor((dir > 0 ? t : 0.9999 - t) * nb);
+          slow[i] += clamp(1 - w.v / Math.max(1, lane.speed), 0, 1); cnt[i]++;
+        }
+        const fit = L.lanes.length * (len / nb) / 7;   // 這一小段塞滿時大約幾台車
+        if (!L.heat || L.heat.length !== nb) L.heat = new Array(nb).fill(0);
+        const h = L.heat;
+        for (let i = 0; i < nb; i++) {
+          const occ = clamp(cnt[i] / fit, 0, 1), tgt = cnt[i] ? clamp(slow[i] / cnt[i] * (0.45 + 0.55 * occ) + occ * 0.35, 0, 1) : 0;
+          h[i] += (tgt - h[i]) * 0.06;
+        }
+        const n = L.lanes.length, off = s.T.bwd === 0 ? 0 : dir * ((s.T.median || 0) / 2 + n * LANE_W / 2);
+        const pts = offsetPoly(s.core, off), pc = polyCum(pts), pl = pc.at(-1);
         ctx.lineWidth = n * LANE_W * 0.8;
-        const off = s.T.bwd === 0 ? 0 : dir * ((s.T.median || 0) / 2 + n * LANE_W / 2);
-        this.strokePoly(offsetPoly(s.core, off));
+        ctx.globalAlpha = 0.88;
+        const at = i => h[clamp(i, 0, nb - 1)];
+        for (let i = 0; i < nb; i++) {
+          const piece = cutPoly(pts, pc, pl * i / nb, pl * (i + 1) / nb);
+          if (piece.length < 2) continue;
+          const c0 = (at(i - 1) + at(i)) / 2, c1 = (at(i) + at(i + 1)) / 2, p0 = piece[0], p1 = piece.at(-1);
+          if (Math.abs(c0 - c1) < 0.02) ctx.strokeStyle = heatColor((c0 + c1) / 2);
+          else { const gr = ctx.createLinearGradient(p0.x, p0.y, p1.x, p1.y); gr.addColorStop(0, heatColor(c0)); gr.addColorStop(1, heatColor(c1)); ctx.strokeStyle = gr; }
+          this.strokePoly(piece);
+        }
       }
     }
     ctx.globalAlpha = 1;

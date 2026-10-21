@@ -162,3 +162,25 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 #zonemap .zr span { flex: 1; }
 #zonemap .zr small, #zonemap .dim { color: var(--dim); font-size: 11px; }
 #zonemap .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+/* 擁塞圖圖例：綠 → 黃 → 橘 → 紅 */
+#heatlegend { position: fixed; right: 8px; bottom: 96px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; z-index: 4; font-size: 12px; width: 200px; display: flex; flex-direction: column; gap: 4px; }
+#heatlegend.hidden { display: none; }
+#heatlegend .bar { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, rgb(60,207,90) 0%, rgb(242,198,59) 50%, rgb(238,122,46) 75%, rgb(200,30,50) 100%); }
+#heatlegend .lbl { display: flex; justify-content: space-between; color: var(--dim); font-size: 11px; }
+/* 城市稱號下方的里程碑進度條與里程碑進度表 */
+#s-ms { cursor: pointer; text-decoration: underline dotted; }
+#s-msbar { display: block; width: 64px; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.12); margin-top: 2px; overflow: hidden; }
+#s-msbar > i, .ms-bar > i { display: block; height: 100%; background: linear-gradient(90deg, #4fb3ff, #3ccf5a); border-radius: inherit; }
+.ms-bar { display: block; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.1); margin-top: 6px; overflow: hidden; }
+.ms-now { margin: 4px 0 8px; }
+.ms-next { margin-bottom: 10px; font-size: 13px; }
+.ms-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
+.ms-list li { display: flex; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.ms-list li.done { opacity: 0.75; }
+.ms-list li.next { border-color: #4fb3ff; background: rgba(79,179,255,0.08); }
+.ms-list li.lock { opacity: 0.6; }
+.ms-list .ic { width: 18px; text-align: center; }
+.ms-list li > div { flex: 1; }
+.ms-list b { margin-right: 8px; }
+.ms-list small { color: var(--dim); }
+.ms-list .ul { font-size: 12px; color: var(--dim); margin-top: 2px; }

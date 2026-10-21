@@ -29,8 +29,19 @@ function startTangent(lane) {
   return { x: p.dx, y: p.dy };
 }
 
-// 匯入車道在出口車道的右側或左側（以位置判斷）
-function mergeSide(inL, outL) {
+// 支路（匝道）在主線的右側或左側：取支路離開節點一段距離（最多 150 m）處的實際路線來判斷
+// （車道端點可能還壓在主線路面上，用它判斷會出錯）
+function sideOf(node, branchSeg, mainLane, atStart) {
+  const atA = branchSeg.a === node.id;
+  const d = Math.min(150, branchSeg.len * 0.5);
+  const q = pointAt(branchSeg.pts, branchSeg.cum, atA ? d : branchSeg.len - d);
+  // 以主線中心線（節點）為基準，而不是偏在一側的車道
+  const p = { x: node.x, y: node.y };
+  const t = atStart ? startTangent(mainLane) : endTangent(mainLane);
+  return (q.x - p.x) * -t.y + (q.y - p.y) * t.x > 0 ? 1 : -1;
+}
+function mergeSide(inL, outL, node) {
+  if (node) return sideOf(node, inL.seg, outL.lanes[0], true) > 0 ? 'MR' : 'ML';
   const o = outL.lanes[0], p = o.pts[0], t = startTangent(o);
   const q = inL.lanes[0].pts[inL.lanes[0].pts.length - 1];
   return (q.x - p.x) * -t.y + (q.y - p.y) * t.x > 0 ? 'MR' : 'ML';
@@ -430,11 +441,8 @@ export class Network {
       }
       for (const [inL, cands] of per) for (const c of cands) {
         const inMain = main.has(inL.seg), outMain = main.has(c.outL.seg);
-        if (!inMain && outMain) c.cls = mergeSide(inL, c.outL);
-        else if (inMain && !outMain) {
-          const lane = inL.lanes[0], p = lane.pts[lane.pts.length - 1], t = endTangent(lane), q = c.outL.lanes[0].pts[0];
-          c.cls = (q.x - p.x) * -t.y + (q.y - p.y) * t.x > 0 ? 'R' : 'L';
-        }
+        if (!inMain && outMain) c.cls = mergeSide(inL, c.outL, node);
+        else if (inMain && !outMain) c.cls = sideOf(node, c.outL.seg, inL.lanes[0], false) > 0 ? 'R' : 'L';
       }
     }
     // 封閉式雙向道路（快速道路 / 高速公路）：其他道路只能接同側車道，
@@ -622,7 +630,7 @@ export class Network {
   planRoad(a, b, ctrl, typeKey, level, opts = {}) {
     const T = ROAD_TYPES[typeKey];
     const g = this.game, terrain = g.terrain;
-    const res = { ok: false, reason: '', cost: 0, a, b, ctrl, typeKey, crossings: [], demolish: [] };
+    const res = { ok: false, reason: '', cost: 0, a, b, ctrl, typeKey, crossings: [], demolish: [], ring: !!opts.ring };
     const hOf = s => {
       if (s.node) return this.nodes.get(s.node).level;
       if (s.seg) {
@@ -752,7 +760,7 @@ export class Network {
       const exists = [...this.segs.values()].some(s => ((s.a === p.n.id && s.b === q.n.id) || (s.b === p.n.id && s.a === q.n.id)) &&
         Math.abs(s.len - (q.s - p.s)) < 3 && Math.hypot(pointAt(s.pts, s.cum, s.len / 2).x - mid.x, pointAt(s.pts, s.cum, s.len / 2).y - mid.y) < 3);
       if (exists) continue;
-      made.push(this.addSegment(p.n, q.n, plan.typeKey, piece));
+      made.push(this.addSegment(p.n, q.n, plan.typeKey, piece, { ring: plan.ring }));
     }
     if (g.city) for (const b of plan.demolish) g.city.removeBuilding(b);
     for (const s of made) {
@@ -760,7 +768,8 @@ export class Network {
     }
     g.spend(plan.cost);
     this.rebuild();
-    this.checkOneWay(made);
+    // 一次建造多條路（交流道）時，等全部完成再檢查
+    if (this.deferOneWay) this.deferOneWay.push(...made); else this.checkOneWay(made);
     return nB;
   }
 

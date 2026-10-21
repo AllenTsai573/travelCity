@@ -278,7 +278,7 @@ export class Tools {
       }
       case 'interchange': {
         const t = TEMPLATES[this.ixType];
-        const cr = findCrossing(net, m.x, m.y, 80);
+        const cr = t.freeOnly || t.tee ? null : findCrossing(net, m.x, m.y, 80);
         const fr = cr ? frameFromCrossing(net, cr)
           : { ok: true, x: m.x, y: m.y, ux: Math.cos(this.ixAngle), uy: Math.sin(this.ixAngle), M: t.M, C: t.C, snap: false };
         const pv = fr.ok ? previewTemplate(this.ixType, fr) : null;

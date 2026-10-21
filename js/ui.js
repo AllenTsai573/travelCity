@@ -110,9 +110,10 @@ export class UI {
       html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="${t.rbR === r ? 'on' : ''}">半徑 ${r} m</button>`).join('') + `</div>`;
       html += `<div class="hint">點擊既有路口將其改建為圓環，或在空地放置圓環。環道車輛擁有路權。</div>`;
     } else if (t.tool === 'interchange') {
-      html += `<div class="grp">` + TEMPLATE_ORDER.map(k => `<button data-sub="ix" data-v="${k}" class="${t.ixType === k ? 'on' : ''}" title="${TEMPLATES[k].desc}"><b>${TEMPLATES[k].name}</b></button>`).join('') + `</div>`;
+      const groups = [...new Set(TEMPLATE_ORDER.map(k => TEMPLATES[k].group))];
+      html += groups.map(gr => `<div class="grp ix"><span class="lbl">${gr}</span>` + TEMPLATE_ORDER.filter(k => TEMPLATES[k].group === gr).map(k => `<button data-sub="ix" data-v="${k}" class="${t.ixType === k ? 'on' : ''}" title="${TEMPLATES[k].desc}"><b>${TEMPLATES[k].name}</b></button>`).join('') + `</div>`).join('');
       html += `<div class="grp"><button data-sub="rot" data-v="-1" title="Q">↺</button><button data-sub="rot" data-v="1" title="E">↻</button></div>`;
-      html += `<div class="hint">${TEMPLATES[t.ixType].desc}。移到兩條不同高度道路的交叉處可直接套用；空地上則連主線一起建造。</div>`;
+      html += `<div class="hint">${TEMPLATES[t.ixType].desc}。移到兩條不同高度道路的交叉處可直接套用；空地上則連主線一起建造。${TEMPLATES[t.ixType].freeOnly || TEMPLATES[t.ixType].tee ? '（此型式只能建在空地）' : ''}</div>`;
     } else if (t.tool === 'junction') {
       html += `<div class="hint">點擊路口：切換紅綠燈 / 全向停車 / 讓路標誌，調整時相，並可逐條編輯車道連接。</div>`;
     } else if (t.tool === 'bulldoze') {
@@ -339,8 +340,8 @@ export class UI {
       case 'reverse': { const ns = net.replaceSegment(o, o.type, true); net.rebuild(); this.select({ type: 'segment', obj: ns }); break; }
       case 'ctl':
         if (ds.v === 'signal' && o.control !== 'signal') {
-          if (!g.canAfford(1500)) { g.notify('資金不足（紅綠燈 $1,500）', 'warn'); return; }
-          g.spend(1500);
+          if (!g.canAfford(500)) { g.notify('資金不足（紅綠燈 $500）', 'warn'); return; }
+          g.spend(500);
         }
         o.control = ds.v;
         net.rebuild();

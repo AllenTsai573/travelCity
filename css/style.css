@@ -62,6 +62,8 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 #subbar button.on { border-color: var(--acc); background: rgba(90,200,255,0.2); }
 #subbar button.locked { opacity: 0.45; }
 #subbar .levels button { flex-direction: row; font-size: 12px; }
+#subbar .grp.ix { align-items: center; padding: 2px 6px 2px 4px; border: 1px dashed var(--line); border-radius: 10px; }
+#subbar .grp.ix .lbl { font-size: 11px; color: var(--dim); margin-right: 3px; white-space: nowrap; }
 #subbar .zone-R.on { border-color: var(--R); background: rgba(95,174,104,0.25); }
 #subbar .zone-C.on { border-color: var(--C); background: rgba(75,143,208,0.25); }
 #subbar .zone-I.on { border-color: var(--I); background: rgba(207,154,53,0.25); }

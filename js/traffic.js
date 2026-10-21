@@ -149,7 +149,8 @@ export class Traffic {
     const lane = v.track;
     if (!lane || lane.kind !== 'lane') { v.needRoute = true; return false; }
     const net = this.net, L = lane.link, dest = v.trip.to;
-    if (dest.seg === L.seg.id && net.segUToLaneS(lane, dest.u) > v.s + 2) {
+    // 目的地就在目前車道前方（含即將抵達）：維持原路線，不要重新規劃成繞一圈回來
+    if (dest.seg === L.seg.id && net.segUToLaneS(lane, dest.u) >= v.s - 0.5) {
       v.route = [L.key]; v.ri = 0; v.nextConn = null; v.lost = false;
       return true;
     }

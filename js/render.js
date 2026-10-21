@@ -264,7 +264,7 @@ export class Renderer {
         ctx.lineCap = 'round';
       }
       for (const it of items) {
-        if (!detail && (it.t === 'line' || it.car || (it.t === 'circle' && it.h < 2 && !it.tree))) continue;
+        if (!detail && (it.t === 'line' || it.car || it.umb || (it.t === 'circle' && it.h < 2 && !it.tree))) continue;
         if (it.rank !== undefined ? it.indoor || !(b.slotOcc && b.slotOcc[it.rank]) : it.slot !== undefined && it.slot > occ) continue;
         if (it.car && detail) {
           // 停著的車與路上的車同樣畫法（顏色是實際停進來的那輛車）
@@ -303,6 +303,14 @@ export class Renderer {
           if (z > 1.2) { ctx.fillStyle = '#fff'; ctx.font = 'bold 2.2px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(it.text, p.x, p.y - H - 1.05); ctx.textBaseline = 'alphabetic'; }
           continue;
         }
+        if (it.umb) {
+          // 人行道上的咖啡座陽傘：立柱＋傘面
+          const p = P(it.u, it.v), H = it.h * 0.5;
+          ctx.fillStyle = '#6b6f75'; ctx.fillRect(p.x - 0.08, p.y - H, 0.16, H);
+          ctx.fillStyle = it.c; ctx.beginPath(); ctx.arc(p.x, p.y - H, it.r, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.12; ctx.stroke();
+          continue;
+        }
         if (it.t === 'circle' && it.tree) {
           // 樹：樹冠離地（往上抬），下緣較暗、左上方受光
           const p = P(it.u, it.v), H = detail ? it.h * 0.35 : 0, rr = it.r;
@@ -325,7 +333,15 @@ export class Renderer {
           }
           ctx.fillStyle = col;
           ctx.beginPath(); ctx.arc(p.x, p.y - H, it.r, 0, Math.PI * 2); ctx.fill();
-          if (H) { ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.3; ctx.stroke(); }
+          if (H) {
+            ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 0.3; ctx.stroke();
+            // 儲槽 / 筒倉頂：浮頂的內圈與中央通氣口
+            if (!it.stack && it.r > 1.8 && z > 1.2) {
+              ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 0.2;
+              ctx.beginPath(); ctx.arc(p.x, p.y - H, it.r * 0.72, 0, Math.PI * 2); ctx.stroke();
+              ctx.fillStyle = shade(col, 0.7); ctx.beginPath(); ctx.arc(p.x, p.y - H, Math.min(0.6, it.r * 0.12), 0, Math.PI * 2); ctx.fill();
+            }
+          }
           if (it.stack && detail && b.happy > 0.4 && !b.abandoned) {
             ctx.fillStyle = 'rgba(225,225,225,0.35)';
             const t = (g.time * 0.6 + b.id) % 6;
@@ -346,53 +362,32 @@ export class Renderer {
             const L = Math.hypot(ox, oy) || 1;
             ctx.fillStyle = shade(it.wall || col, (it.wall ? 0.9 : 0.74) + 0.14 * (-ox / L));
             ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.lineTo(q.x, q.y - H); ctx.lineTo(p.x, p.y - H); ctx.closePath(); ctx.fill();
-            // 每層樓一排窗（約 3 m 一層，畫面上壓縮成 1.5 m）
-            if (z > 1.6 && H > 2.2 && !it.ridge) {
-              ctx.strokeStyle = it.glass ? 'rgba(210,235,255,0.55)' : 'rgba(40,52,64,0.38)';
-              ctx.lineWidth = Math.min(0.7, H / 12);
-              ctx.beginPath();
-              for (let f = 1.0; f < H - 0.4; f += 1.5) { ctx.moveTo(p.x + (q.x - p.x) * 0.06, p.y - f + (q.y - p.y) * 0.06); ctx.lineTo(q.x - (q.x - p.x) * 0.06, q.y - f - (q.y - p.y) * 0.06); }
-              ctx.stroke();
-            }
-            // 透天厝：朝南的牆畫門與窗
-            if (it.ridge && z > 2 && oy / L > 0.5 && !b.abandoned) {
-              const W = (u, h) => ({ x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u - h });
-              ctx.fillStyle = 'rgba(70,90,110,0.75)';
-              for (const f of [0.2, 0.72]) { const a0 = W(f, H * 0.75), a1 = W(f + 0.14, H * 0.4); ctx.fillRect(Math.min(a0.x, a1.x), a0.y, Math.abs(a1.x - a0.x) || 0.6, a1.y - a0.y); }
-              ctx.fillStyle = '#7a5a43';
-              const d0 = W(0.45, H * 0.62), d1 = W(0.56, 0);
-              ctx.fillRect(Math.min(d0.x, d1.x), d0.y, Math.abs(d1.x - d0.x) || 0.6, d1.y - d0.y);
-            }
+            if (z > 1.6 && H > 1.4) this.wallWindows(it, p, q, H, oy / L, b.abandoned, i === 0);
             // 牆腳的暗線，讓建物「站」在地上
             ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.35;
             ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
           }
         }
         const up = pts => pts.map(p => ({ x: p.x, y: p.y - H }));
-        if (H && it.ridge) {
-          // 斜屋頂：兩面不同明暗，屋脊再抬高一點
-          const rH = Math.min(1.3, (it.ridge === 'u' ? it.v1 - it.v0 : it.u1 - it.u0) * 0.16);
-          const halves = it.ridge === 'u'
-            ? [[P(it.u0, it.v0), P(it.u1, it.v0), P(it.u1, (it.v0 + it.v1) / 2), P(it.u0, (it.v0 + it.v1) / 2), -1], [P(it.u0, it.v1), P(it.u1, it.v1), P(it.u1, (it.v0 + it.v1) / 2), P(it.u0, (it.v0 + it.v1) / 2), 1]]
-            : [[P(it.u0, it.v0), P(it.u0, it.v1), P((it.u0 + it.u1) / 2, it.v1), P((it.u0 + it.u1) / 2, it.v0), -1], [P(it.u1, it.v0), P(it.u1, it.v1), P((it.u0 + it.u1) / 2, it.v1), P((it.u0 + it.u1) / 2, it.v0), 1]];
-          for (const [a1, a2, r2, r1, sgn] of halves) {
-            const fx = (it.ridge === 'u' ? nx : tx) * sgn, fy = (it.ridge === 'u' ? ny : ty) * sgn;
-            ctx.fillStyle = shade(col, 1 - 0.16 * fx - 0.12 * fy);
-            quad([{ x: a1.x, y: a1.y - H }, { x: a2.x, y: a2.y - H }, { x: r2.x, y: r2.y - H - rH }, { x: r1.x, y: r1.y - H - rH }]);
-            ctx.fill();
-          }
-          continue;
-        }
+        if (H && it.roof === 'saw') { this.sawRoof(it, col, H, P, b, quad); continue; }
+        if (H && it.roof) { this.pitchedRoof(it, col, H, P, b, quad, z); continue; }
         quad(up(c));
         ctx.fillStyle = col;
         ctx.fill();
         if (!detail || it.car || !it.h) continue;
         ctx.strokeStyle = 'rgba(0,0,0,0.28)'; ctx.lineWidth = 0.3; ctx.stroke();
-        // 平屋頂的女兒牆與屋頂設備
-        if (H > 2 && z > 0.9) {
+        // 平屋頂的女兒牆、天窗與屋頂設備
+        if (H > 2 && z > 0.9 && !it.box) {
           const ins = 0.9;
           quad(up(box(it.u0 + ins, it.v0 + ins, it.u1 - ins, it.v1 - ins)));
           ctx.strokeStyle = shade(col, 0.82); ctx.lineWidth = 0.45; ctx.stroke();
+          // 天窗：沿短邊方向、每 9 m 一條採光帶
+          if (it.sky && z > 1.2) {
+            ctx.fillStyle = 'rgba(200,222,236,0.7)';
+            const du = it.u1 - it.u0, dv = it.v1 - it.v0;
+            if (du >= dv) { for (let u = it.u0 + 5; u + 1.8 < it.u1 - 4; u += 9) { quad(up(box(u, it.v0 + 2.5, u + 1.8, it.v1 - 2.5))); ctx.fill(); } }
+            else for (let w2 = it.v0 + 5; w2 + 1.8 < it.v1 - 4; w2 += 9) { quad(up(box(it.u0 + 2.5, w2, it.u1 - 2.5, w2 + 1.8))); ctx.fill(); }
+          }
           if (it.units && !b.abandoned) {
             const n = it.units, du = (it.u1 - it.u0), dv = (it.v1 - it.v0);
             for (let k = 0; k < n; k++) {
@@ -405,19 +400,106 @@ export class Renderer {
           }
         }
         if (it.canopy) { quad(up(box(it.u0, it.v0, it.u1, it.v0 + 1))); ctx.fillStyle = it.canopy; ctx.fill(); quad(up(box(it.u0, it.v1 - 1, it.u1, it.v1))); ctx.fill(); }
-        const Pu = (u, w) => { const p = P(u, w); return { x: p.x, y: p.y - H }; };
-        ctx.beginPath();
-        if (z > 1.4 && (it.grid || it.stripes)) {
-          const du = it.grid === 'v' || it.stripes === 'v' ? 0 : it.stripes ? 4 : 3, dv = it.grid === 'u' || it.stripes === 'u' ? 0 : it.stripes ? 4 : 3;
-          if (du) for (let u = it.u0 + du; u < it.u1 - 0.5; u += du) { const a = Pu(u, it.v0), e = Pu(u, it.v1); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
-          if (dv) for (let w = it.v0 + dv; w < it.v1 - 0.5; w += dv) { const a = Pu(it.u0, w), e = Pu(it.u1, w); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
-        }
-        ctx.lineWidth = 0.25; ctx.stroke();
         if (b.abandoned) continue;
         if (it.awning) { quad(up(box(it.u0, it.v0, it.u1, it.v0 + 1.2))); ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill(); }
         if (it.stripe) { quad(up(box(it.u0 + 3, it.v0 + 1.5, it.u0 + Math.min(18, (it.u1 - it.u0) * 0.4), it.v0 + 4.5))); ctx.fillStyle = it.stripe; ctx.fill(); }
         if (it.docks) { ctx.fillStyle = '#5b5f64'; for (let u = it.u0 + 2; u < it.u1 - 3; u += 5) { quad(box(u, it.v0 - 1.2, u + 3, it.v0)); ctx.fill(); } }
       }
+    }
+  }
+
+  // 朝鏡頭牆面的窗：玻璃帷幕每層一條反光帶；一般建物一格格直立窗；臨街（front）的一樓店面為櫥窗＋遮陽棚；住宅加一扇門
+  wallWindows(it, p, q, H, facing, abandoned, front) {
+    const ctx = this.ctx, z = this.cam.z;
+    const W = (t, h) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t - h });
+    const pg = (t0, t1, h0, h1) => { const a = W(t0, h0), b = W(t1, h0), c = W(t1, h1), d = W(t0, h1); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.closePath(); };
+    if (it.glass) {
+      ctx.strokeStyle = 'rgba(210,235,255,0.55)'; ctx.lineWidth = Math.min(0.7, H / 12);
+      ctx.beginPath();
+      for (let f = 1.0; f < H - 0.4; f += 1.5) { const a = W(0.06, f), e = W(0.94, f); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); }
+      ctx.stroke();
+      return;
+    }
+    if (!it.win || abandoned) return;
+    const L = Math.hypot(q.x - p.x, q.y - p.y), n = Math.floor(L / 2.6);
+    if (n < 1) return;
+    // 每層樓約 3 m，畫面上壓縮成 1.5 m
+    const floors = Math.max(1, Math.floor((H - 0.3) / 1.5)), shop = it.shop && front;
+    ctx.fillStyle = 'rgba(52,66,86,0.6)';
+    ctx.beginPath();
+    for (let f = shop ? 1 : 0; f < floors; f++) for (let k = 0; k < n; k++) pg((k + 0.33) / n, (k + 0.67) / n, 0.45 + f * 1.5, 1.15 + f * 1.5);
+    if (shop) for (let k = 0; k < n; k++) pg((k + 0.1) / n, (k + 0.9) / n, 0.1, 0.95);
+    ctx.fill();
+    if (shop) { ctx.fillStyle = it.shop; ctx.beginPath(); pg(0.02, 0.98, 1.0, 1.3); ctx.fill(); }
+    if (it.door && facing > 0.5 && z > 2) { ctx.fillStyle = '#6e4f3a'; ctx.beginPath(); pg(0.46, 0.46 + Math.min(0.2, 1.1 / L), 0, 1.0); ctx.fill(); }
+  }
+
+  // 斜屋頂：簷口（外框，高度 H）往內收到屋脊 / 屋頂平台（高度 H + rH）
+  // gable 雙坡（兩端是山牆）、hip 四坡、mansard 折線屋頂（陡坡＋平頂）；煙囪與太陽能板畫在屋面上
+  pitchedRoof(it, col, H, P, b, quad, z) {
+    const ctx = this.ctx, du = it.u1 - it.u0, dv = it.v1 - it.v0;
+    const along = it.ridge || (du >= dv ? 'u' : 'v'), s = along === 'u' ? dv : du;
+    let ku, kv, rH;
+    if (it.roof === 'mansard') { ku = kv = Math.min(2.4, Math.min(du, dv) * 0.16); rH = Math.min(2.2, s * 0.14); }
+    else {
+      const k = it.roof === 'hip' ? s / 2 : 0;
+      ku = along === 'u' ? Math.min(k, du / 2) : du / 2;
+      kv = along === 'u' ? dv / 2 : Math.min(k, dv / 2);
+      rH = Math.min(4.5, s * 0.3);
+    }
+    const o = [[it.u0, it.v0], [it.u1, it.v0], [it.u1, it.v1], [it.u0, it.v1]];
+    const ii = [[it.u0 + ku, it.v0 + kv], [it.u1 - ku, it.v0 + kv], [it.u1 - ku, it.v1 - kv], [it.u0 + ku, it.v1 - kv]];
+    const N = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const lift = (q, h) => { const p = P(q[0], q[1]); return { x: p.x, y: p.y - h }; };
+    const faces = [];
+    for (let e = 0; e < 4; e++) {
+      const wx = N[e][0] * b.tx + N[e][1] * b.nx, wy = N[e][0] * b.ty + N[e][1] * b.ny;
+      // 這一面往內收的距離為 0：垂直的山牆
+      faces.push({ wx, wy, wall: (e % 2 ? ku : kv) < 0.01, pts: [lift(o[e], H), lift(o[(e + 1) % 4], H), lift(ii[(e + 1) % 4], H + rH), lift(ii[e], H + rH)] });
+    }
+    // 由北往南畫；背向鏡頭的山牆不畫
+    faces.sort((p, q) => p.wy - q.wy);
+    for (const f of faces) {
+      if (f.wall) { if (f.wy <= 0.05) continue; ctx.fillStyle = shade(it.wall || col, 0.9 - 0.14 * f.wx); }
+      else ctx.fillStyle = shade(col, 1 - 0.2 * f.wx - 0.16 * f.wy);
+      quad(f.pts); ctx.fill();
+    }
+    if (it.roof === 'mansard') { quad(ii.map(q => lift(q, H + rH))); ctx.fillStyle = shade(col, 1.15); ctx.fill(); }
+    if (b.abandoned || z < 1.1) return;
+    // 太陽能板：朝南的屋面
+    if (it.solar) {
+      const f = faces.filter(x => !x.wall).reduce((a, x) => (x.wy > a.wy ? x : a));
+      const [a, e, c, d] = f.pts, at = (s0, t) => { const ox = a.x + (e.x - a.x) * s0, oy = a.y + (e.y - a.y) * s0, ix = d.x + (c.x - d.x) * s0, iy = d.y + (c.y - d.y) * s0; return { x: ox + (ix - ox) * t, y: oy + (iy - oy) * t }; };
+      quad([at(0.22, 0.18), at(0.78, 0.18), at(0.78, 0.7), at(0.22, 0.7)]); ctx.fillStyle = '#2c3e5a'; ctx.fill();
+    }
+    // 煙囪：屋脊旁、北側屋面上
+    if (it.chimney !== undefined && it.roof !== 'mansard') {
+      const cu = along === 'u' ? it.u0 + ku + (du - 2 * ku) * it.chimney : it.u0 + du * 0.3;
+      const cv = along === 'u' ? it.v0 + dv * 0.3 : it.v0 + kv + (dv - 2 * kv) * it.chimney;
+      const p = lift([cu, cv], H + rH * 0.6);
+      ctx.fillStyle = '#8e4f3c'; ctx.fillRect(p.x - 0.45, p.y - 1.5, 0.9, 1.5);
+      ctx.fillStyle = '#5a3a2e'; ctx.fillRect(p.x - 0.45, p.y - 1.9, 0.9, 0.4);
+    }
+  }
+
+  // 鋸齒屋頂（舊式工廠）：沿畫面上下方向每 7 m 一道斜面，北低南高，南側是垂直的採光窗（朝鏡頭才看得到）
+  sawRoof(it, col, H, P, b, quad) {
+    const ctx = this.ctx, rH = 1.8, T = 7;
+    // 沿著哪個軸切齒：選在畫面上比較接近南北向的那一軸
+    const alongU = Math.abs(b.ty) >= Math.abs(b.ny), sg = Math.sign(alongU ? b.ty : b.ny) || 1;
+    const t0 = alongU ? it.u0 : it.v0, t1 = alongU ? it.u1 : it.v1, w0 = alongU ? it.v0 : it.u0, w1 = alongU ? it.v1 : it.u1;
+    const lift = (t, w, h) => { const p = alongU ? P(t, w) : P(w, t); return { x: p.x, y: p.y - h }; };
+    const teeth = [];
+    for (let a = t0; a < t1 - 0.5; a += T) teeth.push([a, Math.min(t1, a + T)]);
+    // 北端到南端：sg > 0 時 t 越大越南
+    if (sg < 0) { teeth.reverse(); for (const x of teeth) x.reverse(); }
+    for (const [n, s] of teeth) {
+      ctx.fillStyle = shade(col, 1.06);
+      quad([lift(n, w0, H), lift(n, w1, H), lift(s, w1, H + rH), lift(s, w0, H + rH)]); ctx.fill();
+      ctx.fillStyle = '#8fa9bd';
+      quad([lift(s, w0, H + rH), lift(s, w1, H + rH), lift(s, w1, H), lift(s, w0, H)]); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 0.2;
+      const a = lift(s, w0, H + rH), e = lift(s, w1, H + rH); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(e.x, e.y); ctx.stroke();
     }
   }
 

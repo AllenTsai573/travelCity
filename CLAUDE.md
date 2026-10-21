@@ -46,7 +46,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 | `routing.js` | 以有向路段為節點的 Dijkstra，成本為即時壅塞下的行駛時間。`findRoute(net, starts, dest, allow)`：設有閘門（`seg.gate = 建築 id`）的場內道路只讓 `allow` 名單內（起訖建築）的車通過 |
 | `traffic.js` | 車輛代理人：IDM 跟車、MOBIL 式換道、路口通行判斷、重新選路；停車（見下方「停車系統」）；`fx` 為停車 / 出車動畫清單 |
 | `city.js` | 地塊與建築、行程產生、滿意度、需求、成長（`developLots`、`autoGrow`）、財務、場內道路（`driveway`、`buildParkRoads`、`connectPark`、閘門）、停車位（`slotsOf`、`slotOcc`、`slotRes`）、存讀檔 |
-| `lotart.js` | 地塊上的建築圖形（純函式 `lotArt(b)` → `{ base, items, slots }`，以地塊區域座標 u/v 產生），city 與 render 都會用；停車位順序（`it.rank`）兩邊一致 |
+| `lotart.js` | 地塊上的建築圖形（歐洲風格；純函式 `lotArt(b)` → `{ base, items, slots }`，以地塊區域座標 u/v 產生），city 與 render 都會用；停車位順序（`it.rank`）兩邊一致。rect 的 `roof`（gable / hip / mansard / saw，沒有就是平屋頂）、`ridge`、`wall`、`win`、`shop`、`chimney`、`solar`、`sky` 由 `render.js` 的 `pitchedRoof` / `sawRoof` / `wallWindows` 畫出；`deco`（樹籬、陽傘）不算建物 |
 | `render.js` | Canvas 2D：地形烘焙層、建築（斜投影立體：牆面、斜屋頂、陰影從底部投射、樹）、多層道路（路面切成高度段、路肩漸層、標線、路口幾何 `jointGeom`）、車輛（`carBody`）、停車動畫 `drawArrivals`、閘門、號誌、熱圖、路口編輯器 |
 | `interchange.js` | 16 種交流道模板（`TEMPLATES`、`TEMPLATE_ORDER`）：以「主線沿 +x、橫交道路沿 y」的區域座標設計（靠右行駛），`Path` 烏龜式路徑、`fitCornerRamp` 自動貼合外側匝道、高度剖面 `prof`；先在複製路網試建再正式建造；整組價格 `interchangePrice()` 介於 $45,000～$60,000 |
 | `thumbs.js` | 工具列縮圖 SVG（道路斷面含行車方向、圓環、交流道平面） |

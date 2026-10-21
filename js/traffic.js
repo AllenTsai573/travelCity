@@ -577,7 +577,7 @@ export class Traffic {
     }
   }
 
-  // 停車 / 出車的路徑：三次貝茲曲線，起點沿車道方向、終點沿車位方向（車頭朝前開進 / 開出），約 4.5 m/s
+  // 停車 / 出車的路徑：三次貝茲曲線，起點沿車道方向、終點沿車位方向（車頭朝前開進 / 開出），約 5.5 m/s
   parkPath(p, sl, v, arrive, b = null, idx = null) {
     const dx = sl.x - p.x, dy = sl.y - p.y, dist = Math.hypot(dx, dy) || 1;
     let ax = sl.ax, ay = sl.ay;
@@ -586,8 +586,8 @@ export class Traffic {
     const pts = arrive
       ? [{ x: p.x, y: p.y }, { x: p.x + p.dx * k0, y: p.y + p.dy * k0 }, { x: sl.x - ax * k1, y: sl.y - ay * k1 }, { x: sl.x, y: sl.y }]
       : [{ x: sl.x, y: sl.y }, { x: sl.x + ax * k1, y: sl.y + ay * k1 }, { x: p.x - p.dx * k0, y: p.y - p.dy * k0 }, { x: p.x, y: p.y }];
-    // 開出時車子已在車道上等，限制在 5 秒內以免擋到後面的車
-    const dur = clamp(dist * 1.25 / 3, 2.5, arrive ? 15 : 5);
+    // 開出時車子已在車道上等，限制在 3 秒內以免擋到後面的車
+    const dur = clamp(dist * 1.2 / 5.5, 1.2, arrive ? 7 : 3);
     return { pts, dur, t: 0, color: v.color, len: v.len, w: v.w, truck: v.truck, arrive, b, idx, indoor: !!sl.indoor };
   }
 

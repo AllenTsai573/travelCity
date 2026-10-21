@@ -22,7 +22,7 @@ export const ROAD_TYPES = {
   ramp2:     { name: '雙線匝道',        short: '匝2', fwd: 2, bwd: 0, speed: 70,  rank: 2, cost: 20, median: 0,   access: false, color: '#3f4247', unlock: 0 },
   highway4:  { name: '高速公路（4+4）', short: '國道4', fwd: 4, bwd: 4, speed: 110, rank: 3, cost: 65, median: 3,  access: false, color: '#3a3d42', unlock: 0 },
   // 園區 / 停車場內的場內道路（由建築自動產生，不在工具列中）
-  service:   { name: '場內道路',       short: '場內', fwd: 1, bwd: 1, speed: 20,  rank: 0, cost: 0,  median: 0,   access: false, color: '#878a8f', unlock: 0, internal: true },
+  service:   { name: '場內道路',       short: '場內', fwd: 1, bwd: 1, speed: 30,  rank: 0, cost: 0,  median: 0,   access: false, color: '#878a8f', unlock: 0, internal: true },
   freeway4:  { name: '單向高速（4 線）', short: '單高4', fwd: 4, bwd: 0, speed: 110, rank: 3, cost: 36, median: 0,   access: false, color: '#3a3d42', unlock: 0 },
 };
 export const ROAD_ORDER = ['dirt', 'street', 'oneway1', 'oneway2', 'avenue', 'boulevard', 'ramp', 'ramp2', 'express', 'highway', 'highway4', 'freeway1', 'freeway4'];

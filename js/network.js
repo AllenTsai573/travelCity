@@ -1,7 +1,7 @@
 // 道路網路：節點、路段、車道、路口車道連接、號誌、建造與拆除
 import {
   polyCum, pointAt, cutPoly, offsetPoly, cubicPts, quadPts, polyIntersections, closestOnPoly,
-  polyBBox, bboxOverlap, clamp, dist,
+  polyBBox, bboxOverlap, clamp, dist, arcCurve,
 } from './util.js';
 import { ROAD_TYPES, LANE_W, SLOPE_LEN, levelMul } from './config.js';
 
@@ -278,26 +278,8 @@ export class Network {
     const P0 = from.pts[from.pts.length - 1], P3 = to.pts[0];
     const t0 = endTangent(from), t3 = startTangent(to);
     const d = Math.hypot(P3.x - P0.x, P3.y - P0.y);
-    let pts;
     const ang = Math.acos(clamp(t0.x * t3.x + t0.y * t3.y, -1, 1));
-    if (d < 0.05) pts = [{ x: P0.x, y: P0.y }, { x: P3.x + t3.x * 0.02, y: P3.y + t3.y * 0.02 }];
-    else {
-      // 控制柄長度：轉彎時取進出車道方向線的交點，依轉角近似圓弧（90° 時為 0.552R），
-      // 不會外拋或在出口處勾回；近乎直行（含換車道的 S 形）則用弦長的 0.4 倍
-      let k0 = d * 0.4, k1 = d * 0.4;
-      if (turn === 'U') k0 = k1 = Math.max(d * 0.9, LANE_W * 1.6);
-      else if (ang > 0.2) {
-        const dx = P3.x - P0.x, dy = P3.y - P0.y;
-        const den = t0.x * t3.y - t0.y * t3.x;
-        const a = (dx * t3.y - dy * t3.x) / den, b = (t0.x * dy - t0.y * dx) / den;
-        if (a > 0.1 && b > 0.1) {
-          const f = (4 / 3) * Math.tan(ang / 4) / Math.tan(ang / 2);
-          k0 = Math.min(a * f, d); k1 = Math.min(b * f, d);
-        }
-      }
-      const est = d + (k0 + k1) * 0.3;
-      pts = cubicPts(P0, { x: P0.x + t0.x * k0, y: P0.y + t0.y * k0 }, { x: P3.x - t3.x * k1, y: P3.y - t3.y * k1 }, P3, clamp(Math.ceil(est / 0.75), 8, 48));
-    }
+    const pts = arcCurve(P0, t0, P3, t3, 8, 0.75, turn === 'U');
     const cum = polyCum(pts);
     let vmax = Math.min(from.speed, to.speed);
     if (ang > 0.15 && d > 0.05) {

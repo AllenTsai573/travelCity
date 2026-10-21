@@ -1,6 +1,6 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
 import { LANE_W, LEVEL_H, ZONES } from './config.js';
-import { pointAt, offsetPoly, polyCum, cutPoly, clamp } from './util.js';
+import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
@@ -217,11 +217,9 @@ export class Renderer {
     }
   }
 
-  // 道路標線快取
-  markings(seg) {
-    const net = this.game.net;
-    if (seg._mk && seg._mk.ver === net.version) return seg._mk.lines;
-    const T = seg.T, core = seg.core, lines = [];
+  // 道路標線（依道路類型沿中心線產生）
+  markingsFor(T, core) {
+    const lines = [];
     const hw = halfWidth(T);
     lines.push({ pts: offsetPoly(core, hw - 0.75), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
     lines.push({ pts: offsetPoly(core, -(hw - 0.75)), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null });
@@ -233,9 +231,7 @@ export class Renderer {
       } else if ((T.median || 0) > 0) {
         lines.push({ pts: offsetPoly(core, 0.18), c: '#e8c547', w: 0.15, dash: null });
         lines.push({ pts: offsetPoly(core, -0.18), c: '#e8c547', w: 0.15, dash: null });
-      } else if (T.rank === 0) {
-        // 鄉間小路無標線
-      } else {
+      } else if (T.rank !== 0) {
         lines.push({ pts: core, c: '#e8c547', w: 0.15, dash: [3, 3] });
       }
     }
@@ -247,78 +243,73 @@ export class Renderer {
       }
     }
     for (const m of lines) m.cum = polyCum(m.pts);
-    seg._mk = { ver: net.version, lines };
     return lines;
   }
 
+  markings(seg) {
+    const net = this.game.net;
+    if (!seg._mk || seg._mk.ver !== net.version) seg._mk = { ver: net.version, lines: this.markingsFor(seg.T, seg.core) };
+    return seg._mk.lines;
+  }
+
+  // 由中心線點（含寬度 w）建立路面多邊形
+  static withNormals(C) {
+    for (let k = 0; k < C.length; k++) {
+      const a = C[Math.max(0, k - 1)], b = C[Math.min(C.length - 1, k + 1)];
+      const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+      C[k].nx = -dy / L; C[k].ny = dx / L;
+    }
+    return C;
+  }
+  static ribbonPoly(C, extra, shadowOf) {
+    const out = [];
+    for (const c of C) {
+      const o = shadowOf ? shadowOf(c.h) : 0;
+      out.push({ x: c.x + c.nx * (c.w + extra) + o * 0.55, y: c.y + c.ny * (c.w + extra) + o * 0.85 });
+    }
+    for (let k = C.length - 1; k >= 0; k--) {
+      const c = C[k], o = shadowOf ? shadowOf(c.h) : 0;
+      out.push({ x: c.x - c.nx * (c.w + extra) + o * 0.55, y: c.y - c.ny * (c.w + extra) + o * 0.85 });
+    }
+    return out;
+  }
+
   // 路段繪製幾何（快取）：
+  // - 只畫到車道起訖處，路口 / 轉折處由 jointGeom 補上
   // - 依高度切段：坡道下半段畫在地面層、上半段畫在高架層，與相接道路融為一體
-  // - 可變寬度：與較窄道路相接的一端，在路口範圍內平滑收窄
   roadGeom(seg) {
     const net = this.game.net;
     if (seg._rg && seg._rg.ver === net.version) return seg._rg.pieces;
     const A = net.nodes.get(seg.a), B = net.nodes.get(seg.b);
     const hw = halfWidth(seg.T), len = seg.len;
-    const endHW = node => {
-      if (node.segs.length !== 2) return hw;
-      const o = net.segs.get(node.segs.find(id => id !== seg.id));
-      return o ? Math.min(hw, halfWidth(o.T)) : hw;
-    };
-    const hwA = endHW(A), hwB = endHW(B);
-    const ta = Math.max(seg.ra, 0.01), tb = Math.max(seg.rb, 0.01);
-    const sm = t => t * t * (3 - 2 * t);
-    const hwAt = t => {
-      let w = hw;
-      if (hwA < hw && t < ta) w = Math.min(w, hwA + (hw - hwA) * sm(t / ta));
-      if (hwB < hw && t > len - tb) w = Math.min(w, hwB + (hw - hwB) * sm((len - t) / tb));
-      return w;
-    };
+    const ta = A.segs.length >= 2 ? seg.ra : 0, tb = B.segs.length >= 2 ? seg.rb : 0;
     const hA = A.level, hB = B.level;
     const hAt = t => hA + (hB - hA) * t / len;
-    const cuts = [0, len];
+    const pieces = [];
+    seg._rg = { ver: net.version, pieces };
+    if (len - ta - tb < 0.05) return pieces;
+    const cuts = [ta, len - tb];
     if (hA !== hB) {
-      for (let b = Math.min(hA, hB) + 0.5; b < Math.max(hA, hB); b += 1) cuts.push((b - hA) / (hB - hA) * len);
+      for (let b = Math.min(hA, hB) + 0.5; b < Math.max(hA, hB); b += 1) {
+        const t = (b - hA) / (hB - hA) * len;
+        if (t > ta && t < len - tb) cuts.push(t);
+      }
     }
     cuts.sort((a, b) => a - b);
     const marks = this.markings(seg);
     const coreLen = Math.max(0.01, len - seg.ra - seg.rb);
-    const pieces = [];
+    const shadowOf = h => (h <= 0.5 ? 0 : h < 1 ? (h - 0.5) * 2 : h) * LEVEL_H;
     for (let i = 0; i < cuts.length - 1; i++) {
       const s0 = cuts[i], s1 = cuts[i + 1];
       if (s1 - s0 < 0.01) continue;
       const set = new Set([s0, s1]);
       for (const c of seg.cum) if (c > s0 && c < s1) set.add(c);
-      const fine = hA !== hB ? 6 : 0;
-      for (let t = s0 + 3; t < s1; t += 3) {
-        if ((hwA < hw && t < ta) || (hwB < hw && t > len - tb) || (fine && t % fine < 3)) set.add(t);
-      }
-      // 高度切點處前後多延伸一點，避免兩段之間出現接縫
-      if (s0 > 0) set.add(Math.max(0, s0 - 0.8));
-      if (s1 < len) set.add(Math.min(len, s1 + 0.8));
+      if (hA !== hB) for (let t = s0 + 6; t < s1; t += 6) set.add(t);
+      // 與相鄰段 / 路口稍微重疊，避免接縫
+      if (s0 > 0) set.add(Math.max(0, s0 - (i === 0 ? 0.3 : 0.8)));
+      if (s1 < len) set.add(Math.min(len, s1 + (i === cuts.length - 2 ? 0.3 : 0.8)));
       const ss = [...set].sort((a, b) => a - b);
-      const C = ss.map(t => { const q = pointAt(seg.pts, seg.cum, t); return { x: q.x, y: q.y, w: hwAt(t), h: hAt(t) }; });
-      // 以前後點求法向量，轉角處較平順
-      for (let k = 0; k < C.length; k++) {
-        const a = C[Math.max(0, k - 1)], b = C[Math.min(C.length - 1, k + 1)];
-        let dx = b.x - a.x, dy = b.y - a.y;
-        const L = Math.hypot(dx, dy) || 1;
-        C[k].nx = -dy / L; C[k].ny = dx / L;
-      }
-      // 陰影偏移：在高度 0.5（切點）處從 0 開始，與下半段無縫銜接
-      const sh = h => (h <= 0.5 ? 0 : h < 1 ? (h - 0.5) * 2 : h);
-      const poly = (extra, shadow) => {
-        const out = [];
-        for (const c of C) {
-          const ox = shadow ? sh(c.h) * LEVEL_H * 0.55 : 0, oy = shadow ? sh(c.h) * LEVEL_H * 0.85 : 0;
-          out.push({ x: c.x + c.nx * (c.w + extra) + ox, y: c.y + c.ny * (c.w + extra) + oy });
-        }
-        for (let k = C.length - 1; k >= 0; k--) {
-          const c = C[k];
-          const ox = shadow ? sh(c.h) * LEVEL_H * 0.55 : 0, oy = shadow ? sh(c.h) * LEVEL_H * 0.85 : 0;
-          out.push({ x: c.x - c.nx * (c.w + extra) + ox, y: c.y - c.ny * (c.w + extra) + oy });
-        }
-        return out;
-      };
+      const C = Renderer.withNormals(ss.map(t => { const q = pointAt(seg.pts, seg.cum, t); return { x: q.x, y: q.y, w: hw, h: hAt(t) }; }));
       const lvm = hAt((s0 + s1) / 2);
       const lv = lvm >= 0.5 ? Math.round(lvm) : lvm <= -0.5 ? Math.round(lvm) : 0;
       const f0 = clamp((s0 - seg.ra) / coreLen, 0, 1), f1 = clamp((s1 - seg.ra) / coreLen, 0, 1);
@@ -328,15 +319,14 @@ export class Renderer {
         return { ...m, pts: cutPoly(m.pts, m.cum, f0 * ml, f1 * ml) };
       });
       pieces.push({
-        lv, C, mk,
-        body: poly(0, false), curb: poly(lv > 0 ? 0.6 : 0.4, false),
-        shadow: lv > 0 ? poly(0, true) : null,
+        lv, mk, col: roadColor(seg.T),
+        body: Renderer.ribbonPoly(C, 0), curb: Renderer.ribbonPoly(C, lv > 0 ? 0.6 : 0.4),
+        shadow: lv > 0 ? Renderer.ribbonPoly(C, 0, shadowOf) : null,
         left: C.map(c => ({ x: c.x + c.nx * c.w, y: c.y + c.ny * c.w })),
         right: C.map(c => ({ x: c.x - c.nx * c.w, y: c.y - c.ny * c.w })),
-        bbox: seg.bbox, seg,
+        seg,
       });
     }
-    seg._rg = { ver: net.version, pieces };
     return pieces;
   }
 
@@ -349,22 +339,97 @@ export class Renderer {
     ctx.fill();
   }
 
-  // 節點銜接圓：死路為圓頭，兩路相接取較窄寬度，路口取最寬
-  nodeJoint(n) {
+  // 節點處的路面：
+  // - 死路：圓頭
+  // - 兩路相接（轉折 / 寬窄變化）：沿圓弧的連續路面，同類道路的分隔島與標線一路延續
+  // - 三路以上（路口、匝道匯入 / 分出）：各路端點的凸包 + 每條車道連接的路面帶，形狀貼合實際行車軌跡
+  jointGeom(n) {
     const net = this.game.net;
-    let max = 0, min = Infinity, col = ASPHALT, ringW = 0;
-    for (const sid of n.segs) {
-      const s = net.segs.get(sid);
-      if (!s) continue;
-      const w = halfWidth(s.T);
-      if (w > max) { max = w; col = roadColor(s.T); }
-      min = Math.min(min, w);
-      if (s.ring) ringW = Math.max(ringW, w);
+    if (n._jg && n._jg.ver === net.version) return n._jg.j;
+    const segs = n.segs.map(id => net.segs.get(id)).filter(Boolean);
+    let j = null;
+    const widest = segs.reduce((a, s) => (!a || halfWidth(s.T) > halfWidth(a.T) ? s : a), null);
+    if (segs.length === 1) {
+      j = { kind: 'cap', r: halfWidth(segs[0].T), col: roadColor(segs[0].T) };
+    } else if (segs.length >= 2) {
+      const ends = segs.map(s => {
+        const atA = s.a === n.id, core = s.core, cl = s.coreLen;
+        const d = Math.min(3, cl * 0.5);
+        const P = atA ? core[0] : core[core.length - 1];
+        const q = pointAt(core, s.coreCum, atA ? d : cl - d);
+        let tx = P.x - q.x, ty = P.y - q.y;
+        const L = Math.hypot(tx, ty) || 1;
+        return { s, P, t: { x: tx / L, y: ty / L }, hw: halfWidth(s.T) };
+      });
+      // 兩端之間的連續路面帶（沿圓弧，寬度平滑變化；同類道路時標線延續）
+      const strip = (e1, e2) => {
+        const t3 = { x: -e2.t.x, y: -e2.t.y };
+        const arc = arcCurve(e1.P, e1.t, e2.P, t3, 6, 1.0);
+        const pts = [{ x: e1.P.x - e1.t.x * 0.3, y: e1.P.y - e1.t.y * 0.3 }, ...arc, { x: e2.P.x + t3.x * 0.3, y: e2.P.y + t3.y * 0.3 }];
+        const cum = polyCum(pts), tot = cum[cum.length - 1] || 1;
+        const sm = t => t * t * (3 - 2 * t);
+        const C = Renderer.withNormals(pts.map((p, i) => ({ x: p.x, y: p.y, w: e1.hw + (e2.hw - e1.hw) * sm(clamp(cum[i] / tot, 0, 1)), h: n.level })));
+        return {
+          body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, n.level > 0 ? 0.6 : 0.4),
+          mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc) : [],
+        };
+      };
+      if (segs.length === 2) {
+        j = { kind: 'hub', col: roadColor(widest.T), strips: [strip(ends[0], ends[1])], hull: null, ribbons: [] };
+      } else {
+        // 找出直通的主線（同一條路穿過節點）
+        const pairs = [], used = new Set();
+        const ringEnds = ends.filter(e => e.s.ring);
+        if (ringEnds.length === 2) { pairs.push([ringEnds[0], ringEnds[1]]); ringEnds.forEach(e => used.add(e)); }
+        const cand = [];
+        for (let a = 0; a < ends.length; a++) for (let b = a + 1; b < ends.length; b++) {
+          const st = -(ends[a].t.x * ends[b].t.x + ends[a].t.y * ends[b].t.y);
+          if (st > 0.906) cand.push({ a: ends[a], b: ends[b], st });
+        }
+        cand.sort((p, q) => q.st - p.st);
+        for (const c of cand) if (!used.has(c.a) && !used.has(c.b)) { pairs.push([c.a, c.b]); used.add(c.a); used.add(c.b); }
+        const others = ends.filter(e => !used.has(e));
+        const ring = ringEnds.length > 0;
+        // 匝道匯入 / 分出：其餘道路都以小角度貼著主線
+        const rampJunction = !ring && pairs.length === 1 && others.length > 0 &&
+          others.every(o => Math.abs(o.t.x * pairs[0][0].t.x + o.t.y * pairs[0][0].t.y) > 0.766);
+        let hull = null;
+        if (!ring && !rampJunction) {
+          const edge = [];
+          for (const e of ends) {
+            const nx = -e.t.y, ny = e.t.x;
+            edge.push({ x: e.P.x + nx * e.hw, y: e.P.y + ny * e.hw }, { x: e.P.x - nx * e.hw, y: e.P.y - ny * e.hw });
+          }
+          hull = convexHull(edge);
+        }
+        const strips = (ring || rampJunction) ? pairs.map(([a, b]) => strip(a, b)) : [];
+        // 一般路口不在路口內畫車道線
+        if (!(ring || rampJunction)) for (const st of strips) st.mk = [];
+        j = { kind: 'hub', col: roadColor(widest.T), strips, hull, ribbons: n.conns.map(c => c.pts) };
+      }
+      if (j.kind === 'hub') j.mk = j.strips.flatMap(st => st.mk);
     }
-    if (!max) return null;
-    // 圓環上的節點只補環道寬度，避免較寬的進入道路在中央島上鼓出一塊
-    if (ringW) return { r: ringW, col };
-    return { r: n.segs.length === 2 ? min : max, col };
+    n._jg = { ver: net.version, j };
+    return j;
+  }
+
+  // pass：'curb' 路肩、'body' 柏油
+  drawJoint(n, j, pass, curbW) {
+    const ctx = this.ctx;
+    const ex = pass === 'curb' ? curbW : 0;
+    if (j.kind === 'cap') {
+      ctx.beginPath(); ctx.arc(n.x, n.y, j.r + ex, 0, Math.PI * 2); ctx.fill();
+    } else {
+      for (const st of j.strips) this.fillPoly(pass === 'curb' ? st.curbs : st.body);
+      if (j.hull && j.hull.length >= 3) {
+        this.fillPoly(j.hull);
+        if (ex) { ctx.lineWidth = ex * 2; ctx.strokeStyle = ctx.fillStyle; ctx.beginPath(); ctx.moveTo(j.hull[0].x, j.hull[0].y); for (const p of j.hull) ctx.lineTo(p.x, p.y); ctx.closePath(); ctx.stroke(); }
+      }
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.lineWidth = LANE_W + 0.4 + ex * 2;
+      ctx.lineCap = 'round';
+      for (const r of j.ribbons) this.strokePoly(r);
+    }
   }
 
   vehLevel(vh) {
@@ -383,7 +448,7 @@ export class Renderer {
       for (const pc of this.roadGeom(s)) byLevel.get(pc.lv)?.push(pc);
     }
     const nodesBy = new Map(DRAW_LEVELS.map(l => [l, []]));
-    for (const n of net.nodes.values()) if (n.x > v.x0 && n.x < v.x1 && n.y > v.y0 && n.y < v.y1) nodesBy.get(n.level)?.push(n);
+    for (const n of net.nodes.values()) if (n.x > v.x0 - 60 && n.x < v.x1 + 60 && n.y > v.y0 - 60 && n.y < v.y1 + 60) nodesBy.get(n.level)?.push(n);
     const vehBy = new Map(DRAW_LEVELS.map(l => [l, []]));
     for (const vh of g.traffic.vehicles) vehBy.get(this.vehLevel(vh))?.push(vh);
     ctx.lineCap = 'round';
@@ -392,10 +457,16 @@ export class Renderer {
       const pieces = byLevel.get(L), nodes = nodesBy.get(L);
       if (!pieces.length && !nodes.length && !vehBy.get(L).length) continue;
       const tunnel = L < 0;
+      const joints = [];
+      for (const n of nodes) { const j = this.jointGeom(n); if (j) joints.push([n, j]); }
       if (L > 0) {
         // 陰影（依各點高度偏移）與橋墩
         ctx.fillStyle = 'rgba(0,0,0,0.26)';
         for (const pc of pieces) this.fillPoly(pc.shadow);
+        ctx.save();
+        ctx.translate(L * LEVEL_H * 0.55, L * LEVEL_H * 0.85);
+        for (const [n, j] of joints) { ctx.fillStyle = 'rgba(0,0,0,0.26)'; this.drawJoint(n, j, 'body', 0); }
+        ctx.restore();
         ctx.strokeStyle = '#7d7a72';
         ctx.lineWidth = 2.2;
         for (const pc of pieces) {
@@ -413,26 +484,20 @@ export class Renderer {
       ctx.globalAlpha = tunnel ? 0.35 : 1;
       // 路肩（先畫全部路肩，再畫柏油，接縫處不會出現邊線）
       const curbCol = tunnel ? '#222' : (L > 0 ? '#a3a199' : '#6d6a63');
+      const curbW = L > 0 ? 0.6 : 0.4;
       ctx.fillStyle = curbCol;
       for (const pc of pieces) this.fillPoly(pc.curb);
-      const joints = [];
-      for (const n of nodes) {
-        const j = this.nodeJoint(n);
-        if (!j) continue;
-        joints.push([n, j]);
-        ctx.fillStyle = curbCol;
-        ctx.beginPath(); ctx.arc(n.x, n.y, j.r + (L > 0 ? 0.6 : 0.4), 0, Math.PI * 2); ctx.fill();
-      }
+      for (const [n, j] of joints) { ctx.fillStyle = curbCol; this.drawJoint(n, j, 'curb', curbW); }
       // 柏油
-      for (const pc of pieces) { ctx.fillStyle = roadColor(pc.seg.T); this.fillPoly(pc.body); }
-      for (const [n, j] of joints) {
-        ctx.fillStyle = j.col;
-        ctx.beginPath(); ctx.arc(n.x, n.y, j.r, 0, Math.PI * 2); ctx.fill();
-      }
+      for (const pc of pieces) { ctx.fillStyle = pc.col; this.fillPoly(pc.body); }
+      for (const [n, j] of joints) { ctx.fillStyle = j.col; this.drawJoint(n, j, 'body', 0); }
+      ctx.lineCap = 'round';
       // 標線
       if (z > 0.9 && !tunnel) {
-        for (const pc of pieces) {
-          for (const m of pc.mk) {
+        const mkSets = pieces.map(pc => pc.mk);
+        for (const [, j] of joints) if (j.mk && j.mk.length) mkSets.push(j.mk);
+        for (const mks of mkSets) {
+          for (const m of mks) {
             ctx.strokeStyle = m.c;
             ctx.lineWidth = m.w;
             ctx.lineCap = m.median ? 'butt' : 'round';

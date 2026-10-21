@@ -146,6 +146,38 @@ export function cubicPts(p0, p1, p2, p3, n) {
   return out;
 }
 
+// 以三次貝茲曲線近似圓弧連接兩條方向線（t0：P0 處的行進方向，t3：P3 處的行進方向）
+// 控制柄由兩方向線交點與轉角決定（90° 時為 0.552R）；近乎直行時用弦長 0.4 倍
+export function arcCurve(P0, t0, P3, t3, minSamples = 8, step = 0.75, uTurn = false) {
+  const d = Math.hypot(P3.x - P0.x, P3.y - P0.y);
+  if (d < 0.05) return [{ x: P0.x, y: P0.y }, { x: P3.x + t3.x * 0.02, y: P3.y + t3.y * 0.02 }];
+  const ang = Math.acos(clamp(t0.x * t3.x + t0.y * t3.y, -1, 1));
+  let k0 = d * 0.4, k1 = d * 0.4;
+  if (uTurn) k0 = k1 = Math.max(d * 0.9, 5.6);
+  else if (ang > 0.2) {
+    const dx = P3.x - P0.x, dy = P3.y - P0.y;
+    const den = t0.x * t3.y - t0.y * t3.x;
+    const a = (dx * t3.y - dy * t3.x) / den, b = (t0.x * dy - t0.y * dx) / den;
+    if (a > 0.1 && b > 0.1) {
+      const f = (4 / 3) * Math.tan(ang / 4) / Math.tan(ang / 2);
+      k0 = Math.min(a * f, d); k1 = Math.min(b * f, d);
+    }
+  }
+  const est = d + (k0 + k1) * 0.3;
+  return cubicPts(P0, { x: P0.x + t0.x * k0, y: P0.y + t0.y * k0 }, { x: P3.x - t3.x * k1, y: P3.y - t3.y * k1 }, P3,
+    clamp(Math.ceil(est / step), minSamples, 48));
+}
+
+export function convexHull(pts) {
+  const p = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lo = [], up = [];
+  for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+
 export function segSegIntersect(a, b, c, d) {
   const rx = b.x - a.x, ry = b.y - a.y, sx = d.x - c.x, sy = d.y - c.y;
   const den = rx * sy - ry * sx;

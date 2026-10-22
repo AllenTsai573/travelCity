@@ -377,6 +377,21 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert((T.stats.freight || 0) >= 1 && built.RC.stock > stock0 - 5, `貨運列車到貨運站（${T.stats.freight || 0} 班，存貨 ${Math.round(stock0)} → ${Math.round(built.RC.stock)}）`);
 }
 
+// 拆除道路：路上的車馬上從車輛清單移除（畫面在下一個模擬步之前不會讀到沒有軌道的車；之前會讓整個畫面停住、道路全部不見）
+{
+  const gd = makeGame(12345, 'temperate', 'easy', true);
+  connectOutside(gd);
+  step(gd, 600);
+  let bad = 0, removed = 0;
+  for (const s of [...gd.net.segs.values()].filter(x => x.T.access && x.lanes.some(l => l.vehs.length)).slice(0, 15)) {
+    if (!gd.net.segs.has(s.id)) continue;
+    if (gd.net.bulldoze(s)) continue;
+    removed++;
+    bad += gd.traffic.vehicles.filter(v => v.dead || !v.track).length;
+  }
+  assert(removed > 3 && bad === 0, `拆除道路後車輛清單裡沒有已移除的車（拆 ${removed} 段，殘留 ${bad}）`);
+}
+
 // 空白地圖開局：只有外部連線，沒有分區與建築
 {
   const gb = makeGame(4321, 'temperate', 'sandbox', false);

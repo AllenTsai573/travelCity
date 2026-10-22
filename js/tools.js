@@ -451,6 +451,7 @@ export class Tools {
     const g = this.g;
     let bv = null, bd = Math.max(3, 6 / this.cam.z);
     for (const v of g.traffic.vehicles) {
+      if (v.dead || !v.track) continue;
       const p = pointAt(v.track.pts, v.track.cum, v.s - v.len / 2);
       const d = Math.hypot(p.x - x, p.y - y);
       if (d < bd) { bd = d; bv = v; }

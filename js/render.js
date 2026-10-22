@@ -1239,7 +1239,8 @@ export class Renderer {
     const nodesBy = new Map(DRAW_LEVELS.map(l => [l, []]));
     for (const n of net.nodes.values()) if (n.x > v.x0 - 60 && n.x < v.x1 + 60 && n.y > v.y0 - 60 && n.y < v.y1 + 60) nodesBy.get(n.level)?.push(n);
     const vehBy = new Map(DRAW_LEVELS.map(l => [l, []]));
-    for (const vh of g.traffic.vehicles) vehBy.get(this.vehLevel(vh))?.push(vh);
+    // 剛被移除的車（例如道路被拆）在下一個模擬步之前還在清單裡，沒有軌道，不畫
+    for (const vh of g.traffic.vehicles) if (!vh.dead && vh.track) vehBy.get(this.vehLevel(vh))?.push(vh);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (const L of DRAW_LEVELS) {

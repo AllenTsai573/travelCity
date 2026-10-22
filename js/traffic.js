@@ -433,7 +433,11 @@ export class Traffic {
     }
     return true;
   }
-  despawnAll(list) { for (const v of list) this.finish(v, false); }
+  // 移除一批車（道路被拆等）：馬上從清單拿掉，不等下一個模擬步（之前會讓畫面讀到沒有軌道的車而整個停住）
+  despawnAll(list) {
+    for (const v of list) this.finish(v, false);
+    if (list.length) this.vehicles = this.vehicles.filter(v => !v.dead);
+  }
 
   // ---------- 網路重建後 ----------
   onRebuild() {

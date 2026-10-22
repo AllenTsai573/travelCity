@@ -174,6 +174,7 @@ export class Renderer {
     // 分區圖：不畫建物的立體部分，只看各地塊的分區顏色
     if (!g.zonemap) this.drawBuildings(v, 'tall');
     this.drawNetwork(v, L => L > 0);
+    this.drawPlatforms(v);
     // 疊加圖層各自保護：其中一層出錯時其他照常畫（錯誤由 main.js 顯示）
     const layer = f => { try { f(); } catch (e) { this.worldTf(); g.reportError && g.reportError(e); } };
     if (g.zonemap) layer(() => this.drawZoneMap(v));
@@ -1443,6 +1444,46 @@ export class Renderer {
   }
 
   // 列車：車頭往後每 cars 節車廂各自取軌道上的位置與方向（含上一段軌道），車廂之間留 0.8 m
+  // 高架車站的月台：沿月台軌、在車站那一側畫月台（混凝土、黃色導盲磚）與雨棚，列車就停在月台旁
+  // （地面車站的月台由 lotArt 畫在地塊後方）
+  drawPlatforms(v) {
+    const g = this.game, net = g.net, ctx = this.ctx;
+    for (const b of g.city.buildings) {
+      if (b.dead || !(b.zt === 'RT' || b.zt === 'RS' || b.zt === 'RC')) continue;
+      const pl = g.city.platformOf(b), s = pl && net.segs.get(pl.seg);
+      if (!s || s.drawLevel <= 0 || !this.inView(s.bbox, v)) continue;
+      const half = b.zt === 'RT' ? 70 : 55, u0 = clamp(pl.u - half, s.ra + 2, s.len - s.rb - 2), u1 = clamp(pl.u + half, s.ra + 2, s.len - s.rb - 2);
+      if (u1 - u0 < 10) continue;
+      const core = cutPoly(s.pts, s.cum, u0, u1), q = pointAt(s.pts, s.cum, pl.u);
+      const side = Math.sign((b.x - q.x) * -q.dy + (b.y - q.y) * q.dx) || 1, hw = halfWidth(s.T);
+      const band = (o0, o1, fill) => {
+        const a = offsetPoly(core, side * o0), c = offsetPoly(core, side * o1).reverse();
+        ctx.beginPath(); [...a, ...c].forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath();
+        ctx.fillStyle = fill; ctx.fill();
+      };
+      // 陰影、月台、導盲磚
+      ctx.save(); ctx.translate(3.3, 2); band(hw + 0.2, hw + 6.8, 'rgba(0,0,0,0.18)'); ctx.restore();
+      band(hw + 0.2, hw + 6.8, '#d3cec3');
+      band(hw + 0.8, hw + 1.3, '#e8c547');
+      if (b.zt === 'RC') continue;   // 貨運站：只有裝卸月台
+      // 雨棚：月台中段，深灰屋頂加一道道橫樑
+      const cu0 = u0 + 6, cu1 = u1 - 6, roof = cutPoly(s.pts, s.cum, cu0, cu1);
+      const a = offsetPoly(roof, side * (hw + 1.8)), c = offsetPoly(roof, side * (hw + 6.4));
+      ctx.save(); ctx.translate(1.8, 1.1);
+      ctx.beginPath(); [...a, ...c.slice().reverse()].forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath();
+      ctx.fillStyle = 'rgba(0,0,0,0.15)'; ctx.fill(); ctx.restore();
+      ctx.beginPath(); [...a, ...c.slice().reverse()].forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath();
+      ctx.fillStyle = '#7f8a91'; ctx.fill();
+      const rc = polyCum(roof), RL = rc[rc.length - 1];
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 0.25; ctx.beginPath();
+      for (let d = 3; d < RL; d += 6) {
+        const pp = pointAt(roof, rc, d), nx = -pp.dy * side, ny = pp.dx * side;
+        ctx.moveTo(pp.x + nx * (hw + 1.8), pp.y + ny * (hw + 1.8)); ctx.lineTo(pp.x + nx * (hw + 6.4), pp.y + ny * (hw + 6.4));
+      }
+      ctx.stroke();
+    }
+  }
+
   // lat：橫向偏移（連節公車換車道時）
   drawTrain(vh, detail, lat = 0) {
     const ctx = this.ctx, n = vh.cars || 3, gap = vh.icb ? 0.4 : 0.8, cl = (vh.len - (n - 1) * gap) / n;

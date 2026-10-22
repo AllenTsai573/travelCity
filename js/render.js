@@ -822,6 +822,8 @@ export class Renderer {
         lines.push({ pts: offsetPoly(c, 0.72), c: '#d6d9dc', w: 0.13, dash: null });
         lines.push({ pts: offsetPoly(c, -0.72), c: '#d6d9dc', w: 0.13, dash: null });
       }
+      // 鐵路高架橋的坡道會把標線切段，也要有累積長度
+      for (const m of lines) m.cum = polyCum(m.pts);
       return lines;
     }
     // 場內道路與停車場鋪面融為一體，不畫標線

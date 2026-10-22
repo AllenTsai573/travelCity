@@ -306,7 +306,7 @@ export class UI {
           const tr = g.transit, st = tr.stop('r' + b.id), plat = g.city.platformOf(b);
           const lines = st ? st.lines.map(id => tr.line(id)).filter(Boolean) : [];
           const trains = g.traffic.vehicles.filter(v => v.train && !v.freight && lines.some(l => l.id === v.bus));
-          return `<dl><dt>月台</dt><dd>${plat ? '已接上鐵軌' : '⚠ 附近 30 m 內沒有地面鐵軌'}</dd>
+          return `<dl><dt>月台</dt><dd>${plat ? '已接上鐵軌' : '⚠ 附近 30 m 內沒有鐵軌'}</dd>
             <dt>路線</dt><dd>${lines.map(l => `${l.rail ? '🚆' : '🚌'} ${l.name}（${l.stops.length} 站）`).join('<br>') || (b.zt === 'RS' ? '—（同一條鐵路上要有鐵路總站才會有列車）' : '—（同一條鐵路上還沒有其他車站）')}</dd>
             <dt>候車人數</dt><dd>${st ? st.queue.length : 0}</dd><dt>列車</dt><dd>${trains.length} 列行駛中，車上 ${trains.reduce((a, v) => a + v.pax.length, 0)} 人</dd>
             <dt>鐵路累計載客</dt><dd>${tr.stats.railRiders || 0} 人次</dd>
@@ -315,7 +315,7 @@ export class UI {
         }
         if (b.zt === 'RC') {
           const fr = g.traffic.vehicles.filter(v => v.freight && v.freight.rc === b.id);
-          return `<dl><dt>月台</dt><dd>${g.city.platformOf(b) ? '已接上鐵軌' : '⚠ 附近 30 m 內沒有地面鐵軌'}</dd>
+          return `<dl><dt>月台</dt><dd>${g.city.platformOf(b) ? '已接上鐵軌' : '⚠ 附近 30 m 內沒有鐵軌'}</dd>
             <dt>外部鐵路</dt><dd>${g.city.railOutside.length ? g.city.railOutside.map(o => o.name).join('、') : '—'}</dd>
             <dt>原料存貨</dt><dd>${Math.round(b.stock)}</dd><dt>等待外銷</dt><dd>${b.exports || 0} 車</dd><dt>已外銷</dt><dd>${b.shipped || 0} 車</dd>
             <dt>貨運列車</dt><dd>${fr.length ? '行駛中' : '等待下一班'}（全市累計 ${g.transit.stats.freight || 0} 班）</dd></dl>

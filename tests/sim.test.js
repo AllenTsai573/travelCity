@@ -429,11 +429,17 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert(Date.now() - t0 < 5000, `產生時間 ${Date.now() - t0} ms`);
   assert(r.ix.filter(k => !k.endsWith('✗')).length >= 3 && r.segs > 300, `交流道 ${r.ix.join('、')}，路段 ${r.segs}`);
   assert(C.outside.length >= 4 && C.liveOutside().length === C.outside.length, `外部連線都接上主路網（${C.liveOutside().length} / ${C.outside.length}）`);
-  assert(C.railOutside.length === 2 && C.lots.some(l => l.zt === 'RT') && C.lots.every(l => ['RT', 'RS', 'RC'].includes(l.zt)), `鐵路與車站（${C.lots.map(l => l.zt).join('、')}），沒有住商工分區`);
+  assert(C.railOutside.length === 3 && C.lots.some(l => l.zt === 'RT') && C.lots.every(l => ['RT', 'RS', 'RC'].includes(l.zt)), `鐵路與車站（${C.lots.map(l => l.zt).join('、')}），沒有住商工分區`);
+  assert([...gc.net.segs.values()].filter(s => s.T.rail).every(s => s.drawLevel >= 1) && ![...gc.net.nodes.values()].some(n => n.segs.some(id => gc.net.segs.get(id).T.rail) && n.segs.some(id => !gc.net.segs.get(id).T.rail)), '鐵路全線高架、沒有平交道');
   assert([...gc.net.segs.values()].some(s => s.type === 'highway' && gc.net.nodes.get(s.a).level === 1), '高架高速公路');
   gc.city.growStart = gc.time + 360;
   step(gc, 1500);
-  assert(C.buildings.some(b => b.zone === 'R') && gc.traffic.vehicles.some(v => v.train), `自動發展開始蓋住宅（${C.buildings.filter(b => b.zone === 'R').length} 棟）、列車行駛`);
+  assert(C.buildings.some(b => b.zone === 'R') && gc.traffic.vehicles.some(v => v.train && !v.freight), `自動發展開始蓋住宅（${C.buildings.filter(b => b.zone === 'R').length} 棟）、客運列車行駛`);
+  // 客運車站的月台在進站月台軌上（不是主線），貨運站在另一條不相連的貨運線上（分軌）
+  const comp = gc.transit.railComp(), compOf = b => comp.get(gc.net.segs.get(C.platformOf(b).seg).a);
+  const pax = C.buildings.filter(b => b.zt === 'RT' || b.zt === 'RS'), rc = C.buildings.find(b => b.zt === 'RC');
+  assert(pax.length >= 2 && pax.every(b => { const s = gc.net.segs.get(C.platformOf(b).seg); return s.len < 200 && gc.net.nodes.get(s.a).segs.length === 2; }), `客運車站停在月台軌上（${pax.length} 站）`);
+  assert(rc && pax.every(b => compOf(b) !== compOf(rc)), '貨運線與客運線分軌');
 }
 
 // 地形第 2 版：湖泊最多兩個、河流不一定有，水域少；舊存檔（第 1 版）地形不變

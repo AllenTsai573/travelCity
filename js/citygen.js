@@ -5,11 +5,13 @@
 // - 地面道路都從高架下方穿過，只在交流道與高速公路相接
 // - 依地形調整：高速公路、交流道、鐵路的位置在候選範圍內挑水域最少的；地面道路中段遇到水域改以高架橋跨越
 // - 幹道與街道依交流道實際的位置排列：林蔭大道 / 大道就是交流道的橫交道路，街道每 200 m 一條（離幹道太近的省略）
-// - 鐵路東西向橫貫地圖（兩端是外部鐵路），只在幹道與少數街道設平交道，鐵路兩側各有一條站前道路；分區只劃車站
+// - 鐵路全線高架（第 1 層，跨過南北向高速公路處升到第 2 層），不與道路平面交叉：客運線東西向橫貫地圖（兩端是外部鐵路），
+//   每個客運車站有從主線分出來的進站月台軌；貨運線另外一條（分軌，不與客運線相連）從地圖邊緣接到貨運站。
+//   鐵路兩側各有一條站前道路；分區只劃車站
 import { placeInterchange } from './interchange.js';
-import { SLOPE_LEN } from './config.js';
+import { SLOPE_LEN, ROAD_TYPES } from './config.js';
 import { halfWidth } from './network.js';
-import { polyBBox } from './util.js';
+import { polyBBox, pointAt } from './util.js';
 
 // 交流道佔地（沿主線、橫向的半寬，公尺）：範圍內不鋪其他地面道路
 const FOOT = { turbine: [540, 540], windmill: [460, 460], spui: [330, 320], diamond: [330, 320] };
@@ -61,9 +63,17 @@ function buildCity(g, fullRebuild) {
     if (s && Math.abs(s.h - h) < 0.2) return { x: s.x, y: s.y, seg: s.seg.id, u: s.u };
     return { x: p.x, y: p.y };
   };
+  // 道路的類別：鐵路、高速公路 / 匝道、一般道路；不同類別不能在同一高度相交（不然高架橋會在高速公路上做出平面路口）
+  const cls = t => (ROAD_TYPES[t].rail ? 'rail' : t === 'highway' || t === 'ramp' ? 'fw' : 'road');
+  const mixes = (plan, type) => {
+    const k = cls(type), other = id => { const s = net.segs.get(id); return s && cls(s.type) !== k; };
+    if (plan.crossings.some(c => other(c.seg))) return true;
+    return [plan.a, plan.b].some(e => (e.seg && other(e.seg)) || (e.node && net.nodes.get(e.node).segs.some(other)));
+  };
   const build = (p, q, type, hA = 0, hB = hA) => {
     const plan = net.planRoad(snapL(p, hA), snapL(q, hB), null, type, hA, { hA, hB });
     if (!plan.ok) return plan;
+    if (mixes(plan, type)) return { ok: false, reason: '不同類別的道路不平面交叉' };
     return { ok: true, node: net.executeRoad(plan) };
   };
   // 交流道佔地（不鋪地面道路的範圍）
@@ -82,7 +92,7 @@ function buildCity(g, fullRebuild) {
     const L = Math.hypot(q.x - p.x, q.y - p.y), ramp = SLOPE_LEN + 2;
     if (!/水域/.test(r.reason) || L < ramp * 2 + 10) { log.fail++; dbg('地面', type, Math.round(p.x), Math.round(p.y), '→', Math.round(q.x), Math.round(q.y), r.reason); return false; }
     const dx = (q.x - p.x) / L, dy = (q.y - p.y) / L, p1 = { x: p.x + dx * ramp, y: p.y + dy * ramp }, q1 = { x: q.x - dx * ramp, y: q.y - dy * ramp };
-    const ok = [[p, p1, 0, 1], [p1, q1, 1, 1], [q1, q, 1, 0]].every(([a, b, ha, hb]) => net.planRoad(snapL(a, ha), snapL(b, hb), null, type, ha, { hA: ha, hB: hb }).ok);
+    const ok = [[p, p1, 0, 1], [p1, q1, 1, 1], [q1, q, 1, 0]].every(([a, b, ha, hb]) => { const pl = net.planRoad(snapL(a, ha), snapL(b, hb), null, type, ha, { hA: ha, hB: hb }); return pl.ok && !mixes(pl, type); });
     if (!ok) dbg('橋規劃', type, Math.round(p.x), Math.round(p.y), '→', Math.round(q.x), Math.round(q.y), [[p, p1, 0, 1], [p1, q1, 1, 1], [q1, q, 1, 0]].map(([a, b, ha, hb]) => net.planRoad(snapL(a, ha), snapL(b, hb), null, type, ha, { hA: ha, hB: hb }).reason || 'ok').join(' / '));
     if (!ok || !build(p, p1, type, 0, 1).ok || !build(p1, q1, type, 1, 1).ok || !build(q1, q, type, 1, 0).ok) { log.fail++; dbg('橋', type, Math.round(p.x), Math.round(p.y), '→', Math.round(q.x), Math.round(q.y)); return false; }
     log.bridges++;
@@ -104,7 +114,9 @@ function buildCity(g, fullRebuild) {
     const list = [...all.filter(c => c.w < 0.005), ...all.filter(c => c.w >= 0.005 && c.w < 0.25).sort((p, q) => p.w - q.w)].slice(0, 6);
     for (const c of list) {
       const fr = { ok: true, x: c.x, y: c.y, ux, uy, M, C: Cc, snap: false };
+      const before = net.segs.size;
       const r = placeInterchange(g, key, fr);
+      if (!r.ok && net.segs.size !== before) dbg('交流道失敗但留下路段', key, Math.round(c.x), Math.round(c.y), before, '→', net.segs.size, r.reason);
       if (r.ok) {
         log.ix.push(key);
         foots.push({ x: c.x, y: c.y, ux, uy, a: FOOT[key][0], b: FOOT[key][1], cross: key !== 'turbine' });
@@ -165,16 +177,29 @@ function buildCity(g, fullRebuild) {
       if (nearEdge) anchors.splice(i, 1);
     }
     for (let i = 0; i + 1 < anchors.length; i++) {
-      const [a, ha] = anchors[i], [b, hb] = anchors[i + 1];
-      if (Math.hypot(b.x - a.x, b.y - a.y) < 5) continue;
+      const [a, ha, , , fa] = anchors[i], [b, hb, , , fb] = anchors[i + 1];
+      if (Math.hypot(b.x - a.x, b.y - a.y) < 5 || (fa && fa === fb)) continue;
       const r = build(a, b, 'highway', ha, hb);
       if (!r.ok) { log.fail++; dbg('高速', Math.round(a.x), Math.round(a.y), ha, '→', Math.round(b.x), Math.round(b.y), hb, r.reason); }
     }
   };
-  const ends = (fr, h, ax) => (fr ? [-1, 1].map(s => { const L = HALF[fr.key][0], p = along(fr, s * L); return [p, h, ax(p)]; }) : []);
+  // 交流道主線（cross：橫交道路）實際的兩個端點：沿軸線、在該高度、離中心最遠的高速公路節點（模板的主線會比 L 短一些）
+  const axisEnds = (fr, cross, h) => {
+    const ax = cross ? { x: -fr.uy, y: fr.ux } : { x: fr.ux, y: fr.uy }, out = [null, null];
+    for (const n of net.nodes.values()) {
+      if (n.level !== h || !n.segs.some(id => net.segs.get(id).type === 'highway')) continue;
+      const dx = n.x - fr.x, dy = n.y - fr.y, a = dx * ax.x + dy * ax.y, lat = -dx * ax.y + dy * ax.x;
+      if (Math.abs(lat) > 2 || Math.abs(a) > HALF[fr.key][cross ? 1 : 0] + 20) continue;
+      const k = a < 0 ? 0 : 1;
+      if (!out[k] || Math.abs(a) > Math.abs(out[k].a)) out[k] = { a, p: { x: n.x, y: n.y } };
+    }
+    return out.filter(Boolean).map(e => e.p);
+  };
+  // 錨點的第 5 個元素是所屬的交流道：同一座交流道的兩端之間是它自己的主線，不再重鋪
+  const ends = (fr, h, ax) => (fr ? axisEnds(fr, false, h).map(p => [p, h, ax(p), false, fr]) : []);
   freeway([[{ x: 4, y: YA }, 0, 4], [{ x: 150, y: YA }, 1, 150, true], ...ends(dA, 1, p => p.x), ...ends(sA, 1, p => p.x), ...ends(turbine, 1, p => p.x), [{ x: S - 150, y: YA }, 1, S - 150, true], [{ x: E, y: YA }, 0, E]]);
   // 南北向：渦輪的橫交道路在第 2 層（沒有渦輪時在交會處升到第 2 層跨過東西向）
-  const tB = turbine ? [-1, 1].map(s => { const p = across(turbine, s * HALF[turbine.key][1]); return [p, 2, p.y]; }) : [[{ x: XB, y: YA - 150 }, 2, YA - 150], [{ x: XB, y: YA + 150 }, 2, YA + 150]];
+  const tB = turbine ? axisEnds(turbine, true, 2).map(p => [p, 2, p.y, false, turbine]) : [[{ x: XB, y: YA - 150 }, 2, YA - 150], [{ x: XB, y: YA + 150 }, 2, YA + 150]];
   freeway([[{ x: XB, y: 4 }, 0, 4], [{ x: XB, y: 150 }, 1, 150, true], ...tB, ...ends(sB, 1, p => p.y), ...ends(dB, 1, p => p.y), [{ x: XB, y: S - 150 }, 1, S - 150, true], [{ x: XB, y: E }, 0, E]]);
   const outNode = (p, name) => { const n = net.nodeNear(p.x, p.y, 3, 0); if (n && n.segs.length === 1) { city.addOutside(n, name); return true; } return false; };
   outNode({ x: 4, y: YA }, '西方高速公路'); outNode({ x: E, y: YA }, '東方高速公路'); outNode({ x: XB, y: 4 }, '北方高速公路'); outNode({ x: XB, y: E }, '南方高速公路');
@@ -187,10 +212,49 @@ function buildCity(g, fullRebuild) {
   // 鐵路：主軸與南側大道之間、水域最少的一條東西線（避開南北向高速公路的交流道）
   let ry = null;
   for (let y = YM + 400; y <= YD - 400; y += 20) {
-    const w = wetLine(0, y, S, y) + (foots.some(f => Math.abs(f.y - y) < f.a + 20 && Math.abs(f.x - XB) < 5) ? 5 : 0) + (T.isWater(4, y) || T.isWater(E, y) ? 3 : 0);
+    // 鐵路與兩側站前道路（±80 m）都要在南北向高速公路的交流道範圍外
+    const w = wetLine(0, y, S, y) + (foots.some(f => Math.abs(f.y - y) < f.a + 110 && Math.abs(f.x - XB) < 5) ? 5 : 0) + (T.isWater(4, y) || T.isWater(E, y) ? 3 : 0);
     if (ry === null || w < ry.w) ry = { y, w };
   }
-  const RY = ry ? ry.y : (YM + YD) / 2, RW = 75;   // 站前道路離鐵路 75 m：車站地塊（深 8～10 格）的後方緊鄰鐵軌
+  // 站前道路離客運線 80 m；客運月台軌在南側 14 m、貨運線在北側 32 m，車站地塊的後方緊鄰鐵軌
+  const RY = ry ? ry.y : (YM + YD) / 2, RW = 80, SID = 14, FY = RY - 32;
+
+  // ---------- 鐵路（先鋪，之後的道路都從高架下方穿過） ----------
+  // 一條東西向高架鐵路：地圖邊緣是地面（外部鐵路），進來 150 m 爬到第 1 層；跨過南北向高速公路處升到第 2 層
+  const railLine = (y, x0, x1) => {
+    const lv = x => (x <= 10 || x >= E - 1 ? 0 : 1);
+    const pts = [[x0, lv(x0)], [x1, lv(x1)]];
+    if (x0 <= 10) pts.push([150, 1]);
+    if (x1 >= E - 1) pts.push([S - 150, 1]);
+    if (XB > x0 + 300 && XB < x1 - 300) pts.push([XB - 260, 1], [XB - 160, 2], [XB + 160, 2], [XB + 260, 1]);
+    pts.sort((p, q) => p[0] - q[0]);
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const r = build({ x: pts[i][0], y }, { x: pts[i + 1][0], y }, 'rail', pts[i][1], pts[i + 1][1]);
+      if (!r.ok) { log.fail++; dbg('鐵路', pts[i][0], y, r.reason); }
+    }
+  };
+  railLine(RY, 4, E);
+  const rn = p => net.nodeNear(p.x, p.y, 3, 0);
+  if (rn({ x: 4, y: RY })) city.addRailOutside(rn({ x: 4, y: RY }), '西方鐵路');
+  if (rn({ x: E, y: RY })) city.addRailOutside(rn({ x: E, y: RY }), '東方鐵路');
+  // 客運車站的進站月台軌：主線分出（約 11° 的道岔）、在南側 SID 公尺處平行 150 m、再接回主線
+  const platforms = [];
+  const siding = x0 => {
+    const half = 75, lead = 70;
+    if (x0 - half - lead < 300 || x0 + half + lead > S - 300 || Math.abs(x0 - XB) < 480 || platforms.some(p => Math.abs(p - x0) < 420)) return false;
+    const A = { x: x0 - half - lead, y: RY }, B = { x: x0 - half, y: RY + SID }, Cc = { x: x0 + half, y: RY + SID }, D = { x: x0 + half + lead, y: RY };
+    const plans = [[A, B], [B, Cc], [Cc, D]];
+    for (const [p, q] of plans) { const r = build(p, q, 'rail', 1, 1); if (!r.ok) { dbg('月台軌', Math.round(x0), r.reason); return false; } }
+    platforms.push(x0);
+    return true;
+  };
+  // 月台軌（第一個給鐵路總站）：主軸旁、西側大道旁、東側，放不下的位置略過
+  for (const x0 of [XM + 100, XD, (XM + XB) / 2, XE - 250, (XD + XM) / 2, XM + 600, XM - 600, XB + 550, XW + 400]) if (platforms.length < 4) siding(x0);
+  // 貨運線（分軌）：從東邊地圖邊緣接到貨運站，盡頭是貨運站的裝卸線
+  const XC = XB + 350 <= E - 300 ? XB + 350 : Math.min(XB - 450, E - 600);
+  railLine(FY, XC - 130, E);
+  if (rn({ x: E, y: FY })) city.addRailOutside(rn({ x: E, y: FY }), '東方貨運鐵路');
+  net.rebuild();
   // 街道的位置：每 200 m 一條，離幹道 / 高速公路太近（< 120 m）的省略；鐵路兩側各一條站前道路
   const gridX = uniq(steps(XW, XE, 200).filter(x => ![XW, XD, XM, XE, XB].some(a => Math.abs(a - x) < 120)));
   const yMajor = [YN, YM, YD, YS, RY - RW, RY + RW];
@@ -216,22 +280,11 @@ function buildCity(g, fullRebuild) {
   net.rebuild();
 
   // ---------- 街道 ----------
-  // 南北向街道：鐵路處只有每隔兩條跨過（平交道），其餘停在站前道路
-  gridX.forEach((x, i) => {
-    const ys = ysAll.filter(y => !(y > RY - RW + 10 && y < RY + RW - 10));
-    if (i % 3 === 1) NS(x, ysAll, 'street');
-    else { NS(x, ys.filter(y => y <= RY - RW), 'street'); NS(x, ys.filter(y => y >= RY + RW), 'street'); }
-  });
+  // 南北向街道（鐵路高架，全部從下方穿過）
+  for (const x of gridX) NS(x, ysAll, 'street');
   for (const y of [...gridY, ...northY.filter(y => y !== YN), RY - RW, RY + RW]) EW(y, xsAll, 'street');
   net.rebuild();
 
-  // ---------- 鐵路 ----------
-  const railXs = uniq([4, ...xsAll.filter(x => x > 4 && x < E), E]);
-  line(railXs.map(x => [{ x, y: RY }, 'rail']));
-  const rn = p => net.nodeNear(p.x, p.y, 3, 0);
-  if (rn({ x: 4, y: RY })) city.addRailOutside(rn({ x: 4, y: RY }), '西方鐵路');
-  if (rn({ x: E, y: RY })) city.addRailOutside(rn({ x: E, y: RY }), '東方鐵路');
-  net.rebuild();
 
   // 只有一端相接的地面道路（停在交流道範圍、水域邊的短截）拆掉，一路拆到路口為止
   for (let changed = true, guard = 0; changed && guard < 20; guard++) {
@@ -248,21 +301,37 @@ function buildCity(g, fullRebuild) {
   // 車站：鐵路旁的道路上依序找可以劃設的位置（planStroke 會檢查要緊鄰鐵軌）
   const station = (zt, cols, rows, x, y) => {
     const mid = s => ({ x: (s.bbox.x0 + s.bbox.x1) / 2, y: (s.bbox.y0 + s.bbox.y1) / 2 });
-    const segs = [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.drawLevel === 0 && Math.hypot(mid(s).x - x, mid(s).y - y) < 320)
-      .sort((a, b) => Math.hypot(mid(a).x - x, mid(a).y - y) - Math.hypot(mid(b).x - x, mid(b).y - y));
+    const segs = [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.drawLevel === 0 && Math.abs(mid(s).y - y) < 30 && Math.abs(mid(s).x - x) < 300)
+      .sort((a, b) => Math.abs(mid(a).x - x) - Math.abs(mid(b).x - x));
+    const cands = [];
     for (const s of segs) for (const side of [1, -1]) {
       // 臨路道路限制地塊大小（市區道路最大 12 格）
       const c = Math.min(cols, city.maxCells(zt, s)), g0 = city.gridStart(s, side), end = s.len - city.endTrim(s, true, side);
-      for (let u0 = g0; u0 + c * 6 <= end + 1e-6; u0 += 6) for (let r = rows; r >= 4; r--) {
-        const p = city.planStroke(zt, s, side, u0, u0 + c * 6, r).find(p => p.ok && p.cols >= Math.min(c, 9));
-        if (p && !city.lots.some(l => Math.hypot(l.x - p.geo.x, l.y - p.geo.y) < 150)) return city.addLot(zt, s, p.u, side, p.cols, p.rows);
+      for (let u0 = g0; u0 + c * 6 <= end + 1e-6; u0 += 6) {
+        const pm = pointAt(s.pts, s.cum, u0 + c * 3);
+        cands.push({ s, side, c, u0, d: Math.abs(pm.x - x) });
       }
+    }
+    // 地塊中心離目標（月台軌中央）越近越好
+    cands.sort((p, q) => p.d - q.d);
+    for (const { s, side, c, u0 } of cands.slice(0, 80)) for (let r = rows; r >= 4; r--) {
+      const p = city.planStroke(zt, s, side, u0, u0 + c * 6, r).find(p => p.ok && p.cols >= Math.min(c, 9));
+      if (p && !city.lots.some(l => Math.hypot(l.x - p.geo.x, l.y - p.geo.y) < 150)) return city.addLot(zt, s, p.u, side, p.cols, p.rows);
     }
     if (g.debugGen) for (const s of segs.slice(0, 4)) for (const side of [1, -1]) { const g0 = city.gridStart(s, side); dbg('  候選', s.id, s.T.name, Math.round(s.len), side, city.planStroke(zt, s, side, g0, g0 + cols * 6, rows).map(p => p.cols + 'x' + p.rows + (p.ok ? 'ok' : p.reason)).join(' ')); }
     dbg('車站', zt, x, y, '找不到位置');
     return null;
   };
-  const made = [station('RT', 16, 10, XM + 100, RY), station('RS', 8, 8, XD, RY), station('RS', 8, 8, (XM + XB) / 2, RY), station('RS', 8, 8, XE - 200, RY), station('RC', 16, 10, XB + 350, RY)].filter(Boolean);
+  // 客運車站在南側站前道路、背對月台軌；貨運站在北側站前道路、背對貨運線
+  const made = [];
+  for (const [zt, cols, rows] of [['RT', 16, 9], ['RS', 8, 8], ['RS', 8, 8], ['RS', 8, 8]]) {
+    const x0 = platforms[made.length];
+    if (x0 === undefined) break;
+    const l = station(zt, cols, rows, x0, RY + RW);
+    if (l) made.push(l);
+  }
+  const rc = station('RC', 16, 6, XC, RY - RW);
+  if (rc) made.push(rc);
   city.recount();
   g.money = savedMoney;
   return { ...log, stations: made.map(l => l.zt).join(','), segs: net.segs.size, outside: city.outside.length, YA, XB, RY };

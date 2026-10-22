@@ -159,14 +159,14 @@ export class City {
 
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
   // 分區 zt 的最大地塊格數（0 = 尚未解鎖）：依人口解鎖的上限；給了臨路路段 seg 時再受道路種類限制（ROAD_TYPES.lotMax）
-  // 車站旁的鐵軌（月台位置）：地塊後方或兩側 30 m 內的地面鐵軌上最近的一點；沒有就是 null
+  // 車站旁的鐵軌（月台位置）：地塊後方或兩側 30 m 內的鐵軌（地面或高架）上最近的一點；沒有就是 null
   railNear(geo) {
     const net = this.game.net, c0 = geo.corners[0];
     const P = (u, v) => ({ x: c0.x + geo.tx * u + geo.nx * v, y: c0.y + geo.ty * u + geo.ny * v });
     const pts = [P(geo.w / 2, geo.d), P(geo.w * 0.2, geo.d), P(geo.w * 0.8, geo.d), P(0, geo.d * 0.6), P(geo.w, geo.d * 0.6)];
     let best = null;
     for (const s of net.segs.values()) {
-      if (!s.T.rail || s.drawLevel !== 0) continue;
+      if (!s.T.rail || s.drawLevel < 0) continue;   // 地面或高架鐵路（高架車站）
       for (const q of pts) {
         const c = closestOnPoly(s.pts, s.cum, q);
         if (c.d <= 30 && (!best || c.d < best.d)) best = { seg: s.id, u: clamp(c.s, Math.min(s.ra + 2, s.len / 2), Math.max(s.len - s.rb - 2, s.len / 2)), d: c.d };
@@ -203,7 +203,7 @@ export class City {
       const ok = r >= 2;
       const item = { zt, seg, u, side, cols, rows: ok ? r : depth, ok, reason, geo: this.lotGeom(seg, u, side, cols, ok ? r : depth) };
       // 鐵路車站要緊鄰鐵軌
-      if (ok && ZONE_TYPES[zt].rail && !this.railNear(item.geo)) { item.ok = false; item.reason = '車站要緊鄰鐵路：地塊後方或側邊 30 m 內要有地面鐵軌'; }
+      if (ok && ZONE_TYPES[zt].rail && !this.railNear(item.geo)) { item.ok = false; item.reason = '車站要緊鄰鐵路：地塊後方或側邊 30 m 內要有鐵軌（地面或高架）'; }
       res.push(item);
       start += cols * CELL;
     }

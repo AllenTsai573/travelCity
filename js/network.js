@@ -214,7 +214,7 @@ export class Network {
     const others = dirs.filter(d => !used.has(d));
     info.pairs = pairs.map(([a, b]) => [a.s, b.s]);
     info.others = others.map(o => o.s);
-    info.ramp = !info.ring && pairs.length === 1 && others.length > 0 &&
+    info.ramp = !info.ring && pairs.length === 1 && others.length > 0 && !segs.every(s => s.T.rail) &&
       others.every(o => Math.abs(o.x * pairs[0][0].x + o.y * pairs[0][0].y) > 0.766);
     if (pairs.length) info.mainDir = { x: pairs[0][0].x, y: pairs[0][0].y };
     // 場內道路（停車場 / 社區 / 園區車道）接到一般道路的出入口：主線直通，不算十字路口
@@ -442,6 +442,18 @@ export class Network {
         cands.push({ outL, ang, cls: ringCont || Math.abs(ang) < 0.55 ? 'S' : ang > 0 ? 'R' : 'L' });
       }
       per.set(inL, cands);
+    }
+    // 只有鐵路相接的節點（道岔、彎道）：每條軌道接到所有角度平緩的軌道（雙線的兩個方向都可以進出月台軌），
+    // 不套用道路的匝道 / 封閉式道路規則
+    if (node.segs.every(id => this.segs.get(id).T.rail)) {
+      const conns = [];
+      for (const [inL, cands] of per) for (const c of cands) {
+        if (c.cls !== 'U' && Math.abs(c.ang) > 1.2) continue;
+        const cn = this.makeConn(node, inL.lanes[0], c.outL.lanes[0], c.cls);
+        conns.push(cn);
+      }
+      node.conns = conns;
+      return;
     }
     // 大型停車場 / 停車樓的單向出入口（service1 接一般道路）：盡量右進右出，左轉進出在尋路時加重成本（pen），
     // 只有沒有別的路時才會左轉（例如停車場在通往地圖邊緣的路上，右轉出去只會離開城市）

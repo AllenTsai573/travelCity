@@ -584,7 +584,7 @@ export class UI {
       <h4>難度</h4>
       <div class="cards">${Object.entries(DIFFICULTY).map(([k, d]) => `<label class="cardopt"><input type="radio" name="diff" value="${k}" ${k === 'normal' ? 'checked' : ''}><b>${d.name}</b><small>${d.unlockAll ? '無限資金、全部解鎖' : fmtMoney(d.money)}</small></label>`).join('')}</div>
       <h4>起始</h4>
-      <div class="cards"><label class="cardopt"><input type="radio" name="start" value="town" checked><b>預設小鎮</b><small>道路與分區已規劃，稍後自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="blank"><b>空白地圖</b><small>只有外部連線，自己從零規劃（不自動發展）</small></label></div>
+      <div class="cards"><label class="cardopt"><input type="radio" name="start" value="town" checked><b>預設小鎮</b><small>道路與分區已規劃，稍後自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="city"><b>完整城市路網</b><small>整張地圖的高速公路、交流道、幹道、街廓與鐵路車站都已鋪好，住商工自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="blank"><b>空白地圖</b><small>只有外部連線，自己從零規劃（不自動發展）</small></label></div>
       <h4>地圖種子</h4>
       <div class="row"><input id="ng-seed" type="number" value="${seed}"><button data-m="rand">🎲</button></div>
       <div class="btns end"><button data-m="${first ? 'help' : 'close'}">${first ? '直接遊玩目前地圖' : '取消'}</button>${this.g.hasSave() ? '<button data-m="load">讀取存檔</button>' : ''}<button class="primary" data-m="start">開始建設</button></div>`);

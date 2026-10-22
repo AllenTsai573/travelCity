@@ -420,5 +420,21 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert(drv.length > 0 && free, `場內道路出入口（${drv.length} 個）對面一側的格子從節點開始`);
 }
 
+// 完整城市路網開局：高速公路、交流道、幹道與鐵路車站鋪滿整張地圖，外部連線都接上主路網，住商工交給自動發展
+{
+  const { generateCity } = await import('../js/citygen.js');
+  const gc = makeGame(2, 'temperate', 'normal', false);
+  gc.city.peakPop = 0;
+  const t0 = Date.now(), r = generateCity(gc), C = gc.city;
+  assert(Date.now() - t0 < 5000, `產生時間 ${Date.now() - t0} ms`);
+  assert(r.ix.filter(k => !k.endsWith('✗')).length >= 3 && r.segs > 300, `交流道 ${r.ix.join('、')}，路段 ${r.segs}`);
+  assert(C.outside.length >= 4 && C.liveOutside().length === C.outside.length, `外部連線都接上主路網（${C.liveOutside().length} / ${C.outside.length}）`);
+  assert(C.railOutside.length === 2 && C.lots.some(l => l.zt === 'RT') && C.lots.every(l => ['RT', 'RS', 'RC'].includes(l.zt)), `鐵路與車站（${C.lots.map(l => l.zt).join('、')}），沒有住商工分區`);
+  assert([...gc.net.segs.values()].some(s => s.type === 'highway' && gc.net.nodes.get(s.a).level === 1), '高架高速公路');
+  gc.city.growStart = gc.time + 360;
+  step(gc, 1500);
+  assert(C.buildings.some(b => b.zone === 'R') && gc.traffic.vehicles.some(v => v.train), `自動發展開始蓋住宅（${C.buildings.filter(b => b.zone === 'R').length} 棟）、列車行駛`);
+}
+
 if (failed) { console.error(`${failed} 項失敗`); process.exit(1); }
 console.log('全部通過');

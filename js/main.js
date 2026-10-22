@@ -9,6 +9,7 @@ import { Renderer } from './render.js';
 import { Tools } from './tools.js';
 import { UI } from './ui.js';
 import { generateWorld } from './worldgen.js';
+import { generateCity } from './citygen.js';
 
 // 部署版本（scripts/bump-version.mjs 加在網址上的 ?v=），錯誤回報用
 export const VERSION = new URL(import.meta.url).searchParams.get('v') || 'local';
@@ -92,16 +93,19 @@ class Game {
     this.simAcc = 0;
   }
 
-  // start：'town' 預設小鎮（道路與分區已規劃，6 個遊戲小時後才開始有人進駐）；'blank' 空白地圖（只有外部連線、不自動發展）
+  // start：'town' 預設小鎮（道路與分區已規劃，6 個遊戲小時後才開始有人進駐）；'blank' 空白地圖（只有外部連線、不自動發展）；
+  // 'city' 完整城市路網（整張地圖的道路與鐵路車站都已鋪好，住商工由自動發展劃設）
   newGame({ seed, biome, difficulty, start = 'town' }) {
     this.setup(seed, biome, difficulty);
     const blank = start === 'blank';
-    generateWorld(this, blank ? { blank: true } : { empty: true });
+    if (start === 'city') generateCity(this); else generateWorld(this, blank ? { blank: true } : { empty: true });
     this.city.growStart = this.time + 360;
     this.autoGrow = !blank;
-    Object.assign(this.renderer.cam, { x: MAP_SIZE / 2, y: MAP_SIZE / 2, z: blank ? 0.5 : 1.1 });
+    Object.assign(this.renderer.cam, { x: MAP_SIZE / 2, y: MAP_SIZE / 2, z: blank ? 0.5 : start === 'city' ? 0.4 : 1.1 });
     this.afterLoad();
-    this.notify(blank
+    this.notify(start === 'city'
+      ? `歡迎來到${this.terrain.biome.name}！整座城市的交通骨架已經鋪好：高速公路、交流道、林蔭大道與鐵路車站。自動發展已開啟：約 6 個遊戲小時後，住宅、商業、工業會依需求自己沿路劃設。`
+      : blank
       ? `歡迎來到${this.terrain.biome.name}！這是空白地圖：從地圖邊緣的外部連線開始鋪路、劃分區吧（自動發展已關閉）。`
       : `歡迎來到${this.terrain.biome.name}！小鎮的分區已經劃好，約 6 個遊戲小時後開始有人進駐。`, 'good');
   }

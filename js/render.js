@@ -1,6 +1,6 @@
 // Canvas 2D 繪圖：地形、樹木、建築、多層道路、車輛、號誌、疊加層
 import { lotArt } from './lotart.js';
-import { LANE_W, LEVEL_H, ZONES, CLOCK, zoneColor } from './config.js';
+import { LANE_W, LEVEL_H, ZONES, CLOCK, FLOW_KINDS, zoneColor } from './config.js';
 import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly, closestOnPoly } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
 import { fxAt } from './traffic.js';
@@ -174,6 +174,8 @@ export class Renderer {
     if (!g.zonemap) this.drawBuildings(v, 'tall');
     this.drawNetwork(v, L => L > 0);
     if (g.zonemap) this.drawZoneMap(v);
+    if (g.transitmap) this.drawTransitMap(v);
+    if (g.flowmap) this.drawFlows(v);
     if (g.heatmap) this.drawHeatmap(v);
     this.drawSelection();
     g.tools.drawOverlay(ctx, this);
@@ -255,14 +257,86 @@ export class Renderer {
   }
 
   // 公車站牌：道路兩側路邊的站牌（藍底，上方一排路線顏色）；縮小時畫成小圓點
+  // 公車停靠區：站牌兩側（各行車方向的右側）路面往外加寬約 2.8 m、前後漸縮，停靠的公車開進去，不擋車道
+  drawBays(v) {
+    const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit;
+    if (!tr || z < 0.5) return;
+    for (const st of tr.stops) {
+      if (st.type === 'rail' || st.x < v.x0 - 30 || st.x > v.x1 + 30 || st.y < v.y0 - 30 || st.y > v.y1 + 30) continue;
+      const s = g.net.segs.get(st.seg);
+      if (!s || s.T.internal) continue;
+      const hw = halfWidth(s.T);
+      for (const dir of [1, -1]) {
+        if (!s.links[dir].lanes.length) continue;
+        // 公車車頭停在站牌位置，車身在後方：往行車方向的後方延伸
+        const a0 = dir > 0 ? st.u - 17 : st.u - 3, a1 = dir > 0 ? st.u + 3 : st.u + 17;
+        if (a0 < 1 || a1 > s.len - 1) continue;
+        const inner = offsetPoly(cutPoly(s.pts, s.cum, a0, a1), dir * hw), outer = offsetPoly(cutPoly(s.pts, s.cum, a0 + 5, a1 - 5), dir * (hw + 2.8));
+        if (inner.length < 2 || outer.length < 2) continue;
+        ctx.fillStyle = '#4b4e53';
+        ctx.beginPath(); [...inner, ...outer.reverse()].forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); ctx.fill();
+        if (z > 1.2) { ctx.strokeStyle = 'rgba(232,197,71,0.85)'; ctx.lineWidth = 0.15; ctx.setLineDash([1, 1]); this.strokePoly(inner); ctx.setLineDash([]); }
+      }
+    }
+  }
+
+  // 大眾運輸路線圖：所有公車路線（路線顏色）與鐵路路線（深色加路線色），站牌畫成白點、手動站牌外圈加粗，還沒排進路線的手動站牌是灰色
+  drawTransitMap(v) {
+    const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit, net = g.net;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const ln of tr.lines) {
+      ctx.globalAlpha = 0.9;
+      for (const k of ln.path || []) {
+        const L = net.links.get(k);
+        if (!L || !this.inView(L.seg.bbox, v)) continue;
+        const pts = offsetPoly(L.seg.pts, L.dir * (ln.rail ? 2.5 : halfWidth(L.seg.T) * 0.5));
+        if (ln.rail) { ctx.strokeStyle = '#2b2f36'; ctx.lineWidth = Math.max(3, 7 / z); this.strokePoly(pts); }
+        ctx.strokeStyle = ln.color; ctx.lineWidth = Math.max(1.6, (ln.rail ? 3.5 : 4) / z); this.strokePoly(pts);
+      }
+    }
+    ctx.globalAlpha = 1;
+    const R = Math.max(1.5, 4.5 / z);
+    for (const st of tr.stops) {
+      if (st.x < v.x0 || st.x > v.x1 || st.y < v.y0 || st.y > v.y1) continue;
+      ctx.fillStyle = '#fff'; ctx.strokeStyle = st.type === 'rail' ? '#2b2f36' : '#1f6fb5'; ctx.lineWidth = (st.manual ? 2.4 : 1.4) / z * 1.5;
+      ctx.beginPath(); ctx.arc(st.x, st.y, st.type === 'rail' ? R * 1.5 : R, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+    for (const m of g.city.busStops) {
+      if (tr.stops.some(st => st.manual && Math.hypot(st.x - m.x, st.y - m.y) < 25)) continue;
+      ctx.fillStyle = '#9aa0a6'; ctx.beginPath(); ctx.arc(m.x, m.y, R, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // 行程圖：每組起點 → 終點畫一條弧線（顏色依行程種類、粗細依最近的往來量），終點畫一個圓點；點選建築時只突顯它的行程
+  drawFlows(v) {
+    const g = this.game, ctx = this.ctx, z = this.cam.z, net = g.net, sel = g.ui.selection, focus = sel && sel.type === 'building' ? sel.obj : null;
+    const pos = o => (o.outside ? net.nodes.get(o.node) : o);
+    const col = Object.fromEntries(FLOW_KINDS.map(([k, , c]) => [k, c]));
+    const list = [...g.city.flows.values()].filter(f => !focus || f.a === focus || f.b === focus).sort((p, q) => p.n - q.n).slice(-400);
+    ctx.lineCap = 'round';
+    for (const f of list) {
+      const a = pos(f.a), b = pos(f.b);
+      if (!a || !b) continue;
+      if (Math.max(a.x, b.x) < v.x0 || Math.min(a.x, b.x) > v.x1 || Math.max(a.y, b.y) < v.y0 || Math.min(a.y, b.y) > v.y1) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, cx = (a.x + b.x) / 2 - dy * 0.18, cy = (a.y + b.y) / 2 + dx * 0.18;
+      ctx.strokeStyle = col[f.kind] || '#fff'; ctx.globalAlpha = focus ? 0.9 : 0.5;
+      ctx.lineWidth = Math.min(7, 1 + Math.log2(1 + f.n)) * 1.3 / z;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(cx, cy, b.x, b.y); ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle; ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(1.2, 3.5 / z), 0, Math.PI * 2); ctx.fill();
+      if (L < 1) continue;
+    }
+    ctx.globalAlpha = 1;
+  }
+
   drawStops(v) {
     const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit;
     if (!tr || !tr.stops.length || z < 0.35) return;
     for (const st of tr.stops) {
-      if (st.x < v.x0 || st.x > v.x1 || st.y < v.y0 || st.y > v.y1) continue;
+      if (st.type === 'rail' || st.x < v.x0 || st.x > v.x1 || st.y < v.y0 || st.y > v.y1) continue;
       const s = g.net.segs.get(st.seg);
       if (!s) continue;
-      const off = halfWidth(s.T) + 0.9;
+      // 站牌立在停靠區外側
+      const off = halfWidth(s.T) + 3.3;
       for (const sd of [1, -1]) {
         const p = { x: st.x - st.dy * off * sd, y: st.y + st.dx * off * sd };
         if (z < 1.5) { ctx.fillStyle = '#1f6fb5'; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.2, 3 / z), 0, Math.PI * 2); ctx.fill(); continue; }
@@ -1220,6 +1294,7 @@ export class Renderer {
         ctx.setLineDash([]);
       }
       ctx.globalAlpha = tunnel ? 0.6 : 1;
+      if (L === 0) this.drawBays(v);
       this.drawVehicles(vehBy.get(L), v);
       ctx.globalAlpha = 1;
       if (z > 0.6) this.drawSignals(nodes);

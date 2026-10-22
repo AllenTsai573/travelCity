@@ -58,6 +58,8 @@ export class City {
     this.nextId = 1;
     this.outside = [];
     this.railOutside = [];   // 外部鐵路連線（只有列車，不產生汽車車流）
+    this.busStops = [];      // 玩家手動放的公車站牌 { x, y }（一定會排進公車路線）
+    this.flows = new Map();  // 行程圖：起點 > 終點 → { a, b, n, kind }（每小時衰減）
     this.scheduled = [];
     this.hourT = 0;
     this.growT = 0;
@@ -645,6 +647,23 @@ export class City {
     origin.queue.push(trip);
   }
 
+  // 行程圖：記錄每趟完成的去程（上班、購物、旅客、貨運、原料），回程不算
+  recordFlow(trip) {
+    const a = trip.from, b = trip.to;
+    if (!a || !b || !/^(work|shop|visit|goods|mat)$/.test(trip.kind)) return;
+    const key = a.id + '>' + b.id, f = this.flows.get(key);
+    if (f) { f.n++; f.kind = trip.kind; } else if (this.flows.size < 3000) this.flows.set(key, { a, b, n: 1, kind: trip.kind });
+  }
+  // 手動公車站牌：點道路放置，點已有的站牌（20 m 內）移除；回傳說明文字
+  toggleBusStop(p) {
+    const net = this.game.net, i = this.busStops.findIndex(s => Math.hypot(s.x - p.x, s.y - p.y) < 20);
+    if (i >= 0) { this.busStops.splice(i, 1); if (this.game.transit) this.game.transit.planT = 0; return '已移除公車站牌'; }
+    const sn = net.segNear(p.x, p.y, 10, 0);
+    if (!sn || !sn.seg.T.access || sn.seg.T.internal) return null;
+    this.busStops.push({ x: sn.x, y: sn.y });
+    if (this.game.transit) this.game.transit.planT = 0;
+    return '已放置公車站牌（附近有公車總站時會排進路線）';
+  }
   recordFail(trip) {
     this.stats.fails++; this.stats.hourFails++;
     const f = trip.from;
@@ -660,6 +679,7 @@ export class City {
     if (!trip) return;
     if (trip.kind === 'taxiret') return;   // 計程車開回車行，不算行程
     if (!ok) { this.recordFail(trip); return; }
+    this.recordFlow(trip);
     this.stats.trips++; this.stats.hourTrips++;
     this.stats.tripTimeSum += age;
     const from = trip.from, to = trip.to;
@@ -877,6 +897,8 @@ export class City {
   // ---------- 每小時 ----------
   hourly() {
     const g = this.game, net = g.net;
+    // 行程圖每小時衰減：顯示的是最近大約半天的往來
+    for (const [k, f] of this.flows) { f.n *= 0.88; if (f.n < 0.25 || f.a.dead || f.b.dead) this.flows.delete(k); }
     const hour = Math.floor((g.time % 1440) / 60);
     const workHours = hour >= 9 && hour <= 16;
     const noisy = [...net.segs.values()].filter(s => s.T.rank >= 3 && s.drawLevel >= 0);
@@ -1131,6 +1153,7 @@ export class City {
       lots: this.lots.map(l => ({ zt: l.zt, seg: l.seg, u: l.u, side: l.side, cols: l.cols, rows: l.rows })),
       outside: this.outside.map(o => ({ node: o.node, name: o.name })),
       railOutside: this.railOutside.map(o => ({ node: o.node, name: o.name })),
+      busStops: this.busStops,
       demand: this.demand, stats: this.stats, history: this.history, growStart: this.growStart, peakPop: this.peakPop,
     };
   }
@@ -1138,6 +1161,7 @@ export class City {
     const net = this.game.net;
     for (const o of d.outside) this.addOutside(net.nodes.get(o.node), o.name);
     for (const o of d.railOutside || []) if (net.nodes.get(o.node)) this.addRailOutside(net.nodes.get(o.node), o.name);
+    this.busStops = (d.busStops || []).map(s => ({ x: s.x, y: s.y }));
     for (const s of d.buildings) {
       const seg = net.segs.get(s.seg);
       if (!seg) continue;

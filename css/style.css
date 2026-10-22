@@ -184,3 +184,11 @@ kbd { font: 10px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(
 .ms-list b { margin-right: 8px; }
 .ms-list small { color: var(--dim); }
 .ms-list .ul { font-size: 12px; color: var(--dim); margin-top: 2px; }
+/* 行程圖、大眾運輸路線圖的圖例（與分區圖圖例同樣式，放在左下角） */
+.maplegend { position: fixed; left: 8px; bottom: 96px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; z-index: 4; font-size: 12px; display: flex; flex-direction: column; gap: 4px; min-width: 230px; max-height: 45vh; overflow: auto; }
+.maplegend.hidden { display: none; }
+.maplegend .zr { display: flex; align-items: center; gap: 6px; }
+.maplegend .zr span { flex: 1; }
+.maplegend .zr small, .maplegend .dim { color: var(--dim); font-size: 11px; }
+.maplegend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; box-sizing: border-box; }
+#transitlegend { left: auto; right: 8px; }

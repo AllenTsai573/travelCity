@@ -144,6 +144,8 @@ export const ZONE_TYPES = {
 };
 export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T', 'TX', 'TS', 'RT', 'RS', 'RC'];
 export const TAXI_COLOR = '#f2c230';
+// 行程圖的種類、名稱與顏色
+export const FLOW_KINDS = [['work', '上班', '#4fb3ff'], ['shop', '購物', '#f2a33a'], ['visit', '旅客', '#3ccf5a'], ['goods', '商品貨運', '#c084fc'], ['mat', '原料貨運', '#e879a6']];
 // 商業：15×15 格以上才有機會出現大型量販店 / 購物中心；工業的功能隨機
 export const SHOP_KINDS = {
   shops:  { name: '商店街', jobs: 1, shop: 1 },

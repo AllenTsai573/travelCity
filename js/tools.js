@@ -184,6 +184,8 @@ export class Tools {
     else if (k === '3') this.g.setSpeed(8);
     else if (k === 'h') this.g.toggleHeatmap();
     else if (k === 'm') this.g.toggleZonemap();
+    else if (k === 'f') this.g.toggleFlowmap();
+    else if (k === 'l') this.g.toggleTransitmap();
     else if (k === 't') { this.g.renderer.toggleTilt(); }
     else if (k === 'c') { this.curve = !this.curve; this.pts = this.pts.slice(0, 1); this.g.ui.refreshToolbar(); }
     else if (k === 'pageup' || k === ']') { this.changeLevel(1); }
@@ -385,6 +387,12 @@ export class Tools {
           this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + busInfo + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : '') + (why.length ? `（${why.join('；')}）` : ''), !ok.length);
           break;
         }
+        if (this.zone === 'STOP') {
+          const near = this.g.city.busStops.some(s => Math.hypot(s.x - m.x, s.y - m.y) < 20), sn = this.net.segNear(m.x, m.y, 10, 0);
+          this.hover = null;
+          this.setTip(near ? '點一下移除這個公車站牌' : sn && sn.seg.T.access && !sn.seg.T.internal ? '點一下放置公車站牌（免費；附近有公車總站時一定會排進路線）' : '移到一般道路上放置公車站牌', !near && !(sn && sn.seg.T.access && !sn.seg.T.internal));
+          break;
+        }
         const a = this.zoneAnchor(m.x, m.y);
         this.hover = a;
         const name = this.zone === 'X' ? '取消分區' : ZONE_TYPES[this.zone].name;
@@ -500,6 +508,13 @@ export class Tools {
     return { seg: s, side: sd, i, depth, nCells, g0, past: raw !== i, geo: this.g.city.lotGeom(s, g0 + (i + 0.5) * CELL, sd, 1, 1) };
   }
   zoneStart() {
+    // 公車站牌：點道路放置 / 移除（免費）
+    if (this.zone === 'STOP') {
+      const m = this.mouse, msg = this.g.city.toggleBusStop({ x: m.x, y: m.y });
+      this.g.notify(msg || '請點在一般道路上（高速公路、場內道路不能放站牌）', msg ? 'info' : 'warn');
+      this.dirty = true;
+      return;
+    }
     const a = this.zoneAnchor(this.mouse.x, this.mouse.y);
     if (!a || a.nCells < 1) return;
     this.zStroke = { seg: a.seg, side: a.side, i0: a.i, i1: a.i, rows: a.depth, moved: false, g0: a.g0 };

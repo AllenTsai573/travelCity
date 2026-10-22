@@ -1,5 +1,5 @@
 // 介面：頂部資訊列、工具列、資訊面板、路口編輯器、對話框
-import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, ZONE_ORDER, SHOP_KINDS, INDUSTRY_KINDS, BIOMES, DIFFICULTY, MILESTONES, POLLUTION, zoneMax, zoneNext, zoneColor } from './config.js';
+import { ROAD_TYPES, ROAD_ORDER, LEVELS, ZONES, ZONE_TYPES, ZONE_ORDER, SHOP_KINDS, INDUSTRY_KINDS, BIOMES, DIFFICULTY, MILESTONES, POLLUTION, FLOW_KINDS, zoneMax, zoneNext, zoneColor } from './config.js';
 import { fmtMoney, fmtTime, clamp } from './util.js';
 import { TEMPLATES, TEMPLATE_ORDER } from './interchange.js';
 import { roadThumb, roundaboutThumb, interchangeThumb } from './thumbs.js';
@@ -52,6 +52,8 @@ export class UI {
     });
     document.getElementById('btn-heat').onclick = () => g.toggleHeatmap();
     document.getElementById('btn-zmap').onclick = () => g.toggleZonemap();
+    document.getElementById('btn-flow').onclick = () => g.toggleFlowmap();
+    document.getElementById('btn-tmap').onclick = () => g.toggleTransitmap();
     document.getElementById('btn-tilt').onclick = () => g.renderer.toggleTilt();
     document.getElementById('btn-rotl').onclick = () => g.renderer.rotate(-Math.PI / 2);
     document.getElementById('btn-rotr').onclick = () => g.renderer.rotate(Math.PI / 2);
@@ -79,7 +81,7 @@ export class UI {
         t.level = Number(v);
       } else if (k === 'curve') { t.curve = !t.curve; t.pts = t.pts.slice(0, 1); }
       else if (k === 'zone') {
-        if (v !== 'X' && !g.city.maxCells(v)) { g.notify(`${ZONE_TYPES[v].name}需要人口達到 ${zoneNext(v, g.city.unlockPop())[0]} 才能解鎖`, 'warn'); return; }
+        if (v !== 'X' && v !== 'STOP' && !g.city.maxCells(v)) { g.notify(`${ZONE_TYPES[v].name}需要人口達到 ${zoneNext(v, g.city.unlockPop())[0]} 才能解鎖`, 'warn'); return; }
         t.zone = v;
       }
       else if (k === 'rb') t.rbR = Number(v);
@@ -131,6 +133,7 @@ export class UI {
         const sub = m ? `最大 ${m}×${m}` + (nx ? `（${nx[0]} 人 → ${nx[1]}×${nx[1]}）` : '') : `🔒 人口 ${nx[0]}`;
         return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''} ${m ? '' : 'locked'}" title="${Z.name}：${m ? `最大 ${m}×${m} 格（每格 6 m）` : `人口達到 ${nx[0]} 才能解鎖`}${nx && m ? `；人口 ${nx[0]} 時放大到 ${nx[1]}×${nx[1]}` : ''}｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>${sub}</small></button>`;
       }).join('')
+        + `<button data-sub="zone" data-v="STOP" class="${t.zone === 'STOP' ? 'on' : ''}" title="點道路放置公車站牌，再點一次移除；附近有公車總站時一定會排進公車路線"><b>🚏 公車站牌</b><small>手動放置 · 免費</small></button>`
         + `<button data-sub="zone" data-v="X" class="${t.zone === 'X' ? 'on' : ''}" title="拖曳範圍內的空分區取消"><b>✕ 取消分區</b><small>僅空地</small></button></div>`;
       html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕高速公路噪音。各分區的最大尺寸隨人口解鎖放大，也受臨路道路限制：小路 6×6、市區道路 12×12、大道 18×18、林蔭大道不限。</div>`;
     } else if (t.tool === 'roundabout') {
@@ -184,6 +187,26 @@ export class UI {
     $('btn-heat').classList.toggle('on', g.heatmap);
     $('heatlegend').classList.toggle('hidden', !g.heatmap);
     $('btn-zmap').classList.toggle('on', g.zonemap);
+    $('btn-flow').classList.toggle('on', g.flowmap);
+    $('btn-tmap').classList.toggle('on', g.transitmap);
+    // 行程圖圖例：各種行程目前的往來量
+    $('flowlegend').classList.toggle('hidden', !g.flowmap);
+    if (g.flowmap) {
+      const sum = {};
+      for (const f of c.flows.values()) sum[f.kind] = (sum[f.kind] || 0) + f.n;
+      $('flowlegend').innerHTML = '<b>行程圖</b>' + FLOW_KINDS.map(([k, name, col]) => `<div class="zr"><i class="sw" style="background:${col}"></i><span>${name}</span><small>${Math.round(sum[k] || 0)} 趟</small></div>`).join('')
+        + '<small class="dim">線越粗往來越多（最近約半天）；點選建築只看它的行程</small>';
+    }
+    // 大眾運輸路線圖圖例：每條路線的顏色、站數、行駛中的車與候車人數
+    $('transitlegend').classList.toggle('hidden', !g.transitmap);
+    if (g.transitmap) {
+      const T = g.transit, veh = g.traffic.vehicles;
+      $('transitlegend').innerHTML = '<b>大眾運輸路線圖</b>' + (T.lines.length ? T.lines.map(l => {
+        const run = veh.filter(v => v.bus === l.id).length, wait = l.stops.reduce((a, id) => a + (T.stop(id)?.queue.filter(p => p.line === l.id).length || 0), 0);
+        return `<div class="zr"><i class="sw" style="background:${l.rail ? '#3b3f46' : l.color};${l.rail ? 'border:2px solid ' + l.color : ''}"></i><span>${l.rail ? '🚆' : '🚌'} ${l.name}</span><small>${new Set(l.stops).size} 站 · ${run} ${l.rail ? '列' : '台'} · 候車 ${wait}</small></div>`;
+      }).join('') : '<small class="dim">還沒有路線（要有公車總站或鐵路總站）</small>')
+        + `<small class="dim">手動站牌 ${c.busStops.length} 個（灰色為還沒排進路線）；載客累計 ${T.stats.riders} 人次</small>`;
+    }
     // 分區圖圖例：各分區的建築數、空地塊數與面積（格）
     $('zonemap').classList.toggle('hidden', !g.zonemap);
     if (g.zonemap) {
@@ -329,6 +352,11 @@ export class UI {
             <dt>原料供應</dt><dd>${bar(b.matSat)} ${pct(b.matSat)}</dd>`;
         }
         rows += `<dt>待出發車輛</dt><dd>${b.queue.length}</dd>`;
+        // 主要往來（行程圖）：從這裡出發 / 來到這裡最多的地方
+        const name = x => x.outside ? x.name : `${x.zone === 'R' ? '住宅' : x.zone === 'C' ? SHOP_KINDS[x.kind]?.name || '商業' : x.zone === 'I' ? INDUSTRY_KINDS[x.kind]?.name || '工業' : ZONE_TYPES[x.zt]?.name || ''} #${x.id}`;
+        const outs = [...g.city.flows.values()].filter(f => f.a === b).sort((p, q) => q.n - p.n).slice(0, 3), ins = [...g.city.flows.values()].filter(f => f.b === b).sort((p, q) => q.n - p.n).slice(0, 3);
+        if (outs.length) rows += `<dt>主要前往</dt><dd>${outs.map(f => `${name(f.b)}（${Math.round(f.n)}）`).join('<br>')}</dd>`;
+        if (ins.length) rows += `<dt>主要來自</dt><dd>${ins.map(f => `${name(f.a)}（${Math.round(f.n)}）`).join('<br>')}</dd>`;
         const tips = [];
         if (b.zone === 'R' && b.workOK < 0.5) tips.push('居民無法順利通勤：檢查工作地點與道路連通');
         if (b.zone === 'R' && b.pollution > 0.4) tips.push('離工業區太近');
@@ -571,7 +599,7 @@ export class UI {
         <div><h4>每小時成功 / 失敗行程</h4><canvas id="ch-trips" width="300" height="90"></canvas></div>
         <div><h4>資金</h4><canvas id="ch-money" width="300" height="90"></canvas></div>
       </div>
-      <p class="note">累計成功行程 ${this.g.city.stats.trips.toLocaleString()} · 失敗 ${this.g.city.stats.fails.toLocaleString()} · 過境車流 ${this.g.city.stats.through.toLocaleString()}</p>
+      <p class="note">累計成功行程 ${this.g.city.stats.trips.toLocaleString()} · 失敗 ${this.g.city.stats.fails.toLocaleString()} · 過境車流 ${this.g.city.stats.through.toLocaleString()} · 卡死自動排除 ${(this.g.traffic.cleared || 0).toLocaleString()} 台</p>
       <div class="btns end"><button data-m="close">關閉</button></div>`);
     const draw = (id, series, cols) => {
       const cv = document.getElementById(id), ctx = cv.getContext('2d');

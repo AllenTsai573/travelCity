@@ -36,6 +36,8 @@
       <button id="btn-tilt" title="切換 55° 斜看 / 正上方俯視（T）">視角</button>
       <button id="btn-heat" title="道路擁塞程度：綠（暢通）→ 黃 → 紅（壅塞）（H）">擁塞圖</button>
       <button id="btn-zmap" title="分區圖：每塊地是什麼分區（M）">分區圖</button>
+      <button id="btn-flow" title="行程圖：住宅、商業、工業之間的往來（F）">行程圖</button>
+      <button id="btn-tmap" title="大眾運輸路線圖：所有公車與鐵路路線（L）">路線圖</button>
       <button id="btn-grow" title="城市依需求自動長出建築">自動發展</button>
       <button id="btn-ms" title="城市發展里程碑：各階段人口與解鎖內容">里程碑</button>
       <button id="btn-stats">統計</button>
@@ -44,6 +46,8 @@
   </header>
 
   <div id="zonemap" class="hidden"></div>
+  <div id="flowlegend" class="hidden maplegend"></div>
+  <div id="transitlegend" class="hidden maplegend"></div>
   <div id="heatlegend" class="hidden"><b>道路擁塞程度</b><i class="bar"></i><div class="lbl"><span>暢通</span><span>車多</span><span>壅塞</span></div></div>
   <div id="demand" title="分區需求：住宅 / 商業 / 工業（超過虛線才會蓋房子；自動發展時需求更高才會自動劃新分區）">
     <div class="col"><div class="track"><i id="d-R"></i></div><span>住</span></div>

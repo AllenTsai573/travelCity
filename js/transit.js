@@ -150,12 +150,18 @@ export class Transit {
     let li = this.planRail(old, 0);
     if (depots.length) {
       const cands = [];
+      // 玩家手動放的站牌：排在最前面（權重最大），一定會成為站牌
+      for (const m of C.busStops) {
+        const sn = net.segNear(m.x, m.y, 12, 0);
+        if (!sn || !sn.seg.T.access || sn.seg.T.internal) continue;
+        cands.push({ seg: sn.seg.id, u: clamp(sn.u, Math.min(sn.seg.ra + 30, sn.seg.len / 2), Math.max(sn.seg.len - sn.seg.rb - 30, sn.seg.len / 2)), w: 1e9, manual: true });
+      }
       for (const b of C.buildings) {
         if (b.abandoned || !(b.zone === 'R' || b.zone === 'C' || b.zone === 'I')) continue;
         const ref = b.front || { seg: b.seg, u: b.u }, s = net.segs.get(ref.seg);
         if (!s || s.T.internal || !s.T.access || s.drawLevel !== 0) continue;
         // 站牌離路口至少 30 m（公車停靠時不會擋到路口）
-        if (s.len - s.ra - s.rb < 70) continue;
+        if (s.len - s.ra - s.rb < 70 || C.busStops.some(m => Math.hypot(m.x - b.x, m.y - b.y) < STOP_GAP * 0.6)) continue;
         cands.push({ seg: s.id, u: clamp(ref.u, s.ra + 30, s.len - s.rb - 30), w: C.cap(b) * (b.zone === 'R' ? 1 : 0.8) });
       }
       cands.sort((a, b) => b.w - a.w);
@@ -166,8 +172,8 @@ export class Transit {
         const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t) && t.type !== 'rail' && t.u >= net.segs.get(t.seg).ra + 30 && t.u <= net.segs.get(t.seg).len - net.segs.get(t.seg).rb - 30);
         const q = o ? { x: o.x, y: o.y } : p;
         if (this.stops.some(t => t.type !== 'rail' && Math.hypot(t.x - q.x, t.y - q.y) < STOP_GAP)) continue;
-        if (o) { o.lines = []; this.stops.push(o); }
-        else this.stops.push({ id: this.nextId++, seg: c.seg, u: c.u, x: p.x, y: p.y, dx: p.dx, dy: p.dy, lines: [], queue: [] });
+        if (o) { o.lines = []; o.manual = !!c.manual; this.stops.push(o); }
+        else this.stops.push({ id: this.nextId++, seg: c.seg, u: c.u, x: p.x, y: p.y, dx: p.dx, dy: p.dy, lines: [], queue: [], manual: !!c.manual });
         if (this.stops.length >= 80) break;
       }
       for (const d of depots) {

@@ -5,7 +5,10 @@
 import { LANE_W, VEHICLE_COLORS, CLOCK } from './config.js';
 import { findRoute, routeFromPoint } from './routing.js';
 import { clamp, pointAt } from './util.js';
-import { laneOffset } from './network.js';
+import { laneOffset, halfWidth } from './network.js';
+
+// 卡死排除：排在最前面、停住超過 GRID_T 模擬秒（約 6 個遊戲小時）的車移除，後面的車才能動
+const GRID_T = 90;
 import { BUS_LEN, BUS_W } from './transit.js';
 
 const FREE = { gap: Infinity, lv: 0 };
@@ -25,6 +28,12 @@ export function fxAt(f, k) {
   return { x, y, dx: dx / L, dy: dy / L };
 }
 const MAX_VEHICLES = 3000;
+
+// 車道上最後面的車（停靠區裡的公車不算）
+function lastOnLane(lane) {
+  for (let i = lane.vehs.length - 1; i >= 0; i--) if (!lane.vehs[i].inBay) return lane.vehs[i];
+  return null;
+}
 
 export class Traffic {
   constructor(game) {
@@ -593,8 +602,8 @@ export class Traffic {
       }
     }
     let free = to.len;
-    if (to.vehs.length) {
-      const last = to.vehs[to.vehs.length - 1];
+    const last = lastOnLane(to);
+    if (last) {
       if (last.v > 4 && !enterRing) return true;
       free = last.s - last.len;
     }
@@ -696,10 +705,8 @@ export class Traffic {
   leaderOnLaneStart(c, d) {
     let gap = Infinity, lv = 0;
     const to = this.resolveLane(c.to);
-    if (to && to.vehs.length) {
-      const w = to.vehs[to.vehs.length - 1];
-      gap = d + w.s - w.len; lv = w.v;
-    }
+    const w = to && lastOnLane(to);
+    if (w) { gap = d + w.s - w.len; lv = w.v; }
     for (const sib of c.siblings) {
       for (const w of sib.vehs) {
         const rw = sib.len - w.s;
@@ -727,8 +734,11 @@ export class Traffic {
 
   leader(v) {
     const tr = v.track;
-    if (v.idx > 0) {
-      const L = tr.vehs[v.idx - 1];
+    // 開進停靠區的公車不算前車（後面的車從旁邊開過去）
+    let k = v.idx - 1;
+    while (k >= 0 && tr.vehs[k].inBay) k--;
+    if (k >= 0) {
+      const L = tr.vehs[k];
       const r = { gap: L.s - L.len - v.s, lv: L.v };
       return tr.kind === 'conn' && v.s < 6 ? this.forkLeader(tr.from, tr, v.s, r) : r;
     }
@@ -788,7 +798,16 @@ export class Traffic {
     const arr = lane.vehs;
     let i = 0;
     while (i < arr.length && arr[i].s > s) i++;
-    return { lead: i > 0 ? arr[i - 1] : null, follow: i < arr.length ? arr[i] : null };
+    // 停靠區裡的公車不在車道上
+    let a = i - 1, b = i;
+    while (a >= 0 && arr[a].inBay) a--;
+    while (b < arr.length && arr[b].inBay) b++;
+    return { lead: a >= 0 ? arr[a] : null, follow: b < arr.length ? arr[b] : null };
+  }
+  // 車道最前面的車（沒有前車；停靠區裡的公車不算）
+  isHead(v) {
+    for (let k = v.idx - 1; k >= 0; k--) if (!v.track.vehs[k].inBay) return false;
+    return true;
   }
 
   tryLaneChange(v) {
@@ -950,9 +969,25 @@ export class Traffic {
           const st = this.game.transit.stop(v.busDest.stop);
           if (st && !v.train && !this.game.transit.needStop(v, st)) { this.nextBusStop(v); continue; }
           v.dwell = st ? this.game.transit.exchange(v, st) : 1;
+          // 公車停靠區：在最外側車道的公車開進路邊加寬的停靠區（往外側偏移），後面的車可以直接開過去
+          if (!v.train && !tr.seg.T.internal && tr.idx === tr.link.lanes.length - 1) {
+            const ro = tr.link.dir > 0 ? laneOffset(tr.seg.T, 1, tr.idx) : -laneOffset(tr.seg.T, -1, tr.idx);
+            v.inBay = true; v.bayLat = halfWidth(tr.seg.T) + 1.3 - ro;
+          }
         }
         v.s = this.destS(v); v.v = 0; v.dwell -= dt;
-        if (v.dwell <= 0) this.nextBusStop(v);
+        if (v.inBay) v.lat = v.bayLat;
+        if (v.dwell <= 0) {
+          if (v.inBay) {
+            // 從停靠區開回車道：後方的車快到時先等
+            let f = null;
+            for (let k = v.idx + 1; k < tr.vehs.length; k++) if (!tr.vehs[k].inBay) { f = tr.vehs[k]; break; }
+            const gap = f ? v.s - v.len - f.s : Infinity;
+            if (f && (gap < 8 || (f.v > 2 && gap / f.v < 2.5))) { v.dwell = 0.2; continue; }
+            v.inBay = false;
+          }
+          this.nextBusStop(v);
+        }
         continue;
       }
       if (v.freight && tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === v.busDest.seg && v.s >= this.destS(v)) {
@@ -986,6 +1021,8 @@ export class Traffic {
           this.reroute(v);
         }
       }
+      // 卡死排除：車道最前面的車停了 GRID_T 秒以上（路口互卡、整串車都動不了）就移除，後面的車就能動
+      if (v.waitT > GRID_T && tr.kind === 'lane' && !v.train && !v.inBay && !v.dwell && !(v.parkWait > 0) && this.isHead(v)) { this.cleared = (this.cleared || 0) + 1; this.finish(v, false); anyDead = true; continue; }
       if (v.waitT > this.patience) { this.finish(v, false); anyDead = true; }
     }
     this.rerouteBudget = Math.min(this.rerouteBudget + 20, 60);

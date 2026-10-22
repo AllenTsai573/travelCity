@@ -24,6 +24,8 @@ class Game {
     this.paused = false;
     this.heatmap = false;
     this.zonemap = false;
+    this.flowmap = false;      // 行程圖
+    this.transitmap = false;   // 大眾運輸路線圖
     this.autoGrow = true;
     this.net = null;
     this.terrain = null;
@@ -62,6 +64,8 @@ class Game {
   togglePause() { this.paused = !this.paused; this.ui.refreshTop(); }
   toggleHeatmap() { this.heatmap = !this.heatmap; this.ui.refreshTop(); }
   toggleZonemap() { this.zonemap = !this.zonemap; this.ui.refreshTop(); }
+  toggleFlowmap() { this.flowmap = !this.flowmap; this.ui.refreshTop(); }
+  toggleTransitmap() { this.transitmap = !this.transitmap; this.ui.refreshTop(); }
 
   // ---------- 世界 ----------
   setup(seed, biome, difficulty, size = MAP_SIZE) {

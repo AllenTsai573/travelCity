@@ -400,5 +400,25 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert(gb.city.outside.length >= 2 && !gb.city.lots.length && !gb.city.buildings.length, `空白地圖開局（${gb.city.outside.length} 個外部連線、${gb.city.lots.length} 塊分區）`);
 }
 
+// 跨縣市公車站：連節公車停車格、往每個接通的外部連線各一條路線；場內道路接一般道路的出入口不算十字路口，對面的格子排到節點
+{
+  const gi = makeGame(11, 'temperate', 'normal'), C = gi.city, net = gi.net;
+  const segs = [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.drawLevel === 0 && s.len - s.ra - s.rb > 80).sort((a, b) => Math.hypot(a.pts[0].x - 1800, a.pts[0].y - 1800) - Math.hypot(b.pts[0].x - 1800, b.pts[0].y - 1800));
+  let lot = null;
+  for (const s of segs) for (const side of [1, -1]) {
+    if (lot) break;
+    const g0 = C.gridStart(s, side), p = C.planStroke('IB', s, side, g0, g0 + 60, 8).find(p => p.ok && p.cols >= 9 && p.rows >= 6);
+    if (p) lot = C.addLot('IB', s, p.u, side, p.cols, p.rows);
+  }
+  step(gi, 100);
+  const st = C.buildings.find(b => b.zt === 'IB');
+  assert(st && st.roads && C.truckSlotsOf(st).length >= 6, `跨縣市公車站蓋好並有連節公車停車格（${st ? C.truckSlotsOf(st).length : 0} 格）`);
+  step(gi, 50);
+  assert(gi.transit.icb.length === C.liveOutside().length && gi.transit.icb.length > 0, `跨縣市路線：每個接通的外部連線一條（${gi.transit.icb.length} 條）`);
+  const drv = [...net.nodes.values()].filter(n => n.jinfo && n.jinfo.drive);
+  const free = drv.some(n => n.jinfo.pairs[0].some(s => [1, -1].some(sd => C.endTrim(s, s.b === n.id, sd) === 0)));
+  assert(drv.length > 0 && free, `場內道路出入口（${drv.length} 個）對面一側的格子從節點開始`);
+}
+
 if (failed) { console.error(`${failed} 項失敗`); process.exit(1); }
 console.log('全部通過');

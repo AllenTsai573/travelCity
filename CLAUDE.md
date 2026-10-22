@@ -52,7 +52,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 | `interchange.js` | 16 種交流道模板（`TEMPLATES`、`TEMPLATE_ORDER`）：以「主線沿 +x、橫交道路沿 y」的區域座標設計（靠右行駛），`Path` 烏龜式路徑、`fitCornerRamp` 自動貼合外側匝道、高度剖面 `prof`；先在複製路網試建再正式建造；整組價格 `interchangePrice()` 介於 $45,000～$60,000 |
 | `thumbs.js` | 工具列縮圖 SVG（道路斷面含行車方向、圓環、交流道平面） |
 | `tools.js` | 玩家工具與輸入：道路（角度吸附以起點道路為基準、吸附地塊後緣 `lotAlign`）、圓環、交流道、升級、選取工具點路口即為路口編輯（`junctionClick`、`jLaneHit`，拖曳新增 / 移除車道連接；已沒有獨立的路口工具）、分區（沿路拖曳、`zoneChain` 在路口接直行道路可一路拖過去、`zoneCells` 格子、右鍵 / Esc 取消）、拆除 |
-| `ui.js` | 頂部資訊列、工具列（道路 / 圓環 / 交流道 / 升級合併為「道路建設」）、副工具列、資訊面板、對話框 |
+| `ui.js` | 頂部資訊列、工具列（道路 / 圓環 / 交流道 / 升級合併為「道路建設」；「大眾運輸」是只顯示 zone 為 `T` 種類的分區工具：`tools.zgroup = 'transit'`、`zoneBy` 記住兩組各自選的種類）、副工具列、資訊面板、對話框 |
 | `worldgen.js` | 開局：外部連線（地圖邊緣 2 條高速公路＋1 條聯外道路）、棋盤狀小鎮（分街廓鋪設）、接上一條高速公路到小鎮的大道（優先接大道端點），接上的那條市區道路沿高速公路方向一路改為林蔭大道（`boulevardFrom`，3+3 與高速公路車道數相同）、初始分區 |
 | `transit.js` | 大眾運輸：`plan()` 每個遊戲日（或總站 / 車站增減、手動站牌變動時）重新規劃站牌與路線（依建築容量挑站、依方位分組、最近鄰排序後 `bestTour` 以「到站方向」計算的實際行駛時間做 2-opt，`line.legs` 為依序的每段有向路段，`line.path` 為全部路段）、`dispatch()` 依發車間隔派車、`board(trip)` 讓居民到站牌排隊、`exchange(v, stop)` 上下客 |
 | `main.js` | 主迴圈（固定 0.1 s 模擬步、最多 80 步 / 幀）、存讀檔（localStorage，存檔記錄 `mapSize`） |
@@ -75,7 +75,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 - **時間**：參考 Cities: Skylines，時鐘走得比車子快很多（時間膨脹）：`CLOCK = 4` 遊戲分鐘 / 模擬秒，一般速度（1.5 倍模擬速度）一天約 4 分鐘、▶▶ 約 2 分鐘、▶▶▶ 約 45 秒。行程產生率乘上 `TRIP_SCALE`，路上車量不隨時鐘改變；「每小時到了幾個人」的滿意度門檻（`workSat`、`custSat`、`pickJob`）乘上 `TRIP_REF`。購物停留 40～130 分鐘、貨車卸貨 30～60 分鐘。
 - **開局**：`generateWorld(g, { empty: true })` 只鋪路與劃分區、不蓋建築，`city.growStart` 之後（開局 6 個遊戲小時）才開始發展；新建築有 1 天緩衝才會被判定衰退。測試用的 `makeGame` 沿用直接蓋好的小鎮。
 - **自動發展**：每 30 遊戲分鐘一次（交通壅塞 ≥ 0.35 時暫停）；需求依人口 / 工作比例、滿意度、壅塞與行程失敗計算；開啟「自動發展」時，需求 > 0.1 且空地塊 < 3 塊就自動在主路網旁劃設分區。
-- **大眾運輸**：分區 `T`（公車總站，最大 16×16），`developLots` 不看需求直接蓋；公車停車位用貨車車位（`tslots`、`b.tOcc`）。公車是 `v.bus = 路線 id` 的車輛（長 12 m），`v.busDest` 為下一站，到站停靠（`v.dwell`）後 `traffic.nextBusStop(v)`；路線取消時 `retireBus` 開回總站。居民沒車可開或以 `BUS_SHARE`（city.js）機率選擇公車時呼叫 `transit.board`（直達或在轉乘站 `line.hub` 換一次車，乘客 `p.next`）；站牌編號跨規劃沿用（`transit.nextId`），重新規劃後公車接著開往路線上的站；候車上限以模擬秒計（`MAX_WAIT_S`），因為時間膨脹下公車繞一圈要好幾個遊戲小時。站牌離路口 ≥ 30 m；公車到站前在 `tryLaneChange` 靠最外側車道（`curb`），`transit.needStop` 沒人上下車就不停；每條路線最多 `MAX_BUSES = 8` 台、班距 `HEADWAY = 80` 秒。
+- **大眾運輸**：分區 `T`（公車總站，最大 16×16），`developLots` 不看需求直接蓋；公車停車位用貨車車位（`tslots`、`b.tOcc`）。公車是 `v.bus = 路線 id` 的車輛（長 12 m），`v.busDest` 為下一站，到站停靠（`v.dwell`）後 `traffic.nextBusStop(v)`；路線取消時 `retireBus` 開回總站。居民沒車可開或以 `BUS_SHARE`（city.js）機率選擇公車時呼叫 `transit.board`（直達或在轉乘站 `line.hub` 換一次車，乘客 `p.next`）；站牌編號跨規劃沿用（`transit.nextId`），重新規劃後公車接著開往路線上的站；候車上限以模擬秒計（`MAX_WAIT_S`），因為時間膨脹下公車繞一圈要好幾個遊戲小時。站牌離路口 10～30 m；公車到站前在 `tryLaneChange` 靠最外側車道（`curb`），`transit.needStop` 沒人上下車就不停；每條路線最多 `MAX_BUSES = 8` 台、班距 `HEADWAY = 80` 秒。
 - **商業顧客**（`city.hourly`）：`custLevel` 累積來客、每小時乘 0.9；全市來客 `stats.custTot` 依 `cap × SHOP_KINDS.shop` 分份額，達到份額六成即滿意。另有走路顧客（每戶住宅分給 450 m 內商店，不產生車）；加油站看路過車輛（`L.passAcc`，traffic.updateFlow 累積）；辦公大樓只看員工、不收貨。
 - **依人口解鎖**（`config.js`）：`MILESTONES`（小村莊 0 / 小鎮 750 / 市鎮 1000 / 城市 2500 / 大城市 3000 / 大都會 5000，`unlock` 為通知文字）、`ZONE_UNLOCK`（各分區 [人口, 最大格數]）、`zoneMax(zt, pop)` / `zoneNext`、`HITECH_POP = 3000`（`INDUSTRY_KINDS` 的 `hitech`：`semi` 半導體、`battery` 電池）。人口以 `city.peakPop`（曾達到的最高人口，存檔）計；`city.maxCells(zt)` 給 `planStroke`、工具列、自動劃設用；解鎖判斷一律用 `city.unlockPop()`（沙盒 `diff.unlockAll` 時為 Infinity，一開始就全部解鎖）。稱號 `g.milestone` 讀檔時依 peakPop 重算。開局小鎮只有 R1 / C / I（≤ 12）。**測試的 `makeGame` 預設 `peakPop = 1e6`（全部解鎖）**，解鎖規則另有測試。
 - **臨路道路限制地塊大小**：`ROAD_TYPES.lotMax`（dirt 6、street / oneway1 12、avenue / oneway2 18、boulevard 不限）；`city.maxCells(zt, seg)` = min(依人口上限, 道路上限)，`planStroke`、分區工具提示、`autoLotSize` 都傳路段。
@@ -91,7 +91,11 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 - **地圖線條**：`render.pathLine(keys)` 把有向路段序列沿中間車道與路口連接線（`conn.pts`）接成連續折線，`arrowsAlong` 畫箭頭；行程圖以 `routeFromPoint` 算每組往來的路線（`f.route` 依 `net.version` 快取，每幀最多算 30 條），累加到路段與轉彎上再畫。
 - **成長壓力**：`city.js` 的 `GROWTH = { R: 0.25, C: 0.15, I: 0.12 }` 加在需求上（交通差時被 `jam` 抵銷）。大型商業的停車場道路開不出來時改蓋辦公大樓；工業沒有實際園區道路時一律用前院式（`compact`）配置。
 - **卡死排除**：`traffic` 的 `GRID_T = 90` 模擬秒，車道最前面（`isHead`）停住超過就 `finish(v, false)`，計數 `traffic.cleared`。
-- **計程車**：分區 `TX`（計程車行）、`TS`（招呼站），zone 都是 `T`；車位是小客車車位（`slotOcc` 停著黃色計程車 `TAXI_COLOR`）。`transit.callTaxi(trip)` 從 1.6 km 內最近有車的站 `trySpawn({ kind: 'taxi', taxi: 乘客行程 }, 接客點)`；車輛 `v.taxi = { pax, stage }`、目的地沿用 `v.busDest`，到點停 3 秒後 `traffic.nextTaxiStage`：stage 0 接客 → stage 1 下客（乘客 `onTripEnd`）→ 改成 `taxiret` 行程開回 `transit.taxiHome` 找到的空車位。叫車時機：`spawnFrom` 中 `TAXI_SHARE`（有車也叫）、以及沒車可開時公車不行才叫車，再不行才走路。
+- **服務範圍**：`ZONE_TYPES[zt].range`（公尺，`transit.rangeOf`）：公車總站 / 跨縣市總站的市內路線 1800、招呼站 1800、計程車派遣中心 Infinity（全地圖）；跨縣市公車用 `icbRange`（Infinity）。
+- **跨縣市公車**：分區 `IT`（總站，也在 `depots()` 裡、市內路線只用一半停車格）、`IB`（公車站），停車格是 18 m 的連節公車位（lotArt `artic: true`，`ICB_COLOR`）。`transit.icb` 路線 = 每站 × 每個 `liveOutside()`（`icbPlan`，依 key 變動重建、沿用佇列）；`city.spawnFrom` 對往返外地的人（`ICB_KINDS`）以 `ICB_SHARE` 呼叫 `transit.icbBoard`（`trip.icb` 讓回程也搭）：出城的進 `L.q`、進城的進 `L.inQ`。`icbUpdate` 依 `ICB_MIN` / `ICB_MAXHOLD` 發車，`trySpawn({ kind: 'icb', icb: 路線, icbPax })` 產生 `v.icb = { line, pax, inbound }`（`len = ART_LEN`、`cars: 2`，`render.drawTrain` 畫兩節）；`traffic.endTrip` 交給 `transit.icbArrive`：乘客 `onTripEnd`，出城的在 `ICB_AWAY` 分鐘後（`L.away`）從外部連線載著 `inQ` 開回站內車位。
+- **場內道路出入口**（`network.junctionInfo` 的 `info.drive`：一組直通的一般道路＋其他都是場內道路）：`rebuild` 用 `trims` 讓主線只截 `場內道路半寬 + 2.5`、場內道路從主線路緣開始；render 不畫斑馬線 / 停止線 / 轉向箭頭，主線標線（`markingsFor` 非邊線、非分隔帶）一路畫過去。`city.endTrim(seg, atB, side)`：另一側沒有場內道路時為 0，`gridStart(seg, side)`、`planStroke`、`canPlaceLot`、`zoneCell`、`zoneCells` 都依側別使用。
+- **圓環進場**：`traffic.hasSpace` 進環道時只扣停滯（< 4 m/s）的車，`canEnter` 的臨界間距 3 → 2 秒（等越久越短）；`network.makeConn` 圓環相關連接線用側向加速度 3.2、最低 5 m/s。
+- **計程車**：分區 `TX`（計程車派遣中心）、`TS`（招呼站），zone 都是 `T`；車位是小客車車位（`slotOcc` 停著黃色計程車 `TAXI_COLOR`）。`transit.callTaxi(trip)` 從範圍（`rangeOf`）涵蓋接客點、最近有車的站 `trySpawn({ kind: 'taxi', taxi: 乘客行程 }, 接客點)`；車輛 `v.taxi = { pax, stage }`、目的地沿用 `v.busDest`，到點停 3 秒後 `traffic.nextTaxiStage`：stage 0 接客 → stage 1 下客（乘客 `onTripEnd`）→ 改成 `taxiret` 行程開回 `transit.taxiHome` 找到的空車位。叫車時機：`spawnFrom` 中 `TAXI_SHARE`（有車也叫）、以及沒車可開時公車不行才叫車，再不行才走路。
 - **鐵路**：`ROAD_TYPES.rail`（`rail: true`、rank 5）。`genConnections` 不在鐵路與道路之間建連接，平面相交的節點就是平交道（衝突點照常計算；`canEnter` 中車輛遇到 14 秒內會到的列車一律等）。外部鐵路在 `city.railOutside`（不在 `city.outside`，不產生汽車車流）。車站分區 `RT`（總站）、`RS`（車站）、`RC`（貨運站），zone 都是 `T`、`ZONE_TYPES.rail`；`city.railNear(geo)` 找地塊後方 / 兩側 30 m 內的地面鐵軌，`planStroke` 沒有就不能劃，`city.platformOf(b)` 是月台（快取）。
   - 客運：`transit.planRail` 每個 RT 一條路線（同一鐵路連通區 `railComp` 的車站，最近鄰排序後來回），站點 id 為 `'r' + 建築 id`，`type: 'rail'`，同時有月台（seg/u，列車用）與站前道路（bseg/bu，公車用，`stopPoint(t, train)`）。列車 `v.train`（沿用 `v.bus` = 路線、`pax`、`exchange`），`traffic.spawnTrain` 從總站月台發車，`trainRoute` 往兩個方向找路，要往回開時換到另一條軌道（在車站折返）。`board()` 對鐵路車站用 `RAIL_WALK = 800`。
   - 公車轉運站：RT 的 `b.busHub`（資訊面板升級，$8,000），lotArt 在前方畫公車停車格（tslots），`transit.depots()` 包含它，公車路線的轉乘站就是車站本身（公車 ↔ 列車轉乘）。
@@ -128,6 +132,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 14. 公車擋路修正（靠外側車道、沒人上下車不停、站牌離路口 30 m、每線最多 8 台）、公車停靠區、手動公車站牌、行程圖、大眾運輸路線圖、卡死自動排除、鐵路上不能蓋圓環、模組版本號（import map）
 15. 行程圖與路線圖沿道路畫成連續的線（箭頭、行程圖細到粗）、公車站序依行駛方向最佳化、SPUI 橫交道路改林蔭大道、需求加成長壓力、主迴圈防當機（錯誤顯示在畫面）、npm test 加語法檢查
 16. 錯誤自動截圖與 GitHub 回報；路段銜接處標線（虛線依長度等分、中央分隔帶方頭）、辦公大樓尺寸上限與分層、換車道改為 S 形平順橫移（`v.lat0` / `v.lcP` / `v.latSlope`）、窄公車總站（7 格寬起）也有公車位、站牌少時也開路線（轉乘站＋1 站）、站牌可設在較短的路段（離路口 10～30 m，太短改用 120 m 內的道路）、分區拖曳跨過路口、路口工具併入選取工具
+17. 大眾運輸獨立工具列（P）、計程車派遣中心（全市）與招呼站 1.8 km、公車總站 1.8 km、跨縣市公車站 / 總站（連節公車往返外部連線）、場內道路出入口不算十字路口（對面分區連續）、圓環進場不再過度等待
 
 ## 已知問題 / 可以繼續的方向
 

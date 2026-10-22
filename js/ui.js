@@ -16,6 +16,7 @@ const TOOLS = [
   { id: 'select', icon: '🖱️', name: '選取', key: 'V' },
   { id: 'build', icon: '🛣️', name: '道路建設', key: 'R' },
   { id: 'zone', icon: '🏘️', name: '分區', key: 'Z' },
+  { id: 'transit', icon: '🚌', name: '大眾運輸', key: 'P' },
   { id: 'bulldoze', icon: '🚧', name: '拆除', key: 'B' },
 ];
 const PURPOSE = { work: '通勤上班', home: '回家', shop: '購物', goods: '貨運（商品）', mat: '貨運（原料）', through: '過境交通', visit: '觀光住宿', return: '回程', bus: '公車' };
@@ -83,6 +84,7 @@ export class UI {
       else if (k === 'zone') {
         if (v !== 'X' && v !== 'STOP' && !g.city.maxCells(v)) { g.notify(`${ZONE_TYPES[v].name}需要人口達到 ${zoneNext(v, g.city.unlockPop())[0]} 才能解鎖`, 'warn'); return; }
         t.zone = v;
+        t.zoneBy[t.zgroup] = v;
       }
       else if (k === 'rb') t.rbR = Number(v);
       else if (k === 'ix') t.ixType = v;
@@ -108,7 +110,7 @@ export class UI {
   refreshToolbar() {
     const g = this.g, t = g.tools;
     if (isBuild(t.tool)) this.lastBuild = t.tool;
-    const on = x => (x.id === 'build' ? isBuild(t.tool) : t.tool === x.id);
+    const on = x => (x.id === 'build' ? isBuild(t.tool) : x.id === 'transit' ? t.tool === 'zone' && t.zgroup === 'transit' : x.id === 'zone' ? t.tool === 'zone' && t.zgroup !== 'transit' : t.tool === x.id);
     this.toolbar.innerHTML = TOOLS.map(x => `<button data-tool="${x.id}" class="${on(x) ? 'on' : ''}" title="${x.name}（${x.key}）"><span class="ic">${x.icon}</span><span>${x.name}</span><kbd>${x.key}</kbd></button>`).join('');
     let html = '';
     if (isBuild(t.tool)) html += `<div class="grp modes">` + BUILD.map(b => `<button data-mode="${b.id}" class="${t.tool === b.id ? 'on' : ''}" title="${b.name}（${b.key}）">${b.icon} ${b.name}<kbd>${b.key}</kbd></button>`).join('') + `</div><div class="brk"></div>`;
@@ -125,17 +127,19 @@ export class UI {
         html += `<div class="hint">左鍵連續鋪路 · 右鍵/Esc 結束 · 接近平行 / 45° / 垂直會自動對齊起點道路 · Shift 每 15° 吸附 · Alt 不吸附 · [ ] 切換高度</div>`;
       } else html += `<div class="hint">點擊道路以變更類型（同類單行道則反轉方向）</div>`;
     } else if (t.tool === 'zone') {
-      const zdesc = { R1: '透天、獨棟', R2: 'アパート、低層公寓大樓', R3: '板狀大樓、塔式住宅', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站，路線由系統自動規劃；6×5 格以上有場內車道與較多公車', TX: '計程車行：停很多台計程車，6×5 格以上有場內車道', TS: '計程車招呼站：路邊幾個計程車位', RT: '鐵路總站：列車從這裡發車，可升級附設公車轉運站；要緊鄰鐵軌', RS: '鐵路車站：列車停靠站；要緊鄰鐵軌', RC: '鐵路貨運站：貨運列車運來原料、載走外銷商品；要緊鄰鐵軌' };
+      const zdesc = { R1: '透天、獨棟', R2: 'アパート、低層公寓大樓', R3: '板狀大樓、塔式住宅', C: '15×15 以上可能有大型量販店', I: '園區內有道路，功能隨機', T: '公車總站：1.8 km 內的站牌由系統自動規劃成路線；7×5 格以上有場內車道與較多公車', TX: '計程車派遣中心：停很多台計程車，全市都能派車；6×5 格以上有場內車道', TS: '計程車招呼站：路邊幾個計程車位，派車範圍 1.8 km', IT: '跨縣市公車總站：連節公車往返外地（全市的人都會來搭），同時也是一般公車總站（市內路線 1.8 km）；9×6 格以上有場內車道', IB: '跨縣市公車站：只有往返外地的連節公車路線（全市的人都會來搭）；9×6 格以上有場內車道', RT: '鐵路總站：列車從這裡發車，可升級附設公車轉運站；要緊鄰鐵軌', RS: '鐵路車站：列車停靠站；要緊鄰鐵軌', RC: '鐵路貨運站：貨運列車運來原料、載走外銷商品；要緊鄰鐵軌' };
       // 依人口解鎖：未解鎖的顯示需要的人口；已解鎖的顯示目前最大尺寸與下一次放大的人口
       const peak = g.city.unlockPop();
-      html += `<div class="grp">` + ZONE_ORDER.map(k => {
+      const tr = t.zgroup === 'transit';
+      html += `<div class="grp">` + ZONE_ORDER.filter(k => (ZONE_TYPES[k].zone === 'T') === tr).map(k => {
         const Z = ZONE_TYPES[k], m = zoneMax(k, peak), nx = zoneNext(k, peak);
         const sub = m ? `最大 ${m}×${m}` + (nx ? `（${nx[0]} 人 → ${nx[1]}×${nx[1]}）` : '') : `🔒 人口 ${nx[0]}`;
         return `<button data-sub="zone" data-v="${k}" class="zone-${Z.zone} ${t.zone === k ? 'on' : ''} ${m ? '' : 'locked'}" title="${Z.name}：${m ? `最大 ${m}×${m} 格（每格 6 m）` : `人口達到 ${nx[0]} 才能解鎖`}${nx && m ? `；人口 ${nx[0]} 時放大到 ${nx[1]}×${nx[1]}` : ''}｜${zdesc[k]}"><b><i class="sw" style="background:${ZONES[Z.zone].color[k === 'R1' ? 0 : k === 'R3' ? 2 : 1]}"></i>${Z.short}</b><small>${sub}</small></button>`;
       }).join('')
-        + `<button data-sub="zone" data-v="STOP" class="${t.zone === 'STOP' ? 'on' : ''}" title="點道路放置公車站牌，再點一次移除；附近有公車總站時一定會排進公車路線"><b>🚏 公車站牌</b><small>手動放置 · 免費</small></button>`
+        + (!tr ? '' : `<button data-sub="zone" data-v="STOP" class="${t.zone === 'STOP' ? 'on' : ''}" title="點道路放置公車站牌，再點一次移除；附近有公車總站時一定會排進公車路線"><b>🚏 公車站牌</b><small>手動放置 · 免費</small></button>`)
         + `<button data-sub="zone" data-v="X" class="${t.zone === 'X' ? 'on' : ''}" title="拖曳範圍內的空分區取消"><b>✕ 取消分區</b><small>僅空地</small></button></div>`;
-      html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕高速公路噪音。各分區的最大尺寸隨人口解鎖放大，也受臨路道路限制：小路 6×6、市區道路 12×12、大道 18×18、林蔭大道不限。</div>`;
+      if (tr) html += `<div class="hint">在路旁按住拖曳劃設車站（每格 6 m），劃好就會蓋起來、不看需求。公車路線、站牌與班次由系統依住宅與工作地點自動規劃；鐵路車站要緊鄰鐵軌。</div>`;
+      else html += `<div class="hint">在路旁按住拖曳：沿路拉長、往外拉深（每格 6 m），拖曳中按右鍵或 Esc 取消。一次拖曳的範圍會依最大尺寸切成數塊，有需求時才會蓋起建築。住宅怕高速公路噪音。各分區的最大尺寸隨人口解鎖放大，也受臨路道路限制：小路 6×6、市區道路 12×12、大道 18×18、林蔭大道不限。</div>`;
     } else if (t.tool === 'roundabout') {
       html += `<div class="grp">` + [18, 26, 36].map(r => `<button data-sub="rb" data-v="${r}" class="th ${t.rbR === r ? 'on' : ''}">${roundaboutThumb(r)}<b>半徑 ${r} m</b></button>`).join('') + `</div>`;
       html += `<div class="hint">點擊既有路口將其改建為圓環，或在空地放置圓環。環道車輛擁有路權。</div>`;
@@ -317,11 +321,19 @@ export class UI {
             <dt>貨運列車</dt><dd>${fr.length ? '行駛中' : '等待下一班'}（全市累計 ${g.transit.stats.freight || 0} 班）</dd></dl>
             <p class="note">貨運列車每 4 個遊戲小時從外部鐵路開來（貨運站的鐵路要接到外部鐵路）：卸下原料、載走外銷商品。附近 3 km 內的工廠優先從這裡用貨車拿原料，外銷商品也送到這裡。</p>`;
         }
+        if (b.zt === 'IT' || b.zt === 'IB') {
+          const tr = g.transit, L = tr.icb.filter(x => x.st === b.id), run = g.traffic.vehicles.filter(v => v.icb && L.some(x => x.id === v.icb.line));
+          const own = b.zt === 'IT' ? (() => { const lines = tr.lines.filter(l => l.depot === b.id); return `<dt>市內路線</dt><dd>${lines.map(l => `<span style="color:${l.color}">■</span> ${l.name}（${l.stops.length} 站）`).join('<br>') || '—'}</dd>`; })() : '';
+          return `<dl><dt>連節公車</dt><dd>停著 ${g.city.parkedCount(b, true)} 台 / ${g.city.truckSlotsOf(b).length} 個車位，${run.length} 台行駛中</dd>
+            <dt>跨縣市路線</dt><dd>${L.map(x => `<span style="color:${x.color}">■</span> 往 ${x.name}：出城候車 ${x.q.length} 人、外地候車 ${x.inQ.length} 人`).join('<br>') || '—（還沒有接通的外部連線）'}</dd>
+            ${own}<dt>累計載客</dt><dd>${tr.stats.icb || 0} 人次（全市跨縣市公車）</dd></dl>
+            <p class="note">往返外地的居民、外地來上班 / 購物的人與旅客，有三成多會改搭跨縣市公車（全市都會來搭，回程也搭）：連節公車從這裡開到每個接通的外部連線，約 2 個遊戲小時後載著外地乘客開回來。${b.zt === 'IT' ? '總站同時也是一般公車總站：一半的停車格給市內路線（1.8 km 內的站牌）。' : '公車站只有跨縣市路線。'}</p>`;
+        }
         if (b.zt === 'TX' || b.zt === 'TS') {
           const tr = g.transit, sl = g.city.slotsOf(b).length, out = g.traffic.vehicles.filter(v => v.taxi && v.trip && (v.trip.from === b || v.taxi.stage === 0 && v.trip.from === b)).length;
           return `<dl><dt>計程車</dt><dd>停著 ${g.city.parkedCount(b)} 台 / ${sl} 個車位</dd><dt>全市行駛中</dt><dd>${g.traffic.vehicles.filter(v => v.taxi).length} 台載客 / 接客中</dd>
             <dt>累計載客</dt><dd>${tr.stats.taxi || 0} 趟（叫車 ${tr.stats.taxiCalls || 0} 次）</dd></dl>
-            <p class="note">家裡沒車可開、附近又沒有公車可搭的居民（以及少數有車的居民）會叫計程車：從 1.6 km 內最近、有停著計程車的車行 / 招呼站派車，接到客人後送到目的地，再開回最近有空位的站停好。</p>`;
+            <p class="note">家裡沒車可開、附近又沒有公車可搭的居民（以及少數有車的居民）會叫計程車：從最近、有停著計程車的站派車（招呼站派 1.8 km 內、派遣中心全市都派），接到客人後送到目的地，再開回最近有空位的站停好。</p>`;
         }
         if (b.zone === 'T') {
           const tr = g.transit, lines = tr.lines.filter(l => l.depot === b.id), run = g.traffic.vehicles.filter(v => v.bus && lines.some(l => l.id === v.bus));

@@ -217,6 +217,12 @@ export class Network {
     info.ramp = !info.ring && pairs.length === 1 && others.length > 0 &&
       others.every(o => Math.abs(o.x * pairs[0][0].x + o.y * pairs[0][0].y) > 0.766);
     if (pairs.length) info.mainDir = { x: pairs[0][0].x, y: pairs[0][0].y };
+    // 場內道路（停車場 / 社區 / 園區車道）接到一般道路的出入口：主線直通，不算十字路口
+    // （不畫斑馬線、停止線，路口範圍很小、主線標線一路畫過去；對面那一側沒有路口，分區可以排到節點）
+    if (!info.ring && pairs.length === 1 && others.length && others.every(o => o.s.T.internal)) {
+      const [m1, m2] = info.pairs[0];
+      info.drive = !m1.T.internal && !m2.T.internal && !m1.T.rail && m1.T.fwd + m1.T.bwd === m2.T.fwd + m2.T.bwd && (m1.T.median || 0) === (m2.T.median || 0);
+    }
     return info;
   }
 
@@ -325,6 +331,12 @@ export class Network {
       if (n.jinfo.ramp) {
         n.trims = new Map();
         for (const o of n.jinfo.others) n.trims.set(o.id, this.rampTrim(n, o, n.jinfo));
+      } else if (n.jinfo.drive) {
+        // 出入口：主線只留轉進車道所需的長度，場內道路從主線路緣開始
+        const main = n.jinfo.pairs[0], mainHW = Math.max(...main.map(s => halfWidth(s.T))), inHW = Math.max(...n.jinfo.others.map(s => halfWidth(s.T)));
+        n.trims = new Map();
+        for (const s of main) n.trims.set(s.id, inHW + 2.5);
+        for (const o of n.jinfo.others) n.trims.set(o.id, mainHW + 0.5);
       }
     }
     for (const s of this.segs.values()) this.updateSegGeom(s);
@@ -381,7 +393,9 @@ export class Network {
     let vmax = Math.min(from.speed, to.speed);
     if (ang > 0.15 && d > 0.05) {
       const R = d / (2 * Math.sin(ang / 2) + 1e-6);
-      vmax = Math.min(vmax, Math.max(4, Math.sqrt(2.4 * R)));
+      // 圓環的進出口與環道：駕駛接受較大的側向加速度（約 20 km/h 進出）
+      const ring = from.seg.ring || to.seg.ring;
+      vmax = Math.min(vmax, Math.max(ring ? 5 : 4, Math.sqrt((ring ? 3.2 : 2.4) * R)));
     }
     if (turn === 'U') vmax = 4;
     const c = {

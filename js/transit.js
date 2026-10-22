@@ -7,18 +7,23 @@
 //   就走到站牌等車；否則走路
 import { pointAt, clamp, closestOnPoly } from './util.js';
 import { routeFromPoint, findRoute } from './routing.js';
-import { CLOCK } from './config.js';
+import { CLOCK, ZONE_TYPES } from './config.js';
 
-// 計程車：叫車的居民在 TAXI_RANGE 公尺內有停著計程車的車行 / 招呼站才叫得到
-const TAXI_RANGE = 1600;
+// 服務範圍（公尺）：計程車站的派車範圍、公車總站的站牌範圍（ZONE_TYPES 的 range；附設公車轉運站的鐵路總站同公車總站）
+export const rangeOf = b => ZONE_TYPES[b.zt]?.range ?? ZONE_TYPES.T.range;
 
 const LINE_COLORS = ['#d23c2c', '#1f6fb5', '#2a9d3f', '#e08a1e', '#7d3c98', '#0f8b8d'];
 const RAIL_COLORS = ['#e8eef2', '#f2e9d6', '#e3f0e6'];
 // 鐵路：車站步行範圍較大；列車載客量；貨運列車的班距（遊戲分鐘）
 const RAIL_WALK = 800, TRAIN_CAP = 300, FREIGHT_EVERY = 240;
 // 時間膨脹：公車繞一圈要好幾個遊戲小時，候車上限以模擬秒計（MAX_WAIT_S）；每條路線最多 MAX_STOPS 站
-const STOP_GAP = 240, WALK = 450, RANGE = 1500, PLAN_EVERY = 1440, MAX_WAIT_S = 240, MAX_STOPS = 9, CAPACITY = 60, HEADWAY = 80, MAX_BUSES = 8;
+const STOP_GAP = 240, WALK = 450, PLAN_EVERY = 1440, MAX_WAIT_S = 240, MAX_STOPS = 9, CAPACITY = 60, HEADWAY = 80, MAX_BUSES = 8;
 export const BUS_LEN = 12, BUS_W = 2.6;
+// 跨縣市公車（連節公車）：車長、載客量、發車間隔與開到外地再回來的時間（遊戲分鐘）、候車上限（模擬秒）
+export const ART_LEN = 18;
+// 發車條件：候車 ICB_MIN 人以上，或最早的人已等 ICB_MAXHOLD 分鐘
+const ICB_CAP = 90, ICB_HEADWAY = 45, ICB_AWAY = 120, ICB_WAIT_S = 400, ICB_MIN = 15, ICB_MAXHOLD = 180;
+const ICB_COLORS = ['#2f6db5', '#1b8a8f', '#6b4fb3', '#b5651d'];
 
 export class Transit {
   constructor(game) {
@@ -29,11 +34,14 @@ export class Transit {
     this.nextId = 1;   // 站牌編號一直往上加：重新規劃時位置沒變的站牌沿用原編號（車上乘客記的是站牌編號）
     this._key = '';
     this.stats = { riders: 0, walked: 0 };
+    this.icb = [];   // 跨縣市公車路線：每個跨縣市公車站 × 每個接通的外部連線
   }
   get city() { return this.game.city; }
   get net() { return this.game.net; }
   // 公車總站（含附設公車轉運站的鐵路總站）
-  depots() { return this.city.buildings.filter(b => (b.zt === 'T' || (b.zt === 'RT' && b.busHub)) && !b.dead && !b.abandoned && this.city.truckSlotsOf(b).length); }
+  depots() { return this.city.buildings.filter(b => (b.zt === 'T' || b.zt === 'IT' || (b.zt === 'RT' && b.busHub)) && !b.dead && !b.abandoned && this.city.truckSlotsOf(b).length); }
+  // 跨縣市公車總站與公車站
+  icbStations() { return this.city.buildings.filter(b => ZONE_TYPES[b.zt]?.icbRange && !b.dead && !b.abandoned && this.city.truckSlotsOf(b).length); }
   railStations() { return this.city.buildings.filter(b => (b.zt === 'RT' || b.zt === 'RS') && !b.dead && !b.abandoned && this.city.platformOf(b)); }
   // 鐵路的連通區：節點 id → 編號（只沿鐵路路段）
   railComp() {
@@ -58,7 +66,7 @@ export class Transit {
   callTaxi(trip) {
     const a = trip.from, b = trip.to, C = this.city;
     if (!a || !b || a.outside || b.outside || a.dead || b.dead) return false;
-    const st = this.taxiStands().filter(s => C.parkedCount(s) > 0).map(s => [s, Math.hypot(s.x - a.x, s.y - a.y)]).filter(e => e[1] < TAXI_RANGE).sort((p, q) => p[1] - q[1]);
+    const st = this.taxiStands().filter(s => C.parkedCount(s) > 0).map(s => [s, Math.hypot(s.x - a.x, s.y - a.y)]).filter(e => e[1] < rangeOf(e[0])).sort((p, q) => p[1] - q[1]);
     for (const [s] of st.slice(0, 3)) {
       const r = this.game.traffic.trySpawn({ kind: 'taxi', from: s, to: a, truck: false, taxi: trip }, { seg: a.seg, u: a.u, id: s.id });
       if (r === 'ok') { this.stats.taxiCalls = (this.stats.taxiCalls || 0) + 1; return true; }
@@ -88,6 +96,7 @@ export class Transit {
     this.planT -= dt;
     if (this.planT <= 0 || key !== this._key) { this._key = key; this.planT = PLAN_EVERY; this.plan(); }
     this.dispatch();
+    this.icbUpdate();
     // 貨運列車：每 FREIGHT_EVERY 分鐘從外部鐵路開一班到每個接得到的貨運站
     this.freightT = (this.freightT ?? 30) - dt;
     if (this.freightT <= 0) { this.freightT = FREIGHT_EVERY; this.sendFreight(); }
@@ -183,7 +192,7 @@ export class Transit {
       cands.sort((a, b) => b.w - a.w);
       for (const c of cands) {
         const s = net.segs.get(c.seg), p = pointAt(s.pts, s.cum, c.u);
-        if (!depots.some(d => Math.hypot(d.x - p.x, d.y - p.y) < RANGE)) continue;
+        if (!depots.some(d => Math.hypot(d.x - p.x, d.y - p.y) < rangeOf(d))) continue;
         // 附近原本就有站牌（同方向）：沿用原來的站牌，站位不動
         const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t) && t.type !== 'rail' && okSeg(net.segs.get(t.seg)) && Math.abs(t.u - inSeg(net.segs.get(t.seg), t.u)) < 0.01);
         const q = o ? { x: o.x, y: o.y } : p;
@@ -193,10 +202,11 @@ export class Transit {
         if (this.stops.length >= 80) break;
       }
       for (const d of depots) {
-        const buses = C.truckSlotsOf(d).length;
+        // 跨縣市公車總站：一半的停車格給市內路線
+        const buses = Math.floor(C.truckSlotsOf(d).length / (d.zt === 'IT' ? 2 : 1));
         // 總站到得了的站牌（同一個路網連通區）
         const from = { seg: d.seg, u: d.u, id: d.id };
-        const mine = this.stops.filter(t => t.type !== 'rail' && !t.lines.length && Math.hypot(t.x - d.x, t.y - d.y) < RANGE && routeFromPoint(net, from, { seg: t.seg, u: t.u, id: d.id }));
+        const mine = this.stops.filter(t => t.type !== 'rail' && !t.lines.length && Math.hypot(t.x - d.x, t.y - d.y) < rangeOf(d) && routeFromPoint(net, from, { seg: t.seg, u: t.u, id: d.id }));
         // 轉乘站：離總站最近的站，每條路線都從這裡出發；附設公車轉運站的鐵路總站就是車站本身（公車與列車在這裡轉乘）
         mine.sort((a, b) => Math.hypot(a.x - d.x, a.y - d.y) - Math.hypot(b.x - d.x, b.y - d.y));
         const hub = d.zt === 'RT' ? this.stop('r' + d.id) : mine.shift();
@@ -309,6 +319,75 @@ export class Transit {
       if ((line.rail ? tr.spawnTrain(d, line) : tr.spawnBus(d, line)) === 'ok') { line.nextT = this.game.time + line.headway; d._busCD = this.game.time + 8; }
       else d._busCD = this.game.time + 2;
     }
+  }
+
+  // ---------- 跨縣市公車 ----------
+  // 路線：每個跨縣市公車站 × 每個接通的外部連線（高速公路 / 聯外道路）。往返外地的居民與外地來的上班族 / 顧客 / 旅客
+  // 有一部分（city.js 的 ICB_SHARE）改搭：出城的在站內排隊，連節公車開到外部連線（乘客的行程完成），過 ICB_AWAY 分鐘後
+  // 載著外地來的乘客開回來、停回站內的停車格（乘客到站，行程完成）
+  icbPlan() {
+    const C = this.city, outs = C.liveOutside(), old = new Map(this.icb.map(L => [L.id, L]));
+    this.icb = [];
+    let k = 0;
+    for (const s of this.icbStations()) for (const o of outs) {
+      const id = s.id + ':' + o.node, L = old.get(id) || { id, st: s.id, node: o.node, q: [], inQ: [], away: [], nextT: 0 };
+      L.name = o.name; L.color = ICB_COLORS[k++ % ICB_COLORS.length];
+      this.icb.push(L);
+      old.delete(id);
+    }
+    // 取消的路線：等車的乘客改走路
+    for (const L of old.values()) for (const p of [...L.q, ...L.inQ]) this.walk(p.trip);
+  }
+  // 往返外地的行程改搭跨縣市公車：找範圍內最近、有往那個外部連線路線的站。成功回傳 true
+  icbBoard(trip) {
+    if (!this.icb.length || trip.truck) return false;
+    const out = trip.to.outside ? trip.to : trip.from.outside ? trip.from : null, local = out === trip.to ? trip.from : trip.to;
+    if (!out || !local || local.outside || local.dead) return false;
+    let best = null, bd = Infinity;
+    for (const L of this.icb) {
+      const s = this.city.byId.get(L.st);
+      if (L.node !== out.node || !s || s.dead) continue;
+      const d = Math.hypot(s.x - local.x, s.y - local.y);
+      if (d < ZONE_TYPES[s.zt].icbRange && d < bd) { bd = d; best = L; }
+    }
+    if (!best) return false;
+    (out === trip.to ? best.q : best.inQ).push({ trip, t: this.game.time });
+    trip.icb = true; trip.transit = true;
+    return true;
+  }
+  icbUpdate() {
+    const C = this.city, tr = this.game.traffic, now = this.game.time;
+    const key = this.icbStations().map(b => b.id).join(',') + '|' + C.liveOutside().map(o => o.node).join(',');
+    if (key !== this._icbKey) { this._icbKey = key; this.icbPlan(); }
+    const maxWait = ICB_WAIT_S * CLOCK;
+    for (const L of this.icb) {
+      const s = C.byId.get(L.st), o = C.outside.find(x => x.node === L.node);
+      if (!s || s.dead || !o || o.seg === null) continue;
+      for (const q of [L.q, L.inQ]) while (q.length && now - q[0].t > maxWait) this.walk(q.shift().trip);
+      // 從外地開回來：載著外地來的乘客
+      while (L.away.length && L.away[0] <= now) {
+        const pax = L.inQ.splice(0, ICB_CAP);
+        if (tr.trySpawn({ kind: 'icb', from: o, to: s, truck: true, icb: L.id, icbPax: pax, inbound: true, color: L.color }) === 'ok') L.away.shift();
+        else { L.inQ.unshift(...pax); break; }
+      }
+      // 出城：站內等的人夠多（或最早的人等了 3 個遊戲小時）就依發車間隔派車；外地有人要進城、又沒有公車在外地或往外地開時，
+      // 也派一台過去接（不會為了一兩個人一直派空車）
+      const ready = q => q.length >= ICB_MIN || (q.length && now - q[0].t > ICB_MAXHOLD);
+      const fetch = ready(L.inQ) && !L.away.length && !tr.vehicles.some(v => v.icb && v.icb.line === L.id && !v.icb.inbound && !v.dead);
+      if (!(ready(L.q) || fetch) || L.nextT > now || !C.parkedCount(s, true)) continue;
+      const pax = L.q.splice(0, ICB_CAP);
+      if (tr.trySpawn({ kind: 'icb', from: s, to: o, truck: true, icb: L.id, icbPax: pax, color: L.color }) === 'ok') L.nextT = now + ICB_HEADWAY;
+      else L.q.unshift(...pax);
+    }
+  }
+  // 連節公車到站（或被移除）：乘客的行程完成；開到外地的公車過一段時間載著外地乘客開回來
+  icbArrive(v, ok) {
+    const L = this.icb.find(x => x.id === v.icb.line), now = this.game.time;
+    for (const p of v.icb.pax) { this.city.onTripEnd(p.trip, true, now - p.t); this.stats.icb = (this.stats.icb || 0) + 1; }
+    if (!v.icb.inbound) { if (L) L.away.push(now + ICB_AWAY); return; }
+    // 開回來的途中被移除：公車回到站內的停車格
+    const d = v.trip.to;
+    if (!ok && d && d.zone && !d.dead) { const st = this.city.slotSet(d, true), i = st.list.findIndex((_, k) => !st.occ[k] && !st.res[k]); if (i >= 0) st.occ[i] = v.color; }
   }
 
   // 居民改搭公車：起點與目的地附近都有站牌，搭同一條路線直達，或在轉乘站換一次車（換車多算 300 m 的不便）。

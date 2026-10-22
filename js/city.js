@@ -1,5 +1,5 @@
 // 簡化城市經濟：住宅需要工作與購物、工廠需要工人與原料、商店需要商品與顧客
-import { zoneMax, HITECH_POP, POLLUTION, TAXI_COLOR, TRIP_SCALE, TRIP_REF, SEP_RI, DEMAND_BUILD, DEMAND_ZONE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
+import { zoneMax, HITECH_POP, POLLUTION, TAXI_COLOR, ICB_COLOR, TRIP_SCALE, TRIP_REF, SEP_RI, DEMAND_BUILD, DEMAND_ZONE, ZONES, ZONE_TYPES, CELL, SHOP_KINDS, INDUSTRY_KINDS, MILESTONES, ROAD_TYPES, levelMul } from './config.js';
 import { pointAt, convexOverlap, pointInPoly, distToSeg, clamp, polyBBox, bboxOverlap, closestOnPoly } from './util.js';
 import { halfWidth } from './network.js';
 import { lotArt, lotAisles, lotParkArea, oneWayLot, garageDrive } from './lotart.js';
@@ -7,6 +7,8 @@ import { lotArt, lotAisles, lotParkArea, oneWayLot, garageDrive } from './lotart
 const ema = (a, x, k) => a + (x - a) * k;
 // 有公車可搭時（起訖附近都有同一條路線的站牌），就算有車也改搭公車的居民比例
 const BUS_SHARE = 0.5, TAXI_SHARE = 0.06;
+// 往返外地的人（上班、購物、旅客、回家）搭跨縣市公車的比例（有跨縣市公車站時）
+const ICB_SHARE = 0.35, ICB_KINDS = new Set(['work', 'shop', 'visit', 'home']);
 const GROWTH = { R: 0.25, C: 0.15, I: 0.12 };
 
 // 需要場內道路的建築：工業園區（主幹道＋大園區的橫向道路）與附停車場的商業（從臨路開進停車場的車道）
@@ -20,7 +22,8 @@ export function driveway(zone, kind, geo) {
   // 公車總站：中央場內車道（兩側是公車停車格）
   // 公車總站、計程車行的中央場內車道；鐵路車站、貨運站直接臨路進出
   // 公車總站要 7 格寬，中央車道兩側才放得下 13.5 m 深的公車停車格
-  if (zone === 'T') return (geo.zt === 'T' ? geo.cols >= 7 : geo.zt === 'TX' && geo.cols >= 6) ? { end: d - 6 } : null;
+  // 跨縣市公車站 / 總站：9 格寬、6 格深以上，中央車道兩側放得下 20 m 深的連節公車停車格
+  if (zone === 'T') return (geo.zt === 'T' ? geo.cols >= 7 : geo.zt === 'IT' || geo.zt === 'IB' ? geo.cols >= 9 && geo.rows >= 6 : geo.zt === 'TX' && geo.cols >= 6) ? { end: d - 6 } : null;
   // 高密度住宅的地下 / 立體停車場、立體停車場的購物中心：停車場前的單向車道（右進右出）
   const gd = garageDrive(geo.zt, kind, geo.cols, geo.rows);
   if (gd) return { end: gd.cv, lot: { aisles: [gd.ua, gd.ub], oneway: true, front: gd.cv }, garage: true };
@@ -105,7 +108,7 @@ export class City {
     if (!seg.T.access) return '此道路類型不可沿線建築';
     if (net.nodes.get(seg.a).level !== 0 || net.nodes.get(seg.b).level !== 0) return '需沿地面道路建築';
     const w = cols * CELL;
-    if (u < seg.ra + w / 2 - 0.5 || u > seg.len - seg.rb - w / 2 + 0.5) return '太靠近路口';
+    if (u < this.endTrim(seg, false, side) + w / 2 - 0.5 || u > seg.len - this.endTrim(seg, true, side) - w / 2 + 0.5) return '太靠近路口';
     const geo = this.lotGeom(seg, u, side, cols, rows);
     // 水域與地圖邊界：每格檢查一次
     for (let i = 0; i <= cols; i++) for (let j = 0; j <= rows; j++) {
@@ -134,9 +137,18 @@ export class City {
   }
 
   // 路段上第一條分區格線的位置（u），之後每 CELL 公尺一格
-  gridStart(seg) {
+  // side：地塊在道路的哪一側（給了的話，另一側的停車場 / 社區出入口不算路口，格子從節點就開始）
+  gridStart(seg, side = 0) {
     const go = seg.go || 0;
-    return Math.ceil((seg.ra + go) / CELL - 1e-6) * CELL - go;
+    return Math.ceil((this.endTrim(seg, false, side) + go) / CELL - 1e-6) * CELL - go;
+  }
+  // 路段端點被路口佔掉的長度（atB：b 端）。場內道路的出入口（jinfo.drive）只在場內道路那一側算路口，另一側是 0
+  endTrim(seg, atB, side = 0) {
+    const r = atB ? seg.rb : seg.ra, n = side ? this.game.net.nodes.get(atB ? seg.b : seg.a) : null;
+    if (!n || !n.jinfo || !n.jinfo.drive || !n.jinfo.pairs[0].includes(seg)) return r;
+    const p = pointAt(seg.pts, seg.cum, atB ? seg.len : 0), nx = -p.dy * side, ny = p.dx * side;
+    for (const o of n.jinfo.others) { const d = this.game.net.segDirAt(o, n.id); if (d.x * nx + d.y * ny > 0) return r; }
+    return 0;
   }
 
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊
@@ -170,8 +182,8 @@ export class City {
     const Z = { max: this.maxCells(zt, seg) };
     if (!Z.max) return [];
     // 起點對齊格線
-    const g0 = this.gridStart(seg);
-    const a = g0 + Math.max(0, Math.ceil((Math.min(u0, u1) - g0) / CELL - 1e-6)) * CELL, b = Math.min(Math.max(u0, u1), seg.len - seg.rb);
+    const g0 = this.gridStart(seg, side);
+    const a = g0 + Math.max(0, Math.ceil((Math.min(u0, u1) - g0) / CELL - 1e-6)) * CELL, b = Math.min(Math.max(u0, u1), seg.len - this.endTrim(seg, true, side));
     const total = Math.floor((b - a) / CELL + 1e-6);
     // 所有地塊最小 2×2 格
     if (total < 2) return [];
@@ -242,7 +254,7 @@ export class City {
     const sl = this.slotsOf(b), rng = this.game.rng;
     // 計程車行 / 招呼站：車位上停著計程車
     b.slotOcc = sl.map(s => (b.zone === 'R' && rng.next() < 0.7 ? s.c : (b.zt === 'TX' || b.zt === 'TS') && rng.next() < 0.85 ? TAXI_COLOR : null));
-    b.tOcc = this.truckSlotsOf(b).map(() => ((b.zone === 'I' || b.zt === 'RC') && rng.next() < 0.4 ? '#d8d0c0' : b.zt === 'T' || b.zt === 'RT' ? '#d23c2c' : null));
+    b.tOcc = this.truckSlotsOf(b).map(() => ((b.zone === 'I' || b.zt === 'RC') && rng.next() < 0.4 ? '#d8d0c0' : b.zt === 'IT' || b.zt === 'IB' ? ICB_COLOR : b.zt === 'T' || b.zt === 'RT' ? '#d23c2c' : null));
   }
 
   // 場內道路：工業園區的主幹道（深的再加橫向道路）、停車場的車道；員工、貨車與顧客都開進去
@@ -700,7 +712,7 @@ export class City {
           const day = Math.floor(g.time / 1440) * 1440;
           let dep = day + 17 * 60 + 20 + g.rng.gauss() * 80;
           if (dep < g.time + 120) dep = g.time + 240 + g.rng.next() * 120;
-          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: !!to.zone, transit: trip.transit });
+          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: !!to.zone, transit: trip.transit, icb: trip.icb });
         }
         break;
       }
@@ -709,7 +721,7 @@ export class City {
         if (!to.dead) {
           to.custLevel += 1; this.stats.custHour = (this.stats.custHour || 0) + 1;
           to.stock = Math.max(0, to.stock - 0.4);
-          this.schedule(g.time + 40 + g.rng.next() * 90, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit });
+          this.schedule(g.time + 40 + g.rng.next() * 90, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit, icb: trip.icb });
         }
         toll = 1;
         break;
@@ -718,7 +730,7 @@ export class City {
         if (!to.dead) {
           to.custLevel += 1; this.stats.custHour = (this.stats.custHour || 0) + 1;
           const day = Math.floor(g.time / 1440) * 1440;
-          this.schedule(day + 1440 + 9 * 60 + g.rng.next() * 180, { kind: 'home', from: to, to: from, truck: false });
+          this.schedule(day + 1440 + 9 * 60 + g.rng.next() * 180, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit, icb: trip.icb });
         }
         toll = 2;
         break;
@@ -875,6 +887,13 @@ export class City {
       if (o.spawnCD > 0) continue;
       const trip = o.queue[0];
       if (trip.to.dead || (trip.to.outside && trip.to.seg === null) || o.seg === null) { o.queue.shift(); this.recordFail(trip); continue; }
+      // 往返外地：部分居民 / 旅客搭跨縣市公車（回程也搭）
+      const T0 = this.game.transit;
+      if (T0 && !trip.truck && (trip.to.outside || o.outside) && (trip.icb || (!trip.icbTried && ICB_KINDS.has(trip.kind)))) {
+        const want = trip.icb || this.game.rng.next() < ICB_SHARE;
+        trip.icbTried = true;
+        if (want && T0.icbBoard(trip)) { o.queue.shift(); continue; }
+      }
       // 搭公車：起訖附近都有同一條路線的站牌時，部分居民（BUS_SHARE）就算有車也改搭公車，回程也搭公車
       if (!trip.truck && !trip.transit && !trip.mode && o.zone === 'R' && (trip.kind === 'work' || trip.kind === 'shop') && this.game.transit) {
         const x = this.game.rng.next();
@@ -1191,6 +1210,7 @@ export class City {
       if (s.tOcc) b.tOcc = b.tOcc.map((_, i) => s.tOcc[i] || null);
       // 公車總站：存檔時在路上跑的公車不會存，讀檔後全部停回總站重新派車
       if (b.zt === 'T' || b.zt === 'RT') b.tOcc = b.tOcc.map(() => '#d23c2c');
+      if (b.zt === 'IT' || b.zt === 'IB') b.tOcc = b.tOcc.map(() => ICB_COLOR);
     }
     for (const l of d.lots || []) {
       const seg = net.segs.get(l.seg);

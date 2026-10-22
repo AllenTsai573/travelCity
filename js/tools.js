@@ -16,6 +16,9 @@ export class Tools {
     this.level = 0;
     this.curve = false;
     this.zone = 'R1';   // 分區種類（ZONE_TYPES 的鍵），'X' 為取消分區
+    // 分區工具分兩組：一般分區（zone）與大眾運輸（transit：公車、計程車、鐵路、站牌），各自記得上次選的種類
+    this.zgroup = 'zone';
+    this.zoneBy = { zone: 'R1', transit: 'T' };
     this.rbR = 26;
     this.ixType = 'diamond';
     this.ixAngle = 0;
@@ -39,6 +42,12 @@ export class Tools {
   get cam() { return this.g.renderer.cam; }
 
   setTool(t) {
+    // 大眾運輸工具就是只顯示大眾運輸種類的分區工具
+    if (t === 'zone' || t === 'transit') {
+      this.zgroup = t === 'transit' ? 'transit' : 'zone';
+      this.zone = this.zoneBy[this.zgroup];
+      t = 'zone';
+    }
     this.tool = t;
     this.jDrag = null; this.jHover = null;
     this.pts = [];
@@ -171,7 +180,7 @@ export class Tools {
     const k = e.key.toLowerCase();
     this.keys.add(k);
     this.mouse.shift = e.shiftKey; this.mouse.alt = e.altKey; this.dirty = true;
-    const map = { v: 'select', r: 'road', o: 'roundabout', u: 'upgrade', j: 'select', z: 'zone', b: 'bulldoze', i: 'interchange' };
+    const map = { v: 'select', r: 'road', o: 'roundabout', u: 'upgrade', j: 'select', z: 'zone', p: 'transit', b: 'bulldoze', i: 'interchange' };
     if (this.tool === 'interchange' && (k === 'q' || k === 'e')) { this.ixAngle += (k === 'e' ? 1 : -1) * Math.PI / 12; this.dirty = true; return; }
     // 其他工具：Q / E 把視角旋轉 90°
     if ((k === 'q' || k === 'e') && !e.ctrlKey && !e.metaKey) { this.g.renderer.rotate((k === 'e' ? 1 : -1) * Math.PI / 2); return; }
@@ -382,7 +391,7 @@ export class Tools {
           const railWhy = (st.plan || []).find(p => !p.ok && p.reason && p.reason.includes('鐵路'));
           if (railWhy) why.push(railWhy.reason);
           // 公車總站：說明會有幾個公車停車位（＝最多能派出幾台公車）
-          const busInfo = this.zone === 'T' && ok.length ? '｜公車停車位 ' + ok.map(p => lotArt({ id: 0, zt: 'T', zone: 'T', kind: null, cols: p.cols, rows: p.rows, level: 1 }).tslots.length).join(' + ') + ' 個（最多派出同樣台數的公車）' : '';
+          const bz = this.zone, busInfo = (bz === 'T' || bz === 'IT' || bz === 'IB') && ok.length ? `｜${bz === 'T' ? '公車' : '連節公車'}停車位 ` + ok.map(p => lotArt({ id: 0, zt: bz, zone: 'T', kind: null, cols: p.cols, rows: p.rows, level: 1 }).tslots.length).join(' + ') + ' 個（最多派出同樣台數的公車）' : '';
           this.setTip(`${cols}×${Math.max(2, st.rows)} 格（${cols * CELL}×${Math.max(2, st.rows) * CELL} m）` + busInfo + (ok.length > 1 ? ` → ${ok.length} 塊：${ok.map(p => p.cols + '×' + p.rows).join('、')}` : ok.length === 1 && (ok[0].rows !== st.rows) ? ` → 實際 ${ok[0].cols}×${ok[0].rows}` : '') + (!ok.length ? '（無法劃設）' : '') + (why.length ? `（${why.join('；')}）` : ''), !ok.length);
           break;
         }
@@ -496,8 +505,8 @@ export class Tools {
     const p = pointAt(s.pts, s.cum, c.s);
     const sd = side || (((x - p.x) * -p.dy + (y - p.y) * p.dx) > 0 ? 1 : -1);
     const signed = ((x - p.x) * -p.dy + (y - p.y) * p.dx) * sd;
-    const g0 = this.g.city.gridStart(s);
-    const nCells = Math.floor((s.len - s.rb - g0) / CELL + 1e-6);
+    const g0 = this.g.city.gridStart(s, sd);
+    const nCells = Math.floor((s.len - this.g.city.endTrim(s, true, sd) - g0) / CELL + 1e-6);
     const raw = Math.floor((c.s - g0) / CELL), i = clamp(raw, 0, Math.max(0, nCells - 1));
     const depth = Math.max(1, Math.ceil((signed - halfWidth(s.T) - 1.5) / CELL));
     return { seg: s, side: sd, i, depth, nCells, g0, past: raw !== i, geo: this.g.city.lotGeom(s, g0 + (i + 0.5) * CELL, sd, 1, 1) };
@@ -558,7 +567,7 @@ export class Tools {
     const [lo, hi] = ord(st.k0, st.i0) <= ord(k, c.i) ? [[st.k0, st.i0], [k, c.i]] : [[k, c.i], [st.k0, st.i0]];
     st.plan = []; st.rects = []; st.cols = 0;
     for (let j = lo[0]; j <= hi[0]; j++) {
-      const it = st.chain[j], s = it.s, g0 = city.gridStart(s), n = Math.floor((s.len - s.rb - g0) / CELL + 1e-6);
+      const it = st.chain[j], s = it.s, g0 = city.gridStart(s, sideOf(it)), n = Math.floor((s.len - city.endTrim(s, true, sideOf(it)) - g0) / CELL + 1e-6);
       if (n < 1) continue;
       // 延伸方向上的頭尾格（路段反向時格子編號也反過來）
       const head = it.rev ? n - 1 : 0, tail = it.rev ? 0 : n - 1;
@@ -579,7 +588,7 @@ export class Tools {
     // 只點一下：依分區給一塊預設大小的地塊
     if (!st.moved && !dragged && this.zone !== 'X') {
       const cols = Math.min(city.maxCells(this.zone, st.seg), this.zone === 'R1' || this.zone === 'R2' ? 4 : 6);
-      const i0 = clamp(st.i0 - Math.floor((cols - 1) / 2), 0, Math.max(0, Math.floor((st.seg.len - st.seg.rb - st.g0) / CELL) - cols));
+      const i0 = clamp(st.i0 - Math.floor((cols - 1) / 2), 0, Math.max(0, Math.floor((st.seg.len - city.endTrim(st.seg, true, st.side) - st.g0) / CELL) - cols));
       st.plan = city.planStroke(this.zone, st.seg, st.side, st.g0 + i0 * CELL, st.g0 + (i0 + cols) * CELL, cols);
     }
     if (this.zone === 'X') {
@@ -866,10 +875,10 @@ export class Tools {
     const segs = [...net.segs.values()].filter(s => s.T.access && s.drawLevel === 0 && !park.has(s.id) && net.nodes.get(s.a).level === 0 && net.nodes.get(s.b).level === 0)
       .sort((p, q) => q.T.rank - p.T.rank || q.len - p.len);
     for (const s of segs) {
-      const g0 = city.gridStart(s), n = Math.floor((s.len - s.rb - g0) / CELL + 1e-6);
-      if (n < 1) continue;
       const off = halfWidth(s.T) + 1.5;
       for (const side of [1, -1]) {
+        const g0 = city.gridStart(s, side), n = Math.floor((s.len - city.endTrim(s, true, side) - g0) / CELL + 1e-6);
+        if (n < 1) continue;
         const at = (i, j) => { const p = pointAt(s.pts, s.cum, g0 + i * CELL); return { x: p.x - p.dy * side * (off + j * CELL), y: p.y + p.dx * side * (off + j * CELL) }; };
         for (let i = 0; i < n; i++) for (let j = 0; j < D; j++) {
           const c = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];

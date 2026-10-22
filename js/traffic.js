@@ -9,7 +9,7 @@ import { laneOffset, halfWidth } from './network.js';
 
 // 卡死排除：排在最前面、停住超過 GRID_T 模擬秒（約 6 個遊戲小時）的車移除，後面的車才能動
 const GRID_T = 90;
-import { BUS_LEN, BUS_W } from './transit.js';
+import { BUS_LEN, BUS_W, ART_LEN } from './transit.js';
 
 const FREE = { gap: Infinity, lv: 0 };
 
@@ -168,7 +168,7 @@ export class Traffic {
     }
     const rd = slotPt ? city.slotRoad(to, slotIdx, truck) : null;
     const destPt = busDest || (rd ? { seg: rd.seg, u: rd.u, id: to.id } : to);
-    const len = trip.bus ? BUS_LEN : truck ? 7.5 : 4.6;
+    const len = trip.bus ? BUS_LEN : trip.icb ? ART_LEN : truck ? 7.5 : 4.6;
     let routed = false;
     for (const leave of leaves) {
       const fromPt = leave ? leave.pt : from;
@@ -186,6 +186,8 @@ export class Traffic {
           const v = this.createVehicle(truck);
           v.route = r.path; v.ri = 0; v.trip = trip;
           if (trip.bus) Object.assign(v, { bus: trip.bus, color: trip.color, len: BUS_LEN, w: BUS_W, a: 1, b: 2, T: 1.6, v0f: 0.85, stopIdx: 0, pax: [], busDest, dwell: 0 });
+          // 跨縣市連節公車（兩節車廂）
+          if (trip.icb) Object.assign(v, { icb: { line: trip.icb, pax: trip.icbPax || [], inbound: !!trip.inbound }, color: trip.color, len: ART_LEN, w: BUS_W, a: 0.9, b: 1.8, T: 1.8, v0f: 0.85, cars: 2 });
           // 計程車：先開到乘客出發的建築前接客（stage 0），再開到目的地（stage 1）
           if (trip.taxi) Object.assign(v, { taxi: { pax: trip.taxi, stage: 0, t0: this.game.time }, busDest, dwell: 0 });
           v.v = from.outside ? Math.min(lane.speed * 0.7, 14) : 0;
@@ -261,6 +263,12 @@ export class Traffic {
       for (const p of v.pax || []) this.game.transit.walk(p.trip);
       const d = v.trip.from, st = this.game.city.slotSet(d, true), i = st.list.findIndex((_, k) => !st.occ[k] && !st.res[k]);
       if (!d.dead && i >= 0) st.occ[i] = v.color;
+      this.removeFromTrack(v); v.dead = true; v.track = null; v.leaving = 0;
+      return;
+    }
+    // 跨縣市公車：乘客到站（開到外地 / 開回站內）
+    if (v.icb) {
+      this.game.transit.icbArrive(v, ok);
       this.removeFromTrack(v); v.dead = true; v.track = null; v.leaving = 0;
       return;
     }
@@ -608,12 +616,13 @@ export class Traffic {
     let free = to.len;
     const last = lastOnLane(to);
     if (last) {
-      if (last.v > 4 && !enterRing) return true;
+      if (last.v > 4) return true;
       free = last.s - last.len;
     }
     if (enterRing) {
-      for (const w of c.vehs) if (w !== v) free -= w.len + 2;
-      for (const sib of c.siblings) for (const w of sib.vehs) free -= w.len + 2;
+      // 環道上正常行駛的車很快就會開走（交叉 / 匯入的車由路權判斷），只有停滯的車才要留空間，否則每台車都要等環道整段淨空
+      for (const w of c.vehs) if (w !== v && w.v < 4) free -= w.len + 2;
+      for (const sib of c.siblings) for (const w of sib.vehs) if (w.v < 4) free -= w.len + 2;
       return free > Math.min(v.len * 2 + 8, to.len * 0.85);
     }
     // 只計入慢速 / 停止中的車：正常行駛中的車很快就會通過，不必排隊等候
@@ -671,7 +680,8 @@ export class Traffic {
     }
     if (!this.hasSpace(c, v)) return false;
     // 等越久越願意接受較短的車距（駕駛不耐煩）；從停車場 / 園區開出來的車接受較短的車距、也更快不耐煩
-    const gapT = c.from.seg.T.internal ? 3.2 - 1.6 * clamp(v.waitT / 15, 0, 1) : 4.5 - 2.3 * clamp(v.waitT / 30, 0, 1);
+    // 進入圓環：環道車速慢、彼此很近，臨界間距較短（實際約 3 秒）
+    const gapT = c.from.seg.T.internal ? 3.2 - 1.6 * clamp(v.waitT / 15, 0, 1) : c.to.seg.ring && !c.from.seg.ring ? 3 - 1 * clamp(v.waitT / 10, 0, 1) : 4.5 - 2.3 * clamp(v.waitT / 30, 0, 1);
     for (const cf of c.conflicts) {
       const oc = cf.c;
       // 交叉方向的連接線上還有車沒完全開過交叉點：依時間窗判斷，對方開過去之後我才到、

@@ -348,6 +348,39 @@ export function lotArt(b) {
       }
       rect(2, Math.min(d - 6, bd + 1.5), w - 2, d - 1.5, '#d9d3c4', 6, { wall: '#efe9dc', win: true, units: 1 });
     }
+  } else if (b.zt === 'IT' || b.zt === 'IB') {
+    // 跨縣市公車（連節公車 18 m）：中央場內車道兩側是斜放的連節公車停車格（20 m 深、4.6 m 寬），臨路是候車大廳（玻璃帷幕）；
+    // 總站後方有維修廠。太窄的站：臨路一排連節公車停車格＋後方候車大廳
+    base = '#c4c2bb';
+    const spine = w / 2, real = !!b.roads, big = b.zt === 'IT', bus = { c: '#2f6db5', h: 1, truck: true, bus: true, artic: true };
+    if (b.cols >= 9 && b.rows >= 6) {
+      if (!real) road([{ u: spine, v: 0 }, { u: spine, v: d - 6 }], 7);
+      const yard0 = 13, yardEnd = big ? Math.max(yard0 + 10, d * 0.7) : d - 3;
+      for (const sd of [-1, 1]) {
+        const lo = sd < 0 ? spine - 4.5 - 20 : spine + 4.5;
+        if (lo < 0.5 || lo + 20 > w - 0.5) continue;
+        rect(lo, yard0, lo + 20, yardEnd, '#8a8d91');
+        for (let v = yard0 + 0.6; v + 3.8 < yardEnd; v += 4.6) {
+          line([{ u: lo, v: v - 0.3 }, { u: lo + 20, v: v - 0.3 }], 'rgba(255,255,255,0.75)', 0.2);
+          car(lo + 0.9, v + 0.45, 18.2, 2.7, bus);
+        }
+        // 候車大廳：車道兩側，玻璃帷幕＋雨棚
+        const h0 = sd < 0 ? 2 : spine + 5.5, h1 = sd < 0 ? spine - 5.5 : w - 2;
+        if (h1 - h0 > 6) {
+          rect(h0, 1.5, h1, 10.5, '#d9d6cf', 7 + lv, { wall: '#e8e4da', win: true, units: 2 });
+          rect(h0 + 1, 10.6, h1 - 1, 12.6, '#bcd6ee', 4.5, { glass: true, mull: true });
+        }
+      }
+      if (big && d - yardEnd > 8) rect(3, yardEnd + 2, w - 3, d - 3, '#9b958c', 8 + lv, { roof: 'saw', wall: '#c9c3b5', win: true });
+      items.push({ t: 'sign', u: 3, v: 0.8, text: 'BUS', c: '#2f6db5', h: 7 });
+    } else {
+      const bd = Math.min(20, d - 6);
+      if (bd >= 19) for (let u = 1; u + 4.4 <= w - 1 && u < 1 + 5 * 4.6; u += 4.6) {
+        rect(u, 0.4, u + 4.4, 0.4 + bd, '#8a8d91');
+        car(u + 0.85, 0.9, 2.7, 18.2, bus);
+      }
+      rect(2, Math.min(d - 6, bd + 1.5), w - 2, d - 1.5, '#d9d6cf', 7, { wall: '#e8e4da', win: true, units: 1 });
+    }
   } else if (b.zt === 'RT' || b.zt === 'RS') {
     // 鐵路車站：後方是月台與雨棚（鐵軌在地塊後面），中間是站房，前方是站前廣場（計程車 / 接送車位）；
     // 總站的站房較大、有玻璃大廳；附設公車轉運站時，前方改為一排公車停車格

@@ -506,7 +506,7 @@ export class Renderer {
           const cu = it.u0 + it.du / 2, cv = it.v0 + it.dv / 2, alongU = it.du > it.dv, pc = P(cu, cv);
           this.localTf(pc.x, pc.y, alongU ? tx : nx, alongU ? ty : ny);
           const L = Math.max(it.du, it.dv) + 0.2, W = Math.min(it.du, it.dv) + 0.1;
-          this.carBody(it.rank !== undefined ? b.slotOcc[it.rank] : it.trank !== undefined ? b.tOcc[it.trank] : it.c, it.bus ? 12 : it.truck ? 7.5 : Math.min(L, 4.6), it.bus ? 2.6 : it.truck ? 2.5 : Math.min(W, 1.85), it.bus ? 'bus' : !!it.truck, z > 2.2, alongU ? tx : nx, alongU ? ty : ny);
+          this.carBody(it.rank !== undefined ? b.slotOcc[it.rank] : it.trank !== undefined ? b.tOcc[it.trank] : it.c, it.artic ? 18 : it.bus ? 12 : it.truck ? 7.5 : Math.min(L, 4.6), it.bus ? 2.6 : it.truck ? 2.5 : Math.min(W, 1.85), it.bus ? 'bus' : !!it.truck, z > 2.2, alongU ? tx : nx, alongU ? ty : ny);
           this.worldTf();
           continue;
         }
@@ -1054,6 +1054,11 @@ export class Renderer {
               crossMk.push({ pts, cum: polyCum(pts), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: opening ? [2, 2.5] : null });
             }
           }
+          // 停車場 / 社區出入口：主線的中線與車道線一路畫過去（不像十字路口那樣中斷）
+          if (info.drive && pairs.length === 1) {
+            const [ea, eb] = pairs[0], arc = arcCurve(ea.P, ea.t, eb.P, { x: -eb.t.x, y: -eb.t.y }, 6, 1.0);
+            for (const m of this.markingsFor(ea.s.T, arc, true, ea.s.a === n.id)) if (!m.edge && !m.median) crossMk.push(m);
+          }
         }
         const strips = (ring || rampJunction) ? pairs.map(([a, b]) => strip(a, b)) : [];
         if (rampJunction) {
@@ -1333,7 +1338,7 @@ export class Renderer {
         ctx.strokeStyle = 'rgba(255,255,255,0.85)';
         ctx.lineWidth = 0.4;
         for (const n of nodes) {
-          if (n.control === 'auto' && (n.segs.length < 3 || (n.jinfo && n.jinfo.ramp))) continue;
+          if (n.control === 'auto' && (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.drive)))) continue;
           const ins = net.inLinks(n);
           let maxRank = -Infinity;
           if (n.control === 'auto') for (const Lk of ins) maxRank = Math.max(maxRank, net.approachRank(n, Lk));
@@ -1354,7 +1359,7 @@ export class Renderer {
         if (z > 1.2) {
           ctx.fillStyle = 'rgba(255,255,255,0.78)';
           for (const n of nodes) {
-            if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring))) continue;
+            if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring || n.jinfo.drive))) continue;
             for (const sid of n.segs) {
               const sg = net.segs.get(sid);
               if (!sg || sg.T.internal || !sg.T.access) continue;
@@ -1373,7 +1378,7 @@ export class Renderer {
         }
         // 路口前的轉向箭頭（依實際車道連接，玩家調整後會跟著改變）
         if (z > 1.6) for (const n of nodes) {
-          if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring))) continue;
+          if (n.segs.length < 3 || (n.jinfo && (n.jinfo.ramp || n.jinfo.ring || n.jinfo.drive))) continue;
           for (const Lk of net.inLinks(n)) if (!Lk.seg.T.internal && !Lk.seg.T.rail) for (const lane of Lk.lanes) if (lane.len > 18) this.turnArrows(lane);
         }
         // 鐵路穿過路口（彎道接點、平交道）：沿列車的連接線畫枕木與鋼軌，軌道不會在路口中斷
@@ -1417,8 +1422,8 @@ export class Renderer {
         dx = p.dx - p.dy * k; dy = p.dy + p.dx * k;
         const L = Math.hypot(dx, dy); dx /= L; dy /= L;
       }
-      // 列車：沿軌道畫成一節一節的車廂（每節約 20 m），彎道上也會順著軌道
-      if (vh.train) { this.drawTrain(vh, detail); continue; }
+      // 列車：沿軌道畫成一節一節的車廂（每節約 20 m），彎道上也會順著軌道；跨縣市連節公車也是兩節沿車道彎折
+      if (vh.train || vh.icb) { this.drawTrain(vh, detail, vh.icb ? lat : 0); continue; }
       this.localTf(x, y, dx, dy);
       const hl = vh.len / 2, hw = vh.w / 2;
       if (vh.fadeIn !== undefined && vh.fadeIn < 1) ctx.globalAlpha = vh.fadeIn;
@@ -1436,15 +1441,17 @@ export class Renderer {
   }
 
   // 列車：車頭往後每 cars 節車廂各自取軌道上的位置與方向（含上一段軌道），車廂之間留 0.8 m
-  drawTrain(vh, detail) {
-    const ctx = this.ctx, n = vh.cars || 3, cl = (vh.len - (n - 1) * 0.8) / n;
+  // lat：橫向偏移（連節公車換車道時）
+  drawTrain(vh, detail, lat = 0) {
+    const ctx = this.ctx, n = vh.cars || 3, gap = vh.icb ? 0.4 : 0.8, cl = (vh.len - (n - 1) * gap) / n;
     const at = back => {
       let tr = vh.track, s = vh.s - back;
       if (s < 0 && vh.prevTrack && !vh.prevTrack.dead && vh.prevTrack.pts) { tr = vh.prevTrack; s = tr.len + s; }
-      return pointAt(tr.pts, tr.cum, clamp(s, 0, tr.len));
+      const p = pointAt(tr.pts, tr.cum, clamp(s, 0, tr.len));
+      return lat ? { x: p.x - p.dy * lat, y: p.y + p.dx * lat } : p;
     };
     for (let k = n - 1; k >= 0; k--) {
-      const f = at(k * (cl + 0.8)), r = at(k * (cl + 0.8) + cl);
+      const f = at(k * (cl + gap)), r = at(k * (cl + gap) + cl);
       let dx = f.x - r.x, dy = f.y - r.y; const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
       this.localTf((f.x + r.x) / 2, (f.y + r.y) / 2, dx, dy);
       this.carBody(k === 0 ? shade(vh.color, 0.85) : vh.color, cl, vh.w, vh.freight ? 'freight' : 'bus', detail, dx, dy);

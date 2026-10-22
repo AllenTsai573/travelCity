@@ -53,7 +53,7 @@ export const SLOPE_LEN = 45;        // 每升降一層所需最短距離
 // 城市稱號：依「曾達到的最高人口」升級（人口減少不會降級），unlock 為這一級解鎖的內容（升級時通知）
 export const MILESTONES = [
   { pop: 0,    name: '小村莊', unlock: '低密度住宅、商業、工業（最大 12×12）' },
-  { pop: 750,  name: '小鎮',   unlock: '大眾運輸（公車總站 12×12、計程車行與招呼站）' },
+  { pop: 750,  name: '小鎮',   unlock: '大眾運輸（公車總站 12×12、計程車派遣中心與招呼站）' },
   { pop: 1000, name: '市鎮',   unlock: '中密度住宅（12×12）、鐵路總站與車站' },
   { pop: 2500, name: '城市',   unlock: '商業 18×18、中密度 18×18、公車總站 16×16、鐵路貨運站' },
   { pop: 3000, name: '大城市', unlock: '高密度住宅（12×12）、工業 32×32、高科技工廠（半導體、電池）' },
@@ -69,6 +69,8 @@ export const ZONE_UNLOCK = {
   T:  [[750, 12], [2500, 16]],
   TX: [[750, 10]],
   TS: [[750, 4]],
+  IT: [[2500, 20]],
+  IB: [[1000, 12]],
   RT: [[1000, 16]],
   RS: [[1000, 8]],
   RC: [[2500, 16]],
@@ -132,18 +134,23 @@ export const ZONE_TYPES = {
   R3: { zone: 'R', name: '高密度住宅', short: '高密度', max: 24, per: [1.0, 1.5, 2.0] },
   C:  { zone: 'C', name: '商業區', short: '商業', max: 30, per: [0.22, 0.38, 0.55] },
   I:  { zone: 'I', name: '工業區', short: '工業', max: 32, per: [0.16, 0.26, 0.38] },
-  // 大眾運輸：公車總站（最大 16×16 格），公車路線由系統依住宅與工作地點自動規劃
-  T:  { zone: 'T', name: '公車總站', short: '公車總站', max: 16, per: [0.1, 0.12, 0.15] },
-  // 計程車：車行（總站，停很多台）與招呼站（小站，路邊幾個車位）；居民叫車時從最近有車的站派車
-  TX: { zone: 'T', name: '計程車行', short: '計程車行', max: 10, per: [0.1, 0.12, 0.15], color: '#d9a400' },
-  TS: { zone: 'T', name: '計程車招呼站', short: '招呼站', max: 4, per: [0.05, 0.06, 0.08], color: '#f2c230' },
+  // 大眾運輸（range：服務範圍，公尺；Infinity = 全地圖）
+  // 公車總站（最大 16×16 格）：總站 range 內的站牌由系統依住宅與工作地點自動規劃成路線
+  T:  { zone: 'T', name: '公車總站', short: '公車總站', max: 16, per: [0.1, 0.12, 0.15], range: 1800 },
+  // 計程車：派遣中心（停很多台，全市都能派車）與招呼站（路邊幾個車位，只派附近）；居民叫車時從最近有車、範圍涵蓋的站派車
+  TX: { zone: 'T', name: '計程車派遣中心', short: '計程車派遣中心', max: 10, per: [0.1, 0.12, 0.15], color: '#d9a400', range: Infinity },
+  TS: { zone: 'T', name: '計程車招呼站', short: '計程車招呼站', max: 4, per: [0.05, 0.06, 0.08], color: '#f2c230', range: 1800 },
+  // 跨縣市公車（連節公車，往返外地）：總站同時也是一般公車總站（市內路線範圍同公車總站）；公車站只有跨縣市路線。
+  // icbRange：哪裡的居民 / 旅客會來這裡搭跨縣市公車（Infinity = 全地圖）
+  IT: { zone: 'T', name: '跨縣市公車總站', short: '跨縣市總站', max: 20, per: [0.1, 0.12, 0.15], color: '#2f6db5', range: 1800, icbRange: Infinity },
+  IB: { zone: 'T', name: '跨縣市公車站', short: '跨縣市公車站', max: 12, per: [0.08, 0.1, 0.12], color: '#5b8fd0', icbRange: Infinity },
   // 鐵路：總站（發車、可升級附設公車轉運站）、車站、貨運站；都要蓋在鐵軌旁（地塊後方或側邊 30 m 內）
   RT: { zone: 'T', name: '鐵路總站', short: '鐵路總站', max: 16, per: [0.1, 0.12, 0.15], color: '#8a5a3c', rail: true },
   RS: { zone: 'T', name: '鐵路車站', short: '車站', max: 8, per: [0.05, 0.06, 0.08], color: '#b07a4e', rail: true },
   RC: { zone: 'T', name: '鐵路貨運站', short: '貨運站', max: 16, per: [0.1, 0.12, 0.15], color: '#5e5148', rail: true },
 };
-export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T', 'TX', 'TS', 'RT', 'RS', 'RC'];
-export const TAXI_COLOR = '#f2c230';
+export const ZONE_ORDER = ['R1', 'R2', 'R3', 'C', 'I', 'T', 'IT', 'IB', 'TX', 'TS', 'RT', 'RS', 'RC'];
+export const TAXI_COLOR = '#f2c230', ICB_COLOR = '#2f6db5';
 // 行程圖的種類、名稱與顏色
 export const FLOW_KINDS = [['work', '上班', '#4fb3ff'], ['shop', '購物', '#f2a33a'], ['visit', '旅客', '#3ccf5a'], ['goods', '商品貨運', '#c084fc'], ['mat', '原料貨運', '#e879a6']];
 // 商業：15×15 格以上才有機會出現大型量販店 / 購物中心；工業的功能隨機

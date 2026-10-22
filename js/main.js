@@ -201,8 +201,9 @@ class Game {
     this._errs = this._errs || new Set();
     if (this._errs.has(msg)) return;
     this._errs.add(msg);
-    let shot = null;
-    try { shot = this.renderer.canvas.toDataURL('image/jpeg', 0.72); } catch { /* 截圖失敗就只記文字 */ }
+    // 先用目前畫布當截圖；下一幀畫完後再換成完整的畫面（出錯時這一幀可能只畫了一半）
+    const shot = this.snapshot();
+    this._shotFor = null;
     const c = this.city, t = this.time || 0;
     const rec = {
       at: new Date().toLocaleString('zh-TW'), msg, stack, ver: VERSION, shot,
@@ -210,8 +211,20 @@ class Game {
     };
     this.errors.push(rec);
     if (this.errors.length > 10) this.errors.shift();
+    this._shotFor = rec;
     this.saveErrors();
     this.ui.onError(rec);
+  }
+  // 地圖畫面截圖（JPEG）：先鋪上背景色，透明的地方才不會變成黑色
+  snapshot() {
+    try {
+      const src = this.renderer.canvas, cv = document.createElement('canvas');
+      cv.width = src.width; cv.height = src.height;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#7fae5c'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(src, 0, 0);
+      return cv.toDataURL('image/jpeg', 0.72);
+    } catch { return null; }
   }
   // 錯誤紀錄存到 localStorage（空間不夠時只留最近幾筆、拿掉較舊的截圖）
   saveErrors() {
@@ -239,6 +252,8 @@ class Game {
       }
       this.tools.update(dt);
       this.renderer.draw();
+      // 剛記錄的錯誤：這一幀完整畫好了，換成這張截圖
+      if (this._shotFor) { this._shotFor.shot = this.snapshot(); this._shotFor = null; this.saveErrors(); }
       this.ui.update(dt);
     }
   }

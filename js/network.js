@@ -840,6 +840,7 @@ export class Network {
     const node = nodeId ? this.nodes.get(nodeId) : null;
     if (node) { x = node.x; y = node.y; res.x = x; res.y = y; }
     if (node && (node.level !== 0 || node.outside)) return fail('只能在地面路口建造圓環');
+    if (node && node.segs.some(id => this.segs.get(id).T.rail)) return fail('鐵路（含平交道）上不能建造圓環');
     for (let k = 0; k < 32; k++) {
       const a = k / 32 * Math.PI * 2;
       const px = x + Math.cos(a) * R, py = y + Math.sin(a) * R;

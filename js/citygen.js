@@ -1,7 +1,7 @@
 // 完整城市路網開局：整張地圖先鋪好交通骨架（參考日本都市：高架的都市高速公路、林蔭大道的十字主軸、
 // 外環大道、200 m 的棋盤街廓、東西向鐵路與車站），住宅 / 商業 / 工業交給自動發展
 // - 高速公路（高架第 1 層）：一條東西向、一條南北向，交會處是渦輪型系統交流道；與林蔭大道 / 大道交會處有
-//   服務型交流道（單點式 SPUI、鑽石型），地圖邊緣降回地面接外部連線
+//   服務型交流道（單點式 SPUI、分岔鑽石 DDI；不用一般鑽石型，比較不會塞），地圖邊緣降回地面接外部連線
 // - 地面道路都從高架下方穿過，只在交流道與高速公路相接
 // - 依地形調整：高速公路、交流道、鐵路的位置在候選範圍內挑水域最少的；地面道路中段遇到水域改以高架橋跨越
 // - 幹道與街道依交流道實際的位置排列：林蔭大道 / 大道就是交流道的橫交道路，街道每 200 m 一條（離幹道太近的省略）
@@ -14,10 +14,11 @@ import { halfWidth } from './network.js';
 import { polyBBox, pointAt } from './util.js';
 
 // 交流道佔地（沿主線、橫向的半寬，公尺）：範圍內不鋪其他地面道路
-// 服務型交流道的匝道在主線兩側 80 m 內、沿主線 270 m 內；平行主線的街道離主線 140 m 以上、橫交的街道離中心 290 m 以上
-const FOOT = { turbine: [540, 540], windmill: [460, 460], spui: [290, 140], diamond: [290, 140] };
+// 服務型交流道：中心（橫交道路與匝道路口）附近不鋪其他道路；其餘範圍由實際的匝道幾何決定（build 會擋下與匝道相交或高度衝突的路）
+// DDI 的橫交道路在中心 ±160 m 內交叉換邊，範圍也比較寬
+const FOOT = { turbine: [540, 540], windmill: [460, 460], spui: [130, 140], ddi: [130, 190] };
 // 交流道主線、橫交道路的半長（模板的 L、Lc）
-const HALF = { turbine: [500, 500], windmill: [420, 420], spui: [360, 300], diamond: [360, 300] };
+const HALF = { turbine: [500, 500], windmill: [420, 420], spui: [360, 300], ddi: [360, 340] };
 
 export function generateCity(g) {
   const net = g.net;
@@ -86,8 +87,8 @@ function buildCity(g, fullRebuild) {
   const pieceInFoot = (p, q) => { for (let i = 1; i < 10; i++) if (inFoot(p.x + (q.x - p.x) * i / 10, p.y + (q.y - p.y) * i / 10)) return true; return false; };
   // 地面道路：中段碰到水域就改成高架橋（兩端各 SLOPE_LEN 的坡道要在陸地上）
   const ground = (p, q, type) => {
-    if (pieceInFoot(p, q)) { if (type === 'rail') dbg('鐵路在交流道範圍', Math.round(p.x), Math.round(q.x)); return false; }
-    if (T.isWater(p.x, p.y) || T.isWater(q.x, q.y)) { log.fail++; if (type === 'rail') dbg('鐵路端點在水上', Math.round(p.x), Math.round(q.x)); return false; }
+    if (pieceInFoot(p, q)) { dbg('在交流道範圍', type, Math.round(p.x), Math.round(p.y), Math.round(q.x), Math.round(q.y)); return false; }
+    if (T.isWater(p.x, p.y) || T.isWater(q.x, q.y)) { log.fail++; dbg('端點在水上', type, Math.round(p.x), Math.round(q.x)); return false; }
     const r = build(p, q, type);
     if (r.ok) { log.ok++; return true; }
     const L = Math.hypot(q.x - p.x, q.y - p.y), ramp = SLOPE_LEN + 2;
@@ -120,7 +121,7 @@ function buildCity(g, fullRebuild) {
       if (!r.ok && net.segs.size !== before) dbg('交流道失敗但留下路段', key, Math.round(c.x), Math.round(c.y), before, '→', net.segs.size, r.reason);
       if (r.ok) {
         log.ix.push(key);
-        foots.push({ x: c.x, y: c.y, ux, uy, a: FOOT[key][0], b: FOOT[key][1], cross: key !== 'turbine' });
+        foots.push({ x: c.x, y: c.y, ux, uy, a: FOOT[key][0], b: FOOT[key][1], cross: key === 'spui' });   // SPUI 的橫交道路是連續的林蔭大道，可以沿著它接；DDI 中段是交叉換邊的分岔車道
         return { ...fr, key };
       }
       dbg('交流道', key, Math.round(c.x), Math.round(c.y), r.reason);
@@ -145,7 +146,7 @@ function buildCity(g, fullRebuild) {
     const edgeWet = [[4, ya], [E, ya], [xb, 4], [xb, E]].some(([x, y]) => wetLine(x, y, x + (x < 10 ? 160 : x > E - 1 ? -160 : 0), y + (y < 10 ? 160 : y > E - 1 ? -160 : 0)) > 0);
     const w = wetFoot('turbine', xb, ya, 1, 0) * 8 + wetLine(0, ya, S, ya) + wetLine(xb, 0, xb, S) + (edgeWet ? 3 : 0)
       + (dryAlong('spui', ya, 1300, xb - 950, false) ? 0 : 2) + (dryAlong('spui', xb, ya + 950, S - 1300, true) ? 0 : 2)
-      + (dryAlong('diamond', ya, 420, xb - 1750, false) ? 0 : 1) + (dryAlong('diamond', xb, ya + 1750, E - 420, true) ? 0 : 1)
+      + (dryAlong('ddi', ya, 420, xb - 1750, false) ? 0 : 1) + (dryAlong('ddi', xb, ya + 1750, E - 420, true) ? 0 : 1)
       // 一樣好的位置裡偏好東西向在北側約 22%、南北向在東側約 78%（市中心留給林蔭大道與街廓）
       + (Math.abs(ya - S * 0.22) + Math.abs(xb - S * 0.78)) * 0.0002;
     if (!best || w < best.w) best = { ya, xb, w };
@@ -155,17 +156,17 @@ function buildCity(g, fullRebuild) {
   const sysC = [[XB, YA], [XB + 60, YA], [XB - 60, YA], [XB, YA + 60], [XB, YA - 60]];
   const turbine = interchange('turbine', sysC, 1, 0, 1, 2) || interchange('windmill', sysC, 1, 0, 1, 2);
   if (turbine) { XB = turbine.x; YA = turbine.y; }
-  // 東西向高速公路上：SPUI 在市中心附近（與渦輪至少隔 950 m）、鑽石型在西側
+  // 東西向高速公路上：SPUI 在市中心附近（與渦輪至少隔 950 m，放不下改 DDI）、DDI 在西側
   const ax = [];
   for (let x = 420; x <= XB - 950; x += 40) ax.push(x);
   const nearC = (list, c) => list.sort((p, q) => Math.abs(p - c) - Math.abs(q - c));
-  const sA = interchange('spui', nearC(ax.filter(x => x >= 800), C).map(x => [x, YA]), 1, 0, 1, 0) || interchange('diamond', nearC(ax.filter(x => x >= 800), C).map(x => [x, YA]), 1, 0, 1, 0);
-  const dA = interchange('diamond', nearC(ax.filter(x => x <= (sA ? sA.x : C) - 800 && x >= 420), 800).map(x => [x, YA]), 1, 0, 1, 0);
-  // 南北向高速公路上：SPUI 在市中心附近、鑽石型在南側
+  const sA = interchange('spui', nearC(ax.filter(x => x >= 800), C).map(x => [x, YA]), 1, 0, 1, 0) || interchange('ddi', nearC(ax.filter(x => x >= 800), C).map(x => [x, YA]), 1, 0, 1, 0);
+  const dA = interchange('ddi', nearC(ax.filter(x => x <= (sA ? sA.x : C) - 800 && x >= 420), 800).map(x => [x, YA]), 1, 0, 1, 0);
+  // 南北向高速公路上：SPUI 在市中心附近、DDI 在南側
   const by = [];
   for (let y = YA + 950; y <= E - 420; y += 40) by.push(y);
-  const sB = interchange('spui', nearC(by.filter(y => y <= S - 1200), C).map(y => [XB, y]), 0, 1, 1, 0) || interchange('diamond', nearC(by.filter(y => y <= S - 1200), C).map(y => [XB, y]), 0, 1, 1, 0);
-  const dB = interchange('diamond', nearC(by.filter(y => y >= (sB ? sB.y : C) + 800), S - 600).map(y => [XB, y]), 0, 1, 1, 0);
+  const sB = interchange('spui', nearC(by.filter(y => y <= S - 1200), C).map(y => [XB, y]), 0, 1, 1, 0) || interchange('ddi', nearC(by.filter(y => y <= S - 1200), C).map(y => [XB, y]), 0, 1, 1, 0);
+  const dB = interchange('ddi', nearC(by.filter(y => y >= (sB ? sB.y : C) + 800), S - 600).map(y => [XB, y]), 0, 1, 1, 0);
 
   // 主線：錨點 [點, 高度]，相鄰錨點之間鋪直線（交流道失敗時主線直接跨過去）
   const freeway = anchors => {
@@ -208,7 +209,7 @@ function buildCity(g, fullRebuild) {
 
   // ---------- 幹道的位置 ----------
   const XM = sA ? sA.x : C, YM = sB ? sB.y : C;               // 林蔭大道十字主軸（SPUI 的橫交道路）
-  const XD = dA ? dA.x : 800, YD = dB ? dB.y : S - 600;        // 大道（鑽石型的橫交道路）
+  const XD = dA ? dA.x : 800, YD = dB ? dB.y : S - 600;        // 大道（DDI 的橫交道路）
   const XW = 300, XE = S - 200, YN = Math.max(300, YA - 420), YS = S - 200;   // 外環
   // 鐵路：主軸與南側大道之間、水域最少的一條東西線（避開南北向高速公路的交流道）
   let ry = null;
@@ -267,15 +268,29 @@ function buildCity(g, fullRebuild) {
 
   // ---------- 幹道 ----------
   const ysAll = uniq([...northY, ...allY]);
-  // 南北向：主軸林蔭大道、鑽石型的大道、外環（聯外只有高速公路，林蔭大道停在外環）
-  NS(XM, ysAll, 'boulevard');
-  NS(XD, ysAll, 'avenue');
+  // 南北向：主軸林蔭大道、DDI 的大道、外環（聯外只有高速公路，林蔭大道停在外環）
+  // 交流道橫交道路實際的兩端（幹道接在這裡，不會疊在交流道的橫交道路 / 分岔車道上）
+  const crossEnds = fr => {
+    if (!fr) return [];
+    const ax = { x: -fr.uy, y: fr.ux }, out = [null, null];
+    for (const n of net.nodes.values()) {
+      if (n.level !== 0 || !n.segs.length) continue;
+      const dx = n.x - fr.x, dy = n.y - fr.y, a = dx * ax.x + dy * ax.y, lat = -dx * ax.y + dy * ax.x;
+      if (Math.abs(lat) > 2 || Math.abs(a) > HALF[fr.key][1] + 20) continue;
+      const k = a < 0 ? 0 : 1;
+      if (!out[k] || Math.abs(a) > Math.abs(out[k].a)) out[k] = { a, v: fr.ux ? n.y : n.x };
+    }
+    return out.filter(Boolean).map(e => e.v);
+  };
+  const withEnds = (list, fr) => { const e = crossEnds(fr); return e.length === 2 ? uniq([...list.filter(v => v < Math.min(...e) - 30 || v > Math.max(...e) + 30), ...e]) : list; };
+  NS(XM, withEnds(ysAll, sA), 'boulevard');
+  NS(XD, withEnds(ysAll, dA), 'avenue');
   NS(XW, ysAll, 'avenue');
   NS(XE, ysAll.filter(y => !inFoot(XE, y)), 'avenue');
-  // 東西向：主軸林蔭大道、鑽石型的大道、外環
+  // 東西向：主軸林蔭大道、DDI 的大道、外環
   const xsAll = uniq([...allX]);
-  EW(YM, xsAll, 'boulevard');
-  EW(YD, xsAll, 'avenue');
+  EW(YM, withEnds(xsAll, sB), 'boulevard');
+  EW(YD, withEnds(xsAll, dB), 'avenue');
   EW(YS, xsAll, 'avenue');
   EW(YN, xsAll.filter(x => x < XB - 600), 'avenue');
   net.rebuild();

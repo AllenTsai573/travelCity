@@ -9,15 +9,22 @@ import { Renderer } from './render.js';
 import { Tools } from './tools.js';
 import { UI } from './ui.js';
 import { generateWorld } from './worldgen.js';
+
+// 部署版本（scripts/bump-version.mjs 加在網址上的 ?v=），錯誤回報用
+export const VERSION = new URL(import.meta.url).searchParams.get('v') || 'local';
+const ERR_KEY = 'travelcity_errors';
 import { Transit } from './transit.js';
 
 const SAVE_KEY = 'travelcity_save_v1';
 
 class Game {
   constructor() {
+    // 錯誤紀錄（上次當機前的錯誤也留著）
+    try { this.errors = JSON.parse(localStorage.getItem(ERR_KEY) || '[]'); } catch { this.errors = []; }
     this.canvas = document.getElementById('view');
     this.renderer = new Renderer(this, this.canvas);
     this.ui = new UI(this);
+    this.ui.onError(null);   // 上次留下的錯誤紀錄：顯示「⚠ 錯誤」按鈕
     this.tools = new Tools(this, this.canvas);
     // 一般速度為 1.5 倍模擬速度（▶▶ 3 倍、▶▶▶ 8 倍）
     this.speed = 1.5;
@@ -186,14 +193,33 @@ class Game {
     requestAnimationFrame(t => this.frame(t));
     try { this.frameBody(now); } catch (e) { this.reportError(e); }
   }
+  // 程式錯誤：自動把目前的地圖畫面截圖，連同錯誤訊息、程式位置、版本與遊戲狀態記到錯誤紀錄
+  // （存在瀏覽器裡，重新整理後還在），上方出現「⚠ 錯誤」按鈕，可一鍵回報到 GitHub issue（error 標籤）
   reportError(e) {
     console.error(e);
-    const msg = (e && e.message) || String(e), where = ((e && e.stack) || '').split('\n')[1] || '';
+    const msg = (e && e.message) || String(e), stack = ((e && e.stack) || '').split('\n').slice(1, 9).map(s => s.trim().replace(/https?:\/\/[^/]+/, '').replace(/\?v=[^:)]+/, '')).join('\n');
     this._errs = this._errs || new Set();
     if (this._errs.has(msg)) return;
     this._errs.add(msg);
-    this.notify(`⚠ 程式錯誤（遊戲會繼續執行，請截圖回報）：${msg} ${where.trim().replace(/^at /, '').replace(/https?:\/\/[^/]+/, '').slice(0, 120)}`, 'warn');
+    let shot = null;
+    try { shot = this.renderer.canvas.toDataURL('image/jpeg', 0.72); } catch { /* 截圖失敗就只記文字 */ }
+    const c = this.city, t = this.time || 0;
+    const rec = {
+      at: new Date().toLocaleString('zh-TW'), msg, stack, ver: VERSION, shot,
+      state: this.net ? `第 ${Math.floor(t / 1440) + 1} 天 ${String(Math.floor(t % 1440 / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')} · 種子 ${this.seed} · ${this.diffKey} · 人口 ${c.pop} · 建築 ${c.buildings.length} · 路段 ${this.net.segs.size} · 車輛 ${this.traffic.vehicles.length} · 工具 ${this.tools.tool}` : '',
+    };
+    this.errors.push(rec);
+    if (this.errors.length > 10) this.errors.shift();
+    this.saveErrors();
+    this.ui.onError(rec);
   }
+  // 錯誤紀錄存到 localStorage（空間不夠時只留最近幾筆、拿掉較舊的截圖）
+  saveErrors() {
+    for (let keep = this.errors.length; keep >= 0; keep--) {
+      try { localStorage.setItem(ERR_KEY, JSON.stringify(this.errors.map((r, i) => (i >= this.errors.length - keep ? r : { ...r, shot: null })))); return; } catch { /* 超過容量：少存一張截圖再試 */ }
+    }
+  }
+  clearErrors() { this.errors = []; this._errs = new Set(); try { localStorage.removeItem(ERR_KEY); } catch { /* 忽略 */ } this.ui.onError(null); }
   frameBody(now) {
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;

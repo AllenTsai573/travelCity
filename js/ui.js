@@ -53,6 +53,7 @@ export class UI {
     document.getElementById('btn-heat').onclick = () => g.toggleHeatmap();
     document.getElementById('btn-zmap').onclick = () => g.toggleZonemap();
     document.getElementById('btn-flow').onclick = () => g.toggleFlowmap();
+    document.getElementById('btn-err').onclick = () => this.showErrors();
     document.getElementById('btn-tmap').onclick = () => g.toggleTransitmap();
     document.getElementById('btn-tilt').onclick = () => g.renderer.toggleTilt();
     document.getElementById('btn-rotl').onclick = () => g.renderer.rotate(-Math.PI / 2);
@@ -496,19 +497,64 @@ export class UI {
   }
 
   // ---------- 通知 ----------
-  toast(msg, kind = 'info') {
+  toast(msg, kind = 'info', ms = 3200) {
     const box = document.getElementById('toasts');
     const el = document.createElement('div');
     el.className = 'toast ' + kind;
     el.textContent = msg;
     box.appendChild(el);
     while (box.children.length > 5) box.firstChild.remove();
-    setTimeout(() => el.classList.add('out'), 3200);
-    setTimeout(() => el.remove(), 3800);
+    setTimeout(() => el.classList.add('out'), ms);
+    setTimeout(() => el.remove(), ms + 600);
+  }
+
+  // ---------- 錯誤紀錄 ----------
+  onError(rec) {
+    const btn = document.getElementById('btn-err'), n = this.g.errors.length;
+    btn.classList.toggle('hidden', !n);
+    btn.textContent = `⚠ 錯誤 ${n}`;
+    if (rec) this.toast(`⚠ 程式錯誤（已自動截圖，遊戲繼續執行）：${rec.msg} — 點上方「⚠ 錯誤」可回報`, 'warn', 9000);
+    if (this.modalOpen && this.errOpen) this.showErrors();
+  }
+  // GitHub issue 的內容（預先填好，標籤 error）
+  issueUrl(rec) {
+    const body = [
+      '### 錯誤訊息', '```', rec.msg, '```', '### 程式位置', '```', rec.stack || '（無）', '```',
+      '### 遊戲狀態', rec.state || '', `版本：${rec.ver}　時間：${rec.at}`, `瀏覽器：${navigator.userAgent}`,
+      '### 截圖', '（截圖已複製到剪貼簿：在這裡按 Ctrl+V 貼上；也可以用「下載截圖」存成檔案再拖進來）', '', '### 當時在做什麼', '（例如：剛拆除一段道路、剛放圓環…）',
+    ].join('\n');
+    return `https://github.com/AllenTsai573/travelCity/issues/new?labels=error&title=${encodeURIComponent('[錯誤] ' + rec.msg.slice(0, 80))}&body=${encodeURIComponent(body)}`;
+  }
+  showErrors() {
+    const g = this.g, list = [...g.errors].reverse();
+    this.openModal(`<h2>⚠ 程式錯誤紀錄</h2>
+      <p class="note">發生錯誤時遊戲會自動截圖並記錄在這裡（存在這台電腦的瀏覽器裡）。回報步驟：①「複製截圖」②「開啟 GitHub 回報」→ 在內容裡按 Ctrl+V 貼上截圖 → 送出。錯誤會出現在 GitHub 的 Issues（error 標籤）。</p>
+      <div class="errlist">${list.map((r, i) => `<div class="erritem">
+        <b>${r.msg.replace(/</g, '&lt;')}</b><small>${r.at} · ${r.state || ''}</small>
+        <pre>${(r.stack || '').replace(/</g, '&lt;')}</pre>
+        ${r.shot ? `<img src="${r.shot}" alt="錯誤當時的畫面">` : '<small>（沒有截圖）</small>'}
+        <div class="btns">${r.shot ? `<button data-err="copy" data-i="${i}">① 複製截圖</button><a class="btnlike" download="travelcity-error-${i}.jpg" href="${r.shot}">下載截圖</a>` : ''}<button class="primary" data-err="issue" data-i="${i}">② 開啟 GitHub 回報</button></div>
+      </div>`).join('') || '<p>目前沒有錯誤。</p>'}</div>
+      <div class="btns end"><button data-err="clear">清除紀錄</button><button data-m="close">關閉</button></div>`);
+    this.errOpen = true;
+    const card = document.getElementById('modal-card');
+    card.onclick = e => {
+      const b = e.target.closest('[data-err]');
+      if (!b) return;
+      const rec = list[Number(b.dataset.i)];
+      if (b.dataset.err === 'clear') { g.clearErrors(); this.showErrors(); return; }
+      if (b.dataset.err === 'issue') { window.open(this.issueUrl(rec), '_blank', 'noopener'); return; }
+      if (b.dataset.err === 'copy') {
+        // 剪貼簿只接受 PNG：把截圖轉成 PNG 再寫入
+        const png = new Promise((res, rej) => { const img = new Image(); img.onload = () => { const cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height; cv.getContext('2d').drawImage(img, 0, 0); cv.toBlob(bl => (bl ? res(bl) : rej(new Error('轉檔失敗'))), 'image/png'); }; img.onerror = rej; img.src = rec.shot; });
+        navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]).then(() => { b.textContent = '✔ 已複製'; }, err => { b.textContent = '複製失敗（請用下載）'; console.warn(err); });
+      }
+    };
   }
 
   // ---------- 對話框 ----------
   openModal(html) {
+    this.errOpen = false;
     document.getElementById('modal-card').innerHTML = html;
     document.getElementById('modal').classList.remove('hidden');
     this.modalOpen = true;

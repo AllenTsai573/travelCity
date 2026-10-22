@@ -6,7 +6,7 @@
   <title>TravelCity 交通城市</title>
   <meta name="description" content="自由角度道路建設 × 微觀交通模擬的城市交通遊戲">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚦</text></svg>">
-  <link rel="stylesheet" href="css/style.css?v=f174a44-mvj3ii9l">
+  <link rel="stylesheet" href="css/style.css?v=805cdd2-mvj3oq7w">
 </head>
 <body>
   <canvas id="view"></canvas>
@@ -41,6 +41,7 @@
       <button id="btn-grow" title="城市依需求自動長出建築">自動發展</button>
       <button id="btn-ms" title="城市發展里程碑：各階段人口與解鎖內容">里程碑</button>
       <button id="btn-stats">統計</button>
+      <button id="btn-err" class="errbtn hidden" title="程式錯誤紀錄（已自動截圖）：點這裡查看與回報到 GitHub">⚠ 錯誤</button>
       <button id="btn-menu">選單</button>
     </div>
   </header>
@@ -64,7 +65,7 @@
   <div id="toasts"></div>
   <div id="modal" class="hidden"><div class="card" id="modal-card"></div></div>
 
-  <script type="importmap">{"imports":{"./js/city.js":"./js/city.js?v=f174a44-mvj3ii9l","./js/config.js":"./js/config.js?v=f174a44-mvj3ii9l","./js/interchange.js":"./js/interchange.js?v=f174a44-mvj3ii9l","./js/lotart.js":"./js/lotart.js?v=f174a44-mvj3ii9l","./js/main.js":"./js/main.js?v=f174a44-mvj3ii9l","./js/network.js":"./js/network.js?v=f174a44-mvj3ii9l","./js/render.js":"./js/render.js?v=f174a44-mvj3ii9l","./js/routing.js":"./js/routing.js?v=f174a44-mvj3ii9l","./js/terrain.js":"./js/terrain.js?v=f174a44-mvj3ii9l","./js/thumbs.js":"./js/thumbs.js?v=f174a44-mvj3ii9l","./js/tools.js":"./js/tools.js?v=f174a44-mvj3ii9l","./js/traffic.js":"./js/traffic.js?v=f174a44-mvj3ii9l","./js/transit.js":"./js/transit.js?v=f174a44-mvj3ii9l","./js/ui.js":"./js/ui.js?v=f174a44-mvj3ii9l","./js/util.js":"./js/util.js?v=f174a44-mvj3ii9l","./js/worldgen.js":"./js/worldgen.js?v=f174a44-mvj3ii9l"}}</script>
-  <script type="module" src="js/main.js?v=f174a44-mvj3ii9l"></script>
+  <script type="importmap">{"imports":{"./js/city.js":"./js/city.js?v=805cdd2-mvj3oq7w","./js/config.js":"./js/config.js?v=805cdd2-mvj3oq7w","./js/interchange.js":"./js/interchange.js?v=805cdd2-mvj3oq7w","./js/lotart.js":"./js/lotart.js?v=805cdd2-mvj3oq7w","./js/main.js":"./js/main.js?v=805cdd2-mvj3oq7w","./js/network.js":"./js/network.js?v=805cdd2-mvj3oq7w","./js/render.js":"./js/render.js?v=805cdd2-mvj3oq7w","./js/routing.js":"./js/routing.js?v=805cdd2-mvj3oq7w","./js/terrain.js":"./js/terrain.js?v=805cdd2-mvj3oq7w","./js/thumbs.js":"./js/thumbs.js?v=805cdd2-mvj3oq7w","./js/tools.js":"./js/tools.js?v=805cdd2-mvj3oq7w","./js/traffic.js":"./js/traffic.js?v=805cdd2-mvj3oq7w","./js/transit.js":"./js/transit.js?v=805cdd2-mvj3oq7w","./js/ui.js":"./js/ui.js?v=805cdd2-mvj3oq7w","./js/util.js":"./js/util.js?v=805cdd2-mvj3oq7w","./js/worldgen.js":"./js/worldgen.js?v=805cdd2-mvj3oq7w"}}</script>
+  <script type="module" src="js/main.js?v=805cdd2-mvj3oq7w"></script>
 </body>
 </html>

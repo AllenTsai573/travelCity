@@ -146,9 +146,15 @@ export class City {
   endTrim(seg, atB, side = 0) {
     const r = atB ? seg.rb : seg.ra, n = side ? this.game.net.nodes.get(atB ? seg.b : seg.a) : null;
     if (!n || !n.jinfo || !n.jinfo.drive || !n.jinfo.pairs[0].includes(seg)) return r;
-    const p = pointAt(seg.pts, seg.cum, atB ? seg.len : 0), nx = -p.dy * side, ny = p.dx * side;
-    for (const o of n.jinfo.others) { const d = this.game.net.segDirAt(o, n.id); if (d.x * nx + d.y * ny > 0) return r; }
-    return 0;
+    const net = this.game.net, p = pointAt(seg.pts, seg.cum, atB ? seg.len : 0), nx = -p.dy * side, ny = p.dx * side;
+    for (const o of n.jinfo.others) { const d = net.segDirAt(o, n.id); if (d.x * nx + d.y * ny > 0) return r; }
+    // 跨過節點的那一格：直線時歸給這組的第一條路段，地塊延伸到另一條路段第一條格線為止（兩邊的格子無縫接上）
+    const [m1, m2] = n.jinfo.pairs[0];
+    if (seg !== m1) return 0;
+    const d1 = net.segDirAt(m1, n.id), d2 = net.segDirAt(m2, n.id);
+    if ((d1.x * d2.x + d1.y * d2.y) / ((Math.hypot(d1.x, d1.y) * Math.hypot(d2.x, d2.y)) || 1) > -0.995) return 0;
+    const go = m2.go || 0, gap = m2.a === n.id ? Math.ceil(go / CELL - 1e-6) * CELL - go : m2.len - (Math.floor((m2.len + go) / CELL + 1e-6) * CELL - go);
+    return -clamp(gap, 0, CELL - 0.01);
   }
 
   // 一次拖曳的範圍：路段 seg 的 side 側、從 u0 到 u1、深 rows 格，依分區的最大地塊平均切成數塊

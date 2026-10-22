@@ -416,7 +416,7 @@ for (const b of ['desert', 'snow', 'tropical']) {
   step(gi, 50);
   assert(gi.transit.icb.length === C.liveOutside().length && gi.transit.icb.length > 0, `跨縣市路線：每個接通的外部連線一條（${gi.transit.icb.length} 條）`);
   const drv = [...net.nodes.values()].filter(n => n.jinfo && n.jinfo.drive);
-  const free = drv.some(n => n.jinfo.pairs[0].some(s => [1, -1].some(sd => C.endTrim(s, s.b === n.id, sd) === 0)));
+  const free = drv.some(n => n.jinfo.pairs[0].some(s => [1, -1].some(sd => C.endTrim(s, s.b === n.id, sd) <= 0)));
   assert(drv.length > 0 && free, `場內道路出入口（${drv.length} 個）對面一側的格子從節點開始`);
 }
 

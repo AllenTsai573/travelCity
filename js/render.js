@@ -1311,7 +1311,8 @@ export class Renderer {
       const x = p.x - p.dy * lat, y = p.y + p.dx * lat;
       if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
       let dx = p.dx, dy = p.dy;
-      if (lat) {
+      // 換車道時車頭稍微偏向；停在公車停靠區時車身擺正
+      if (lat && !vh.inBay) {
         const k = -lat * 0.08;
         dx = p.dx - p.dy * k; dy = p.dy + p.dx * k;
         const L = Math.hypot(dx, dy); dx /= L; dy /= L;

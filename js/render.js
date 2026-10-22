@@ -614,6 +614,8 @@ export class Renderer {
             ctx.fillStyle = shade(it.wall || col, (it.wall ? 0.9 : 0.74) - 0.14 * fr);
             quad([p, q, this.lift(q, H), this.lift(p, H)]); ctx.fill();
             if (z > 1.6 && H > 1.4) this.wallWindows(it, p, q, H, fd, b.abandoned, i === 0);
+            // 斜屋頂的屋簷在牆面上方投下的陰影帶
+            if (it.roof && it.roof !== 'saw' && z > 1.2) { ctx.fillStyle = 'rgba(0,0,0,0.2)'; quad([this.lift(p, H - Math.min(0.6, H * 0.15)), this.lift(q, H - Math.min(0.6, H * 0.15)), this.lift(q, H), this.lift(p, H)]); ctx.fill(); }
             // 牆腳接地處的暗帶（環境光遮蔽）與暗線，讓建物「站」在地上
             ctx.fillStyle = 'rgba(0,0,0,0.13)'; quad([p, q, this.lift(q, Math.min(0.7, H * 0.2)), this.lift(p, Math.min(0.7, H * 0.2))]); ctx.fill();
             ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.35;
@@ -707,6 +709,8 @@ export class Renderer {
     for (let f = shop ? 1 : 0; f < floors; f++) for (let k = 0; k < n; k++) pg((k + 0.33) / n, (k + 0.67) / n, 0.45 + f * 1.5, 1.15 + f * 1.5);
     if (shop) for (let k = 0; k < n; k++) pg((k + 0.1) / n, (k + 0.9) / n, 0.1, 0.95);
     ctx.fill();
+    // 窗框：放大時窗戶加上淺色外框與中間的窗櫺
+    if (z > 2.4) { ctx.strokeStyle = 'rgba(245,242,232,0.6)'; ctx.lineWidth = 0.07; ctx.stroke(); }
     if (shop) { ctx.fillStyle = it.shop; ctx.beginPath(); pg(0.02, 0.98, 1.0, 1.35); ctx.fill(); }
     if (it.door && facing > 0.5 && z > 2) { ctx.fillStyle = '#6e4f3a'; ctx.beginPath(); pg(0.46, 0.46 + Math.min(0.2, 1.1 / L), 0, 1.0); ctx.fill(); }
   }
@@ -738,10 +742,31 @@ export class Renderer {
     }
     // 由遠到近畫；背向鏡頭的山牆不畫
     faces.sort((p, q) => p.sy - q.sy);
+    const lerp = (a, b2, t) => ({ x: a.x + (b2.x - a.x) * t, y: a.y + (b2.y - a.y) * t });
     for (const f of faces) {
       if (f.wall) { if (f.sy <= 0.05) continue; ctx.fillStyle = shade(it.wall || col, 0.9 - 0.14 * f.sx); }
       else ctx.fillStyle = shade(col, 1 - 0.2 * f.sx - 0.16 * f.sy);
       quad(f.pts); ctx.fill();
+      // 日本瓦：屋面上一排排平行屋簷的瓦列（放大時再加上直向的瓦溝），屋簷邊緣一條亮線
+      if (!f.wall && z > 1.8 && it.roof !== 'mansard' && !b.abandoned) {
+        const [e0, e1, r1, r0] = f.pts, n = Math.max(3, Math.round(rH * 2.4));
+        ctx.strokeStyle = shade(col, 0.78 - 0.1 * f.sx); ctx.lineWidth = 0.09; ctx.beginPath();
+        for (let k = 1; k < n; k++) { const a = lerp(e0, r0, k / n), c = lerp(e1, r1, k / n); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); }
+        if (z > 3.2) { const m = Math.max(2, Math.round(Math.hypot(e1.x - e0.x, e1.y - e0.y) / 0.55)); for (let k = 1; k < m; k++) { const a = lerp(e0, e1, k / m), c = lerp(r0, r1, k / m); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); } }
+        ctx.stroke();
+        ctx.strokeStyle = shade(col, 1.25); ctx.lineWidth = 0.12; ctx.beginPath(); ctx.moveTo(e0.x, e0.y); ctx.lineTo(e1.x, e1.y); ctx.stroke();
+      }
+    }
+    // 屋脊與隅棟（四坡屋頂的斜脊）：較深、較粗的瓦脊
+    if (z > 1.2 && it.roof !== 'mansard' && !b.abandoned) {
+      ctx.strokeStyle = shade(col, 0.6); ctx.lineWidth = Math.min(0.45, 0.18 + rH * 0.06); ctx.lineCap = 'round'; ctx.beginPath();
+      for (const f of faces) {
+        if (f.wall) continue;
+        const [e0, e1, r1, r0] = f.pts;
+        if (Math.hypot(r1.x - r0.x, r1.y - r0.y) > 0.2) { ctx.moveTo(r0.x, r0.y); ctx.lineTo(r1.x, r1.y); }
+        if (it.roof === 'hip') { ctx.moveTo(e0.x, e0.y); ctx.lineTo(r0.x, r0.y); ctx.moveTo(e1.x, e1.y); ctx.lineTo(r1.x, r1.y); }
+      }
+      ctx.stroke();
     }
     if (it.roof === 'mansard') { quad(ii.map(q => lift(q, H + rH))); ctx.fillStyle = shade(col, 1.15); ctx.fill(); }
     if (b.abandoned || z < 1.1) return;

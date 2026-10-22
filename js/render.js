@@ -323,8 +323,27 @@ export class Renderer {
   // 大眾運輸路線圖：每條路線依行駛順序沿車道畫成連續的線（公車：路線顏色；鐵路：深色底加路線色），每隔一段畫行進方向箭頭；
   // 站牌畫成白點、手動站牌外圈加粗，還沒排進路線的手動站牌是灰色
   drawTransitMap(v) {
-    const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit;
+    const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit, net = g.net;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // 跨縣市列車：外部鐵路 → 各站 → 另一端的外部鐵路（路線依路網版本快取）
+    for (const L of tr.ict) {
+      if (!L._legs || L._legs.ver !== net.version) {
+        const pt = id => { const b = g.city.byId.get(id), p = b && g.city.platformOf(b); return p && { seg: p.seg, u: p.u, id: 'x' }; };
+        const end = nid => { const n = net.nodes.get(nid), s = n && net.segs.get(n.segs[0]); return s && { seg: s.id, u: s.a === n.id ? 2 : s.len - 2, id: 'x' }; };
+        const seq = [end(L.ends[0]), ...L.stations.map(pt), end(L.ends[1])].filter(Boolean), legs = [];
+        for (let i = 0; i + 1 < seq.length; i++) { const r = routeFromPoint(net, seq[i], seq[i + 1]); if (r) legs.push(r.path); }
+        L._legs = { ver: net.version, legs };
+      }
+      for (const leg of L._legs.legs) {
+        const pts = this.pathLine(leg);
+        if (pts.length < 2) continue;
+        ctx.globalAlpha = 0.92;
+        ctx.strokeStyle = '#2b2f36'; ctx.lineWidth = Math.max(3, 8 / z); this.strokePoly(pts);
+        ctx.strokeStyle = '#c0392b'; ctx.lineWidth = Math.max(1.6, 4 / z); this.strokePoly(pts);
+        ctx.globalAlpha = 1;
+        this.arrowsAlong(pts, '#c0392b', Math.max(1.4, 5 / z), Math.max(40, 160 / z));
+      }
+    }
     for (const ln of tr.lines) {
       for (const leg of ln.legs || [ln.path || []]) {
         const pts = this.pathLine(leg);

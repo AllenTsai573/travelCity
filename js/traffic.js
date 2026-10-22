@@ -9,7 +9,7 @@ import { laneOffset, halfWidth } from './network.js';
 
 // 卡死排除：排在最前面、停住超過 GRID_T 模擬秒（約 6 個遊戲小時）的車移除，後面的車才能動
 const GRID_T = 90;
-import { BUS_LEN, BUS_W, ART_LEN } from './transit.js';
+import { BUS_LEN, BUS_W, ART_LEN, ICT_COLOR } from './transit.js';
 
 const FREE = { gap: Infinity, lv: 0 };
 
@@ -121,7 +121,7 @@ export class Traffic {
   // ---------- 生成 / 結束 ----------
   // 這輛車實際要停的位置：預約的車位在道路上的對應點（沒有預約就用建築的出入口）
   destOf(v) {
-    if (v.bus || v.taxi || v.freight) return v.busDest;   // 公車：下一個站牌；計程車：接客 / 下客的地點
+    if (v.bus || v.taxi || v.freight || v.ict) return v.busDest;   // 公車：下一個站牌；計程車：接客 / 下客的地點
     const to = v.trip.to;
     if (!v.slotPt || to.outside) return to;
     const city = this.game.city, ver = this.net.version, list = city.slotSet(to, v.truck).list;
@@ -255,7 +255,7 @@ export class Traffic {
     // 公車被移除（塞太久、道路被拆）：車上乘客改走路，公車回到總站的停車格（不會就此少一輛）
     // 列車被移除（軌道被拆、卡太久）：乘客改走路，列車直接離開
     if (v.train) {
-      for (const p of v.pax || []) this.game.transit.walk(p.trip);
+      for (const p of [...(v.pax || []), ...(v.ict ? v.ict.pax : [])]) this.game.transit.walk(p.trip);
       this.removeFromTrack(v); v.dead = true; v.track = null; v.leaving = 0;
       return;
     }
@@ -399,6 +399,29 @@ export class Traffic {
       } else v.trail = null;
     }
     v.route = r.path; v.ri = 0; v.nextConn = null; v.committed = false; v.lost = false;
+  }
+  // 跨縣市客運列車：從外部鐵路 fromNode 開進來，依序停靠 line.stations（反方向時倒過來），最後開到 toNode 的外部鐵路離開
+  spawnIntercity(line, fromNode, toNode, pax) {
+    const net = this.net, city = this.game.city, n = net.nodes.get(fromNode), s = n && net.segs.get(n.segs[0]), n2 = net.nodes.get(toNode), s2 = n2 && net.segs.get(n2.segs[0]);
+    if (!s || !s2) return false;
+    const stops = fromNode === line.ends[0] ? line.stations.slice() : line.stations.slice().reverse();
+    const valid = stops.filter(id => city.byId.get(id) && city.platformOf(city.byId.get(id)));
+    if (!valid.length) return false;
+    const first = city.platformOf(city.byId.get(valid[0]));
+    const dir = s.a === n.id ? 1 : -1, L = s.links[dir], lane = L.lanes[0];
+    if (!lane) return false;
+    const u0 = dir > 0 ? 6 : s.len - 6, r = routeFromPoint(net, { seg: s.id, u: u0, id: 'x' }, { seg: first.seg, u: first.u, id: 'x' });
+    if (!r || r.path[0] !== L.key) return false;
+    const sl = net.segUToLaneS(lane, u0);
+    if (!this.spaceAt(lane, sl, 100, 100)) return false;
+    const v = this.createVehicle(true);
+    Object.assign(v, { train: true, cars: 4, len: 88, w: 3.1, a: 0.7, b: 1.1, T: 2, v0f: 1, color: ICT_COLOR, pax: [], dwell: 0,
+      ict: { line: line.id, stops: valid, idx: 0, pax, exit: { seg: s2.id, u: s2.a === n2.id ? 2 : s2.len - 2 } }, busDest: { seg: first.seg, u: first.u } });
+    v.trip = { kind: 'ict', from: city.byId.get(valid[0]), to: city.byId.get(valid[0]), truck: true };
+    v.route = r.path; v.ri = 0;
+    this.place(v, lane, sl);
+    this.vehicles.push(v);
+    return true;
   }
   // 貨運列車：從外部鐵路開進來，目的地是貨運站的月台
   spawnFreight(o, rc) {
@@ -1064,6 +1087,14 @@ export class Traffic {
           }
           this.nextBusStop(v);
         }
+        continue;
+      }
+      if (v.ict && tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === v.busDest.seg && v.s >= this.destS(v)) {
+        // 跨縣市列車：每站停 ICT_DWELL 秒上下客；開到出口的外部鐵路就離開地圖
+        if (!v.dwell) v.dwell = v.ict.idx < v.ict.stops.length ? 20 : 0.01;
+        v.s = this.destS(v); v.v = 0; v.dwell -= dt;
+        if (v.dwell <= 0) this.game.transit.ictStop(v);
+        if (v.dead) anyDead = true;
         continue;
       }
       if (v.freight && tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === v.busDest.seg && v.s >= this.destS(v)) {

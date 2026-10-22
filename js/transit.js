@@ -24,6 +24,9 @@ export const ART_LEN = 18;
 // 發車條件：候車 ICB_MIN 人以上，或最早的人已等 ICB_MAXHOLD 分鐘
 const ICB_CAP = 90, ICB_HEADWAY = 45, ICB_AWAY = 120, ICB_WAIT_S = 400, ICB_MIN = 15, ICB_MAXHOLD = 180;
 const ICB_COLORS = ['#2f6db5', '#1b8a8f', '#6b4fb3', '#b5651d'];
+// 跨縣市客運列車（四節車廂、每站停 20 秒）：發車間隔（遊戲分鐘，兩個方向輪流）、載客量、車站步行範圍、候車上限（模擬秒）
+export const ICT_COLOR = '#c0392b';
+const ICT_HEADWAY = 180, ICT_CAP = 300, ICT_WALK = 1200, ICT_WAIT_S = 500;
 
 export class Transit {
   constructor(game) {
@@ -35,6 +38,8 @@ export class Transit {
     this._key = '';
     this.stats = { riders: 0, walked: 0 };
     this.icb = [];   // 跨縣市公車路線：每個跨縣市公車站 × 每個接通的外部連線
+    this.ict = [];   // 跨縣市客運列車路線：每條有外部鐵路的客運鐵路一條
+    this.ictQ = new Map();   // 各車站等跨縣市列車出城的乘客：車站建築 id → [{ trip, t }]
   }
   get city() { return this.game.city; }
   get net() { return this.game.net; }
@@ -97,6 +102,7 @@ export class Transit {
     if (this.planT <= 0 || key !== this._key) { this._key = key; this.planT = PLAN_EVERY; this.plan(); }
     this.dispatch();
     this.icbUpdate();
+    this.ictUpdate();
     // 貨運列車：每 FREIGHT_EVERY 分鐘從外部鐵路開一班到每個接得到的貨運站
     this.freightT = (this.freightT ?? 30) - dt;
     if (this.freightT <= 0) { this.freightT = FREIGHT_EVERY; this.sendFreight(); }
@@ -388,6 +394,89 @@ export class Transit {
     // 開回來的途中被移除：公車回到站內的停車格
     const d = v.trip.to;
     if (!ok && d && d.zone && !d.dead) { const st = this.city.slotSet(d, true), i = st.list.findIndex((_, k) => !st.occ[k] && !st.res[k]); if (i >= 0) st.occ[i] = v.color; }
+  }
+
+  // ---------- 跨縣市客運列車 ----------
+  // 每條客運鐵路（同一個鐵路連通區裡有鐵路總站 / 車站）只要接到外部鐵路就開一條：列車從一端的外部鐵路開進來，
+  // 依序停靠各站（停在進站月台軌），從另一端的外部鐵路開出去；兩個方向輪流發車（只有一端時同一端進出）
+  ictPlan() {
+    const C = this.city, net = this.net, comp = this.railComp(), old = new Map(this.ict.map(L => [L.id, L])), by = new Map();
+    for (const b of this.railStations()) {
+      const p = C.platformOf(b), k = p && comp.get(net.segs.get(p.seg).a);
+      if (k) (by.get(k) || by.set(k, []).get(k)).push(b);
+    }
+    this.ict = [];
+    for (const [k, list] of by) {
+      const outs = C.railOutside.filter(o => comp.get(o.node) === k && net.nodes.has(o.node));
+      if (!outs.length) continue;
+      // 兩端：彼此最遠的兩個外部鐵路
+      let a = outs[0], b = outs[0], bd = -1;
+      for (const p of outs) for (const q of outs) { const P = net.nodes.get(p.node), Q = net.nodes.get(q.node), d = Math.hypot(P.x - Q.x, P.y - Q.y); if (d > bd) { bd = d; a = p; b = q; } }
+      const A = net.nodes.get(a.node), id = 'ict' + a.node;
+      const L = old.get(id) || { id, inQ: [], nextT: 0, dir: 0 };
+      L.ends = [a.node, b.node]; L.name = `${a.name.replace('鐵路', '')}－${b.name.replace('鐵路', '')}跨縣市列車`;
+      L.stations = list.sort((p, q) => Math.hypot(p.x - A.x, p.y - A.y) - Math.hypot(q.x - A.x, q.y - A.y)).map(s => s.id);
+      this.ict.push(L);
+      old.delete(id);
+    }
+    for (const L of old.values()) for (const p of L.inQ) this.walk(p.trip);
+  }
+  // 往返外地的行程改搭跨縣市列車：住家 / 目的地 ICT_WALK 內有跨縣市列車停靠的車站。成功回傳 true
+  ictBoard(trip) {
+    if (!this.ict.length || trip.truck) return false;
+    const out = trip.to.outside ? trip.to : trip.from.outside ? trip.from : null, local = out === trip.to ? trip.from : trip.to;
+    if (!out || !local || local.outside || local.dead) return false;
+    let best = null, bd = ICT_WALK;
+    for (const L of this.ict) for (const sid of L.stations) {
+      const s = this.city.byId.get(sid);
+      if (!s || s.dead) continue;
+      const d = Math.hypot(s.x - local.x, s.y - local.y);
+      if (d < bd) { bd = d; best = { L, s }; }
+    }
+    if (!best) return false;
+    const now = this.game.time;
+    if (out === trip.to) { const q = this.ictQ.get(best.s.id) || this.ictQ.set(best.s.id, []).get(best.s.id); q.push({ trip, t: now }); }
+    else best.L.inQ.push({ trip, t: now, station: best.s.id });
+    trip.ict = true; trip.transit = true;
+    return true;
+  }
+  ictUpdate() {
+    const C = this.city, tr = this.game.traffic, now = this.game.time;
+    const key = this.railStations().map(b => b.id).join(',') + '|' + C.railOutside.map(o => o.node).join(',') + '|' + this.net.version;
+    if (key !== this._ictKey) { this._ictKey = key; this.ictPlan(); }
+    const maxWait = ICT_WAIT_S * CLOCK;
+    for (const q of this.ictQ.values()) while (q.length && now - q[0].t > maxWait) this.walk(q.shift().trip);
+    for (const L of this.ict) {
+      while (L.inQ.length && now - L.inQ[0].t > maxWait) this.walk(L.inQ.shift().trip);
+      if (L.nextT > now) continue;
+      const out = L.stations.reduce((a, id) => a + (this.ictQ.get(id)?.length || 0), 0);
+      if (!out && !L.inQ.length && L.nextT > 0) { L.nextT = now + ICT_HEADWAY / 2; continue; }
+      const from = L.ends[L.dir], to = L.ends[L.ends[0] === L.ends[1] ? 0 : 1 - L.dir];
+      const pax = L.inQ.splice(0, ICT_CAP);
+      if (tr.spawnIntercity(L, from, to, pax)) { L.nextT = now + ICT_HEADWAY; if (L.ends[0] !== L.ends[1]) L.dir = 1 - L.dir; }
+      else { L.inQ.unshift(...pax); L.nextT = now + 10; }
+    }
+  }
+  // 跨縣市列車到站（停靠時間到）：下車的乘客行程完成、出城的乘客上車，開往下一站；開出地圖時車上的乘客行程完成
+  ictStop(v) {
+    const I = v.ict, now = this.game.time, tr = this.game.traffic;
+    v.dwell = 0;
+    if (I.idx >= I.stops.length) {
+      for (const p of I.pax) { this.city.onTripEnd(p.trip, true, now - p.t); this.stats.ict = (this.stats.ict || 0) + 1; }
+      I.pax = [];
+      tr.removeFromTrack(v); v.dead = true; v.track = null;
+      return;
+    }
+    const sid = I.stops[I.idx];
+    I.pax = I.pax.filter(p => { if (p.station !== sid) return true; this.city.onTripEnd(p.trip, true, now - p.t); this.stats.ict = (this.stats.ict || 0) + 1; return false; });
+    const q = this.ictQ.get(sid) || [];
+    while (q.length && I.pax.length < ICT_CAP) { const p = q.shift(); I.pax.push({ trip: p.trip, t: p.t, station: null }); }
+    I.idx++;
+    // 下一站（車站被拆了就跳過）；最後開往出口的外部鐵路
+    while (I.idx < I.stops.length && !this.city.platformOf(this.city.byId.get(I.stops[I.idx]) || {})) I.idx++;
+    const nb = I.idx < I.stops.length ? this.city.byId.get(I.stops[I.idx]) : null, p = nb && this.city.platformOf(nb);
+    v.busDest = p ? { seg: p.seg, u: p.u } : I.exit;
+    tr.trainRoute(v);
   }
 
   // 居民改搭公車：起點與目的地附近都有站牌，搭同一條路線直達，或在轉乘站換一次車（換車多算 300 m 的不便）。

@@ -207,6 +207,7 @@ export class UI {
         const run = veh.filter(v => v.bus === l.id).length, wait = l.stops.reduce((a, id) => a + (T.stop(id)?.queue.filter(p => p.line === l.id).length || 0), 0);
         return `<div class="zr"><i class="sw" style="background:${l.rail ? '#3b3f46' : l.color};${l.rail ? 'border:2px solid ' + l.color : ''}"></i><span>${l.rail ? '🚆' : '🚌'} ${l.name}</span><small>${new Set(l.stops).size} 站 · ${run} ${l.rail ? '列' : '台'} · 候車 ${wait}</small></div>`;
       }).join('') : '<small class="dim">還沒有路線（要有公車總站或鐵路總站）</small>')
+        + T.ict.map(L => `<div class="zr"><i class="sw" style="background:#3b3f46;border:2px solid #c0392b"></i><span>🚄 ${L.name}</span><small>${L.stations.length} 站 · ${veh.filter(v => v.ict && v.ict.line === L.id).length} 列 · 候車 ${L.stations.reduce((a, id) => a + (T.ictQ.get(id)?.length || 0), 0) + L.inQ.length}</small></div>`).join('')
         + `<small class="dim">手動站牌 ${c.busStops.length} 個（灰色為還沒排進路線）；載客累計 ${T.stats.riders} 人次</small>`;
     }
     // 分區圖圖例：各分區的建築數、空地塊數與面積（格）
@@ -310,8 +311,11 @@ export class UI {
             <dt>路線</dt><dd>${lines.map(l => `${l.rail ? '🚆' : '🚌'} ${l.name}（${l.stops.length} 站）`).join('<br>') || (b.zt === 'RS' ? '—（同一條鐵路上要有鐵路總站才會有列車）' : '—（同一條鐵路上還沒有其他車站）')}</dd>
             <dt>候車人數</dt><dd>${st ? st.queue.length : 0}</dd><dt>列車</dt><dd>${trains.length} 列行駛中，車上 ${trains.reduce((a, v) => a + v.pax.length, 0)} 人</dd>
             <dt>鐵路累計載客</dt><dd>${tr.stats.railRiders || 0} 人次</dd>
+            ${(() => { const L = tr.ict.find(x => x.stations.includes(b.id)); if (!L) return `<dt>跨縣市列車</dt><dd>—（這條鐵路還沒有接到外部鐵路）</dd>`;
+              const run = g.traffic.vehicles.filter(v => v.ict && v.ict.line === L.id);
+              return `<dt>跨縣市列車</dt><dd>${L.name}（停靠 ${L.stations.length} 站）<br>${run.length} 列行駛中，本站等車出城 ${tr.ictQ.get(b.id)?.length || 0} 人、外地等車進城 ${L.inQ.length} 人<br>累計載客 ${tr.stats.ict || 0} 人次</dd>`; })()}
             ${b.zt === 'RT' ? `<dt>公車轉運站</dt><dd>${b.busHub ? `已附設（${g.city.truckSlotsOf(b).length} 個公車停車位）` : '未附設'}</dd>` : ''}</dl>
-            <p class="note">鐵路總站自動規劃路線：依序停靠同一條鐵路上的各車站，到底再折返。住家或目的地 800 m 內有車站的居民會搭火車（公車轉運站可以轉乘公車）。</p>`;
+            <p class="note">鐵路總站自動規劃路線：依序停靠同一條鐵路上的各車站，到底再折返。住家或目的地 800 m 內有車站的居民會搭火車（公車轉運站可以轉乘公車）。鐵路接到外部鐵路時，還有跨縣市列車（紅色）從地圖外開進來、停靠各站再開出去：往返外地、住家或目的地 1.2 km 內有車站的人有三成會搭。</p>`;
         }
         if (b.zt === 'RC') {
           const fr = g.traffic.vehicles.filter(v => v.freight && v.freight.rc === b.id);

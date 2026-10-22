@@ -9,6 +9,8 @@ const ema = (a, x, k) => a + (x - a) * k;
 const BUS_SHARE = 0.5, TAXI_SHARE = 0.06;
 // 往返外地的人（上班、購物、旅客、回家）搭跨縣市公車的比例（有跨縣市公車站時）
 const ICB_SHARE = 0.35, ICB_KINDS = new Set(['work', 'shop', 'visit', 'home']);
+// 住家 / 目的地附近有跨縣市列車停靠的車站時，搭跨縣市列車的比例
+const ICT_SHARE = 0.3;
 const GROWTH = { R: 0.25, C: 0.15, I: 0.12 };
 
 // 需要場內道路的建築：工業園區（主幹道＋大園區的橫向道路）與附停車場的商業（從臨路開進停車場的車道）
@@ -718,7 +720,7 @@ export class City {
           const day = Math.floor(g.time / 1440) * 1440;
           let dep = day + 17 * 60 + 20 + g.rng.gauss() * 80;
           if (dep < g.time + 120) dep = g.time + 240 + g.rng.next() * 120;
-          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: !!to.zone, transit: trip.transit, icb: trip.icb });
+          this.schedule(dep, { kind: 'home', from: to, to: from, truck: false, worker: !!to.zone, transit: trip.transit, icb: trip.icb, ict: trip.ict });
         }
         break;
       }
@@ -727,7 +729,7 @@ export class City {
         if (!to.dead) {
           to.custLevel += 1; this.stats.custHour = (this.stats.custHour || 0) + 1;
           to.stock = Math.max(0, to.stock - 0.4);
-          this.schedule(g.time + 40 + g.rng.next() * 90, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit, icb: trip.icb });
+          this.schedule(g.time + 40 + g.rng.next() * 90, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit, icb: trip.icb, ict: trip.ict });
         }
         toll = 1;
         break;
@@ -736,7 +738,7 @@ export class City {
         if (!to.dead) {
           to.custLevel += 1; this.stats.custHour = (this.stats.custHour || 0) + 1;
           const day = Math.floor(g.time / 1440) * 1440;
-          this.schedule(day + 1440 + 9 * 60 + g.rng.next() * 180, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit, icb: trip.icb });
+          this.schedule(day + 1440 + 9 * 60 + g.rng.next() * 180, { kind: 'home', from: to, to: from, truck: false, transit: trip.transit, icb: trip.icb, ict: trip.ict });
         }
         toll = 2;
         break;
@@ -893,12 +895,15 @@ export class City {
       if (o.spawnCD > 0) continue;
       const trip = o.queue[0];
       if (trip.to.dead || (trip.to.outside && trip.to.seg === null) || o.seg === null) { o.queue.shift(); this.recordFail(trip); continue; }
-      // 往返外地：部分居民 / 旅客搭跨縣市公車（回程也搭）
+      // 往返外地：部分居民 / 旅客搭跨縣市列車（ICT_SHARE）或跨縣市公車（ICB_SHARE），回程也搭同一種
       const T0 = this.game.transit;
-      if (T0 && !trip.truck && (trip.to.outside || o.outside) && (trip.icb || (!trip.icbTried && ICB_KINDS.has(trip.kind)))) {
-        const want = trip.icb || this.game.rng.next() < ICB_SHARE;
+      if (T0 && !trip.truck && (trip.to.outside || o.outside) && (trip.icb || trip.ict || (!trip.icbTried && ICB_KINDS.has(trip.kind)))) {
+        const x = this.game.rng.next();
         trip.icbTried = true;
-        if (want && T0.icbBoard(trip)) { o.queue.shift(); continue; }
+        const ok = trip.ict ? T0.ictBoard(trip) || T0.icbBoard(trip)
+          : trip.icb ? T0.icbBoard(trip)
+          : (x < ICT_SHARE && T0.ictBoard(trip)) || (x < ICT_SHARE + ICB_SHARE && T0.icbBoard(trip));
+        if (ok) { o.queue.shift(); continue; }
       }
       // 搭公車：起訖附近都有同一條路線的站牌時，部分居民（BUS_SHARE）就算有車也改搭公車，回程也搭公車
       if (!trip.truck && !trip.transit && !trip.mode && o.zone === 'R' && (trip.kind === 'work' || trip.kind === 'shop') && this.game.transit) {

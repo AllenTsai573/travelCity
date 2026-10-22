@@ -42,7 +42,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 | --- | --- |
 | `config.js` | 常數：`MAP_SIZE = 3600`、`CLOCK = 4`（每模擬秒 4 遊戲分鐘）、`TRIP_SCALE`、`TRIP_REF`（每遊戲小時行程數相對原始調校的比例，滿意度門檻要乘上它）、14 種 `ROAD_TYPES`（含內部用 `service` 場內道路）、`LEVELS`（-2～3）、`ZONE_TYPES`（R1/R2/R3/C/I，每格 `CELL = 6` m、最大地塊格數、每格容量）、`SHOP_KINDS`、`INDUSTRY_KINDS`、生態系、難度 |
 | `util.js` | 亂數、雜訊、折線幾何（`pointAt`、`cutPoly`、`closestOnPoly`、`offsetPoly`、`arcCurve`、`polyIntersections`、`convexOverlap`…）、二元堆積 |
-| `terrain.js` | 程序化地形（8 m 格點）、河流、水域、樹；`getCanvas()` 以每像素 2 m 雙線性內插畫地表。3.6 km 地圖保證市中心 700 m 內為陸地（2.4 km 舊存檔維持舊地形） |
+| `terrain.js` | 程序化地形（8 m 格點）、河流、水域、樹；`getCanvas()` 以每像素 2 m 雙線性內插畫地表。3.6 km 地圖保證市中心 700 m 內為陸地（2.4 km 舊存檔維持舊地形）。地形版本 `TERRAIN_VERSION = 2`：低窪處依連通區只留 0～2 個湖（群島的海保留），四成地圖有河且較窄；存檔記錄 `tv`，沒有記錄的舊存檔用第 1 版（道路才不會落在水上） |
 | `network.js` | 路網核心：節點、路段（`seg.go` 為分區格線位移，切開 / 反向時沿用）、車道、路口車道連接（`genConnections`、`alignLanes` 處理車道增減）、衝突點、號誌時相、`planRoad` / `executeRoad`、圓環、`splitSegment`、`replaceSegment`、存讀檔 |
 | `routing.js` | 以有向路段為節點的 Dijkstra，成本為即時壅塞下的行駛時間。`findRoute(net, starts, dest, allow)`：設有閘門（`seg.gate = 建築 id`）的場內道路只讓 `allow` 名單內（起訖建築）的車通過 |
 | `traffic.js` | 車輛代理人：IDM 跟車、MOBIL 式換道（必須換道時請目標車道後車禮讓：`v.yieldTo`）、路口通行判斷（交叉車輛用時間窗 `crossBlocks` / `tReach`）、重新選路；停車（見下方「停車系統」）；`fx` 為停車 / 出車動畫清單 |
@@ -134,7 +134,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 15. 行程圖與路線圖沿道路畫成連續的線（箭頭、行程圖細到粗）、公車站序依行駛方向最佳化、SPUI 橫交道路改林蔭大道、需求加成長壓力、主迴圈防當機（錯誤顯示在畫面）、npm test 加語法檢查
 16. 錯誤自動截圖與 GitHub 回報；路段銜接處標線（虛線依長度等分、中央分隔帶方頭）、辦公大樓尺寸上限與分層、換車道改為 S 形平順橫移（`v.lat0` / `v.lcP` / `v.latSlope`）、窄公車總站（7 格寬起）也有公車位、站牌少時也開路線（轉乘站＋1 站）、站牌可設在較短的路段（離路口 10～30 m，太短改用 120 m 內的道路）、分區拖曳跨過路口、路口工具併入選取工具
 17. 大眾運輸獨立工具列（P）、計程車派遣中心（全市）與招呼站 1.8 km、公車總站 1.8 km、跨縣市公車站 / 總站（連節公車往返外部連線）、場內道路出入口不算十字路口（對面分區連續）、圓環進場不再過度等待
-18. 「完整城市路網」開局（`citygen.js`）、鐵路高架橋的標線
+18. 「完整城市路網」開局（`citygen.js`）、鐵路高架橋的標線、地形第 2 版（湖泊 0～2 個、河流不一定有）
 
 ## 已知問題 / 可以繼續的方向
 

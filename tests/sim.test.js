@@ -436,5 +436,14 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert(C.buildings.some(b => b.zone === 'R') && gc.traffic.vehicles.some(v => v.train), `自動發展開始蓋住宅（${C.buildings.filter(b => b.zone === 'R').length} 棟）、列車行駛`);
 }
 
+// 地形第 2 版：湖泊最多兩個、河流不一定有，水域少；舊存檔（第 1 版）地形不變
+{
+  const { Terrain } = await import('../js/terrain.js');
+  const frac = t => t.water.reduce((a, x) => a + x, 0) / t.water.length;
+  const ws = [1, 2, 3, 4, 5, 6, 7, 8].map(sd => frac(new Terrain(sd, 'temperate', 3600)));
+  assert(Math.max(...ws) < 0.08, `新地形水域 ${ws.map(w => (w * 100).toFixed(1) + '%').join('、')}`);
+  assert(Math.abs(frac(new Terrain(1, 'temperate', 3600, 1)) - 0.0766) < 0.003, `舊地形不變（${(frac(new Terrain(1, 'temperate', 3600, 1)) * 100).toFixed(2)}%）`);
+}
+
 if (failed) { console.error(`${failed} 項失敗`); process.exit(1); }
 console.log('全部通過');

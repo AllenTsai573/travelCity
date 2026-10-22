@@ -8,12 +8,16 @@ function hexToRgb(h) {
 }
 function mix(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
 
+// 地形版本：2 = 湖泊最多 1～2 個、河流不一定有且較窄（新遊戲）；1 = 舊地形（讀取沒有記錄版本的舊存檔時沿用，道路才不會落在水上）
+export const TERRAIN_VERSION = 2;
+
 export class Terrain {
-  constructor(seed, biomeKey, size) {
+  constructor(seed, biomeKey, size, version = TERRAIN_VERSION) {
     this.seed = seed;
     this.biomeKey = biomeKey;
     this.biome = BIOMES[biomeKey];
     this.size = size;
+    this.version = version;
     this.cell = 8;
     this.n = Math.ceil(size / this.cell);
     const n = this.n, b = this.biome;
@@ -28,27 +32,55 @@ export class Terrain {
     const riverOff = riverSide * (big ? rng.range(700, 1000) : rng.range(330, 520));
     const landR = big ? 700 : 430;
     const riverVertical = rng.chance(0.5);
-    const riverW = rng.range(26, 40);
+    let riverW = rng.range(26, 40);
+    // 新地形：四成的地圖有河，河道較窄；湖泊 0～2 個
+    const v2 = version >= 2, hasRiver = b.river && (!v2 || rng.chance(0.4));
+    if (v2) riverW = rng.range(16, 26);
+    const lakes = v2 ? (rng.chance(0.2) ? 0 : rng.chance(0.55) ? 1 : 2) : -1;
+    const river = (x, y, e) => {
+      const along = riverVertical ? y : x, across = riverVertical ? x : y;
+      const center = c + riverOff + Math.sin(along / 260) * 90 + (fbm(along / 500, 7.7, seed + 99, 3) - 0.5) * 320;
+      const rd = Math.abs(across - center);
+      const w = riverW * (0.8 + 0.4 * fbm(along / 300, 3.3, seed + 7, 2));
+      if (rd < w) return Math.min(e, b.water - 0.06);
+      if (rd < w + 30) return Math.min(e, lerp(b.water - 0.02, e, (rd - w) / 30));
+      return e;
+    };
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const x = (i + 0.5) * this.cell, y = (j + 0.5) * this.cell;
         let e = fbm(x / b.scale, y / b.scale, seed, 5);
         const d = Math.hypot(x - c, y - c);
         if (b.islands) e -= 0.32 * Math.pow(d / (size * 0.62), 2) - 0.08;
-        if (b.river) {
-          const along = riverVertical ? y : x, across = riverVertical ? x : y;
-          const center = c + riverOff + Math.sin(along / 260) * 90 + (fbm(along / 500, 7.7, seed + 99, 3) - 0.5) * 320;
-          const rd = Math.abs(across - center);
-          const w = riverW * (0.8 + 0.4 * fbm(along / 300, 3.3, seed + 7, 2));
-          if (rd < w) e = Math.min(e, b.water - 0.06);
-          else if (rd < w + 30) e = Math.min(e, lerp(b.water - 0.02, e, (rd - w) / 30));
-        }
+        if (hasRiver && !v2) e = river(x, y, e);
         // 市中心保證是陸地
         e += 0.4 * clamp(1 - d / landR, 0, 1);
         this.h[j * n + i] = e;
-        this.water[j * n + i] = e < b.water ? 1 : 0;
       }
     }
+    if (v2) {
+      // 低窪處（湖）依連通區分開，只留 lakes 個（面積不超過地圖 5% 的裡面最大的），其餘填成陸地；
+      // 群島的海（碰到地圖邊緣的水域）都保留
+      const H = this.h, comp = new Int32Array(n * n).fill(-1), list = [];
+      for (let k0 = 0; k0 < n * n; k0++) {
+        if (comp[k0] >= 0 || H[k0] >= b.water) continue;
+        const id = list.length, st = [k0], cells = [];
+        let edge = false;
+        comp[k0] = id;
+        while (st.length) {
+          const k = st.pop(), i = k % n, j = (k - i) / n;
+          cells.push(k);
+          if (i === 0 || j === 0 || i === n - 1 || j === n - 1) edge = true;
+          for (const q of [i > 0 ? k - 1 : -1, i < n - 1 ? k + 1 : -1, j > 0 ? k - n : -1, j < n - 1 ? k + n : -1]) if (q >= 0 && comp[q] < 0 && H[q] < b.water) { comp[q] = id; st.push(q); }
+        }
+        list.push({ cells, edge });
+      }
+      const keep = new Set(list.filter(l => b.islands && l.edge));
+      for (const l of list.filter(l => !keep.has(l) && l.cells.length <= n * n * 0.05 && l.cells.length > 60).sort((p, q) => q.cells.length - p.cells.length).slice(0, lakes)) keep.add(l);
+      for (const l of list) if (!keep.has(l)) for (const k of l.cells) H[k] = b.water + 0.03 + (b.water - H[k]) * 0.2;
+      if (hasRiver) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; H[k] = river((i + 0.5) * this.cell, (j + 0.5) * this.cell, H[k]); }
+    }
+    for (let k = 0; k < n * n; k++) this.water[k] = this.h[k] < b.water ? 1 : 0;
     this.genTrees(seed);
     this.canvas = null;
   }

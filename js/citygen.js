@@ -132,7 +132,9 @@ function buildCity(g, fullRebuild) {
     const edgeWet = [[4, ya], [E, ya], [xb, 4], [xb, E]].some(([x, y]) => wetLine(x, y, x + (x < 10 ? 160 : x > E - 1 ? -160 : 0), y + (y < 10 ? 160 : y > E - 1 ? -160 : 0)) > 0);
     const w = wetFoot('turbine', xb, ya, 1, 0) * 8 + wetLine(0, ya, S, ya) + wetLine(xb, 0, xb, S) + (edgeWet ? 3 : 0)
       + (dryAlong('spui', ya, 1300, xb - 950, false) ? 0 : 2) + (dryAlong('spui', xb, ya + 950, S - 1300, true) ? 0 : 2)
-      + (dryAlong('diamond', ya, 420, xb - 1750, false) ? 0 : 1) + (dryAlong('diamond', xb, ya + 1750, E - 420, true) ? 0 : 1);
+      + (dryAlong('diamond', ya, 420, xb - 1750, false) ? 0 : 1) + (dryAlong('diamond', xb, ya + 1750, E - 420, true) ? 0 : 1)
+      // 一樣好的位置裡偏好東西向在北側約 22%、南北向在東側約 78%（市中心留給林蔭大道與街廓）
+      + (Math.abs(ya - S * 0.22) + Math.abs(xb - S * 0.78)) * 0.0002;
     if (!best || w < best.w) best = { ya, xb, w };
   }
   let YA = best.ya, XB = best.xb;

@@ -284,8 +284,55 @@ function buildCity(g, fullRebuild) {
   // 南北向街道（鐵路高架，全部從下方穿過）
   for (const x of gridX) NS(x, ysAll, 'street');
   for (const y of [...gridY, RY - RW, RY + RW]) EW(y, xsAll, 'street');
+  // 高架高速公路兩側的側道（離主線 50 m）：高速公路沿線不會留下一整條沒有路的帶狀空地；交流道範圍內不鋪
+  for (const d of [-50, 50]) {
+    EW(YA + d, uniq([XW, ...xsAll, XE]), 'street');
+    NS(XB + d, uniq([YN, ...ysAll, YS]), 'street');
+  }
   net.rebuild();
 
+
+  // 街廓最大約 300 m（50×50 格）：量每個取樣點所在街廓的寬高（往左右 / 上下找最近的地面道路），
+  // 太寬就在中間加一條南北向街道、太高就加東西向（到上下 / 左右的道路為止）；碰到匝道、鐵路的會被 build 擋下
+  const MAXB = 300;
+  const span = (p, horiz, list) => {
+    let lo = -Infinity, hi = Infinity;
+    for (const s of list) {
+      const b = s.bbox;
+      if (horiz ? (p.y < b.y0 || p.y > b.y1) : (p.x < b.x0 || p.x > b.x1)) continue;
+      for (let i = 0; i + 1 < s.pts.length; i++) {
+        const a = s.pts[i], c = s.pts[i + 1];
+        const [a0, a1, c0, c1, q0, q1] = horiz ? [a.y, a.x, c.y, c.x, p.y, p.x] : [a.x, a.y, c.x, c.y, p.x, p.y];
+        if ((a0 - q0) * (c0 - q0) > 0 || a0 === c0) continue;
+        const v = a1 + (c1 - a1) * (q0 - a0) / (c0 - a0);
+        if (v < q1) lo = Math.max(lo, v); else hi = Math.min(hi, v);
+      }
+    }
+    return [lo, hi];
+  };
+  const tried = new Set();
+  dbg('切街廓開始', XW, XE, YN, YS);
+  for (let pass = 0; pass < 4; pass++) {
+    let added = 0;
+    for (let x = XW + 30; x < XE - 30; x += 60) for (let y = YN + 30; y < YS - 30; y += 60) {
+      if (T.isWater(x, y) || inFoot(x, y)) continue;
+      // 鋪路期間沒有完整重算（drawLevel 還沒更新），用兩端節點的高度判斷地面道路
+      const list = [...net.segs.values()].filter(s => !s.T.rail && !s.T.internal && net.nodes.get(s.a).level === 0 && net.nodes.get(s.b).level === 0);
+      // 某一側沒有道路時以外環為界
+      const cl = (r, a, b) => [Math.max(r[0], a), Math.min(r[1], b)];
+      const [x0, x1] = cl(span({ x, y }, true, list), XW, XE), [y0, y1] = cl(span({ x, y }, false, list), YN, YS);
+      if (x1 - x0 <= MAXB && y1 - y0 <= MAXB) continue;
+      // 長的那一邊從中間切開
+      const vert = x1 - x0 >= y1 - y0, m = vert ? (x0 + x1) / 2 : (y0 + y1) / 2;
+      const [e0, e1] = vert ? cl(span({ x: m, y }, false, list), YN, YS) : cl(span({ x, y: m }, true, list), XW, XE);
+      const key = Math.round(m / 10) + ':' + Math.round(e0 / 10) + ':' + Math.round(e1 / 10) + (vert ? 'v' : 'h');
+      if (!isFinite(e0 + e1) || tried.has(key)) continue;
+      tried.add(key);
+      if (vert ? ground({ x: m, y: e0 }, { x: m, y: e1 }, 'street') : ground({ x: e0, y: m }, { x: e1, y: m }, 'street')) added++;
+      else dbg('切街廓失敗', vert ? 'v' : 'h', Math.round(m), Math.round(e0), Math.round(e1));
+    }
+    if (!added) break;
+  }
 
   // 只有一端相接的地面道路（停在交流道範圍、水域邊的短截）拆掉，一路拆到路口為止
   for (let changed = true, guard = 0; changed && guard < 20; guard++) {

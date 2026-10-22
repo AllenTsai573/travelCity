@@ -96,19 +96,21 @@ class Game {
 
   // start：'town' 預設小鎮（道路與分區已規劃，6 個遊戲小時後才開始有人進駐）；'blank' 空白地圖（只有外部連線、不自動發展）；
   // 'city' 完整城市路網（整張地圖的道路與鐵路車站都已鋪好，住商工由自動發展劃設）
-  newGame({ seed, biome, difficulty, start = 'town' }) {
+  // autoGrow：開局時是否開啟自動發展（沒給就依開局方式：空白地圖關閉，其他開啟）
+  newGame({ seed, biome, difficulty, start = 'town', autoGrow }) {
     this.setup(seed, biome, difficulty);
     const blank = start === 'blank';
     if (start === 'city') generateCity(this); else generateWorld(this, blank ? { blank: true } : { empty: true });
     this.city.growStart = this.time + 360;
-    this.autoGrow = !blank;
+    this.autoGrow = autoGrow ?? !blank;
     Object.assign(this.renderer.cam, { x: MAP_SIZE / 2, y: MAP_SIZE / 2, z: blank ? 0.5 : start === 'city' ? 0.4 : 1.1 });
     this.afterLoad();
+    const grow = this.autoGrow ? '自動發展已開啟：約 6 個遊戲小時後，住宅、商業、工業與大眾運輸會依需求自己沿路劃設。' : '自動發展已關閉（可以用上方「自動發展」按鈕開啟）。';
     this.notify(start === 'city'
-      ? `歡迎來到${this.terrain.biome.name}！整座城市的交通骨架已經鋪好：高速公路、交流道、林蔭大道與鐵路車站。自動發展已開啟：約 6 個遊戲小時後，住宅、商業、工業會依需求自己沿路劃設。`
+      ? `歡迎來到${this.terrain.biome.name}！整座城市的交通骨架已經鋪好：高速公路、交流道、林蔭大道與鐵路車站。${grow}`
       : blank
-      ? `歡迎來到${this.terrain.biome.name}！這是空白地圖：從地圖邊緣的外部連線開始鋪路、劃分區吧（自動發展已關閉）。`
-      : `歡迎來到${this.terrain.biome.name}！小鎮的分區已經劃好，約 6 個遊戲小時後開始有人進駐。`, 'good');
+      ? `歡迎來到${this.terrain.biome.name}！這是空白地圖：從地圖邊緣的外部連線開始鋪路、劃分區吧。${grow}`
+      : `歡迎來到${this.terrain.biome.name}！小鎮的分區已經劃好，約 6 個遊戲小時後開始有人進駐。${grow}`, 'good');
   }
 
   afterLoad() {

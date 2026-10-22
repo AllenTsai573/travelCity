@@ -33,7 +33,8 @@ export function generateWorld(g, opts = {}) {
       let ok = true;
       for (let k = 0; k <= 175 && ok; k += 5) if (T.isWater(P.x + D.x * k, P.y + D.y * k)) ok = false;
       if (!ok) continue;
-      const type = made < 2 ? 'highway' : 'avenue';
+      // 外部連線只有高速公路（沒有一般的聯外道路）
+      const type = 'highway';
       const O = net.addNode(P.x, P.y, 0);
       const I = net.addNode(P.x + D.x * 160, P.y + D.y * 160, 0);
       net.addSegment(O, I, type, [O, I]);

@@ -1585,15 +1585,25 @@ export class Renderer {
         const sig = n.signal, ph = sig.phases[sig.cur];
         for (const L of net.inLinks(n)) {
           const inP = ph.set.has(L.key);
-          let col = '#e53935';
-          if (inP && sig.state === 'green') col = '#43d17a';
-          else if (inP && sig.state === 'yellow') col = '#ffc93c';
           for (const lane of L.lanes) {
+            // 左轉專用時相：只有有左轉的車道亮燈（綠色左轉箭頭），其他車道紅燈
+            const lit = inP && (!ph.only || lane.conns.some(c => c.turn === 'L' || c.turn === 'U'));
+            let col = '#e53935';
+            if (lit && sig.state === 'green') col = '#43d17a';
+            else if (lit && sig.state === 'yellow') col = '#ffc93c';
             const p = pointAt(lane.pts, lane.cum, lane.len);
             ctx.fillStyle = '#111';
             ctx.beginPath(); ctx.arc(p.x, p.y, 1.05, 0, Math.PI * 2); ctx.fill();
             ctx.fillStyle = col;
-            ctx.beginPath(); ctx.arc(p.x, p.y, 0.75, 0, Math.PI * 2); ctx.fill();
+            if (lit && ph.only) {
+              // 左轉箭頭（行進方向的左邊）
+              const fx = p.dx, fy = p.dy, lx = p.dy, ly = -p.dx;
+              ctx.beginPath();
+              ctx.moveTo(p.x + lx * 0.75, p.y + ly * 0.75);
+              ctx.lineTo(p.x - lx * 0.1 + fx * 0.55, p.y - ly * 0.1 + fy * 0.55);
+              ctx.lineTo(p.x - lx * 0.1 - fx * 0.55, p.y - ly * 0.1 - fy * 0.55);
+              ctx.closePath(); ctx.fill();
+            } else { ctx.beginPath(); ctx.arc(p.x, p.y, 0.75, 0, Math.PI * 2); ctx.fill(); }
           }
         }
       } else if (n.control === 'stop') {

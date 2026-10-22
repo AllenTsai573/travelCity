@@ -601,8 +601,9 @@ export class Traffic {
 
   // ---------- 號誌 ----------
   sigState(node, c) {
-    const sig = node.signal;
-    const inP = sig.phases[sig.cur].set.has(c.from.link.key);
+    const sig = node.signal, ph = sig.phases[sig.cur];
+    // 左轉專用時相：只有左轉 / 迴轉的連接是綠燈
+    const inP = ph.set.has(c.from.link.key) && (!ph.only || c.turn === 'L' || c.turn === 'U');
     if (sig.state === 'green') return inP ? 'G' : 'R';
     if (sig.state === 'yellow') return inP ? 'Y' : 'R';
     return inP ? 'AR' : 'R';
@@ -614,7 +615,8 @@ export class Traffic {
       if (!L) continue;
       for (const lane of L.lanes) {
         const w = lane.vehs[0];
-        if (w && lane.len - w.s < 60) return true;
+        // 左轉專用時相：只算要左轉 / 迴轉的車（車道最前面那台要走的連接，或這條車道只能左轉）
+        if (w && lane.len - w.s < 60 && (!ph.only || (w.nextConn ? w.nextConn.turn === 'L' || w.nextConn.turn === 'U' : lane.conns.some(c => c.turn === 'L')))) return true;
       }
     }
     return false;

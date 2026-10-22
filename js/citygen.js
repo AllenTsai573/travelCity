@@ -267,19 +267,17 @@ function buildCity(g, fullRebuild) {
 
   // ---------- 幹道 ----------
   const ysAll = uniq([...northY, ...allY]);
-  // 南北向：主軸林蔭大道（往南到地圖邊緣當聯外道路）、鑽石型的大道、外環
-  NS(XM, uniq([YN, ...ysAll.filter(y => y > YN), E]), 'boulevard');
+  // 南北向：主軸林蔭大道、鑽石型的大道、外環（聯外只有高速公路，林蔭大道停在外環）
+  NS(XM, ysAll, 'boulevard');
   NS(XD, ysAll, 'avenue');
   NS(XW, ysAll, 'avenue');
   NS(XE, ysAll.filter(y => !inFoot(XE, y)), 'avenue');
-  // 東西向：主軸林蔭大道（往西到地圖邊緣當聯外道路）、鑽石型的大道、外環
+  // 東西向：主軸林蔭大道、鑽石型的大道、外環
   const xsAll = uniq([...allX]);
-  EW(YM, uniq([4, ...xsAll]), 'boulevard');
+  EW(YM, xsAll, 'boulevard');
   EW(YD, xsAll, 'avenue');
   EW(YS, xsAll, 'avenue');
   EW(YN, xsAll.filter(x => x < XB - 600), 'avenue');
-  outNode({ x: 4, y: YM }, '西方聯外道路');
-  outNode({ x: XM, y: E }, '南方聯外道路');
   net.rebuild();
 
   // ---------- 街道 ----------

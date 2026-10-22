@@ -572,6 +572,7 @@ export class Network {
     const old = node.signal;
     if (old && old.sig === sig) {
       for (const p of old.phases) p.set = new Set(p.links);
+      if (node.sigScheme === 'pairs' && !old.phases.some(p => p.only)) { node.signal = null; this.ensureSignal(node); }
       return;
     }
     let groups;
@@ -592,11 +593,14 @@ export class Network {
         else groups.push([a]);
       }
     } else groups = ins.map(l => [l]);
-    const phases = groups.map((g, i) => {
+    // 對向同時通行：每組對向直行之後加一個左轉專用時相（only: 'L'，只有左轉 / 迴轉的車道是綠燈），
+    // 否則左轉車要等對向車流的空檔，車多時幾乎轉不過去
+    const phases = [];
+    for (const g of groups) {
       const links = g.map(l => l.key);
-      const dur = node.sigDur[i] || 18;
-      return { links, dur, set: new Set(links) };
-    });
+      phases.push({ links, dur: node.sigDur[phases.length] || 18, set: new Set(links) });
+      if (node.sigScheme === 'pairs' && g.length === 2) phases.push({ links, dur: node.sigDur[phases.length] || 10, set: new Set(links), only: 'L' });
+    }
     node.signal = { sig, phases, cur: 0, state: 'green', t: 0 };
   }
 

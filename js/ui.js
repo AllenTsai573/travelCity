@@ -413,10 +413,10 @@ export class UI {
     </div>`;
     if (n.control === 'signal' && n.signal) {
       ctl += `<label class="row">時相方案
-        <select data-chg="scheme"><option value="each" ${n.sigScheme === 'each' ? 'selected' : ''}>各方向輪流（保護式）</option><option value="pairs" ${n.sigScheme === 'pairs' ? 'selected' : ''}>對向同時通行</option></select></label>
+        <select data-chg="scheme"><option value="each" ${n.sigScheme === 'each' ? 'selected' : ''}>各方向輪流（保護式）</option><option value="pairs" ${n.sigScheme === 'pairs' ? 'selected' : ''}>對向同時通行（含左轉專用時相）</option></select></label>
         <label class="row"><input type="checkbox" data-chg="adaptive" ${n.sigAdaptive ? 'checked' : ''}> 感應式號誌（依車流跳過 / 延長）</label>
         <div class="phases">${n.signal.phases.map((ph, i) => `<div class="phase" data-i="${i}">
-          <span>時相 ${i + 1}</span><small>${ph.links.map(k => this.approachName(n, k)).join('、')}</small>
+          <span>時相 ${i + 1}${ph.only ? '（左轉專用）' : ''}</span><small>${ph.links.map(k => this.approachName(n, k)).join('、')}${ph.only ? ' 左轉' : ''}</small>
           <button data-act="dur" data-i="${i}" data-d="-3">−</button><b>${ph.dur}s</b><button data-act="dur" data-i="${i}" data-d="3">＋</button></div>`).join('')}</div>`;
     } else if (n.control === 'auto') {
       ctl += `<div class="appr"><p class="note">各進入方向的路權（環道與高等級道路預設優先）：</p>` + n.segs.map(sid => {
@@ -584,7 +584,8 @@ export class UI {
       <h4>難度</h4>
       <div class="cards">${Object.entries(DIFFICULTY).map(([k, d]) => `<label class="cardopt"><input type="radio" name="diff" value="${k}" ${k === 'normal' ? 'checked' : ''}><b>${d.name}</b><small>${d.unlockAll ? '無限資金、全部解鎖' : fmtMoney(d.money)}</small></label>`).join('')}</div>
       <h4>起始</h4>
-      <div class="cards"><label class="cardopt"><input type="radio" name="start" value="town" checked><b>預設小鎮</b><small>道路與分區已規劃，稍後自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="city"><b>完整城市路網</b><small>整張地圖的高速公路、交流道、幹道、街廓與鐵路車站都已鋪好，住商工自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="blank"><b>空白地圖</b><small>只有外部連線，自己從零規劃（不自動發展）</small></label></div>
+      <div class="cards"><label class="cardopt"><input type="radio" name="start" value="town" checked><b>預設小鎮</b><small>道路與分區已規劃，稍後自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="city"><b>完整城市路網</b><small>整張地圖的高速公路、交流道、幹道、街廓與鐵路車站都已鋪好，住商工自動發展</small></label><label class="cardopt"><input type="radio" name="start" value="blank"><b>空白地圖</b><small>只有外部連線，自己從零規劃</small></label></div>
+      <label class="row"><input type="checkbox" id="ng-grow" checked> 自動發展（依需求自動劃設住宅、商業、工業與大眾運輸；遊戲中也可以用上方「自動發展」按鈕切換）</label>
       <h4>地圖種子</h4>
       <div class="row"><input id="ng-seed" type="number" value="${seed}"><button data-m="rand">🎲</button></div>
       <div class="btns end"><button data-m="${first ? 'help' : 'close'}">${first ? '直接遊玩目前地圖' : '取消'}</button>${this.g.hasSave() ? '<button data-m="load">讀取存檔</button>' : ''}<button class="primary" data-m="start">開始建設</button></div>`);
@@ -690,7 +691,7 @@ export class UI {
         const diff = document.querySelector('input[name=diff]:checked').value;
         const seed = Math.abs(parseInt(document.getElementById('ng-seed').value, 10)) || 1;
         const start = document.querySelector('input[name=start]:checked')?.value || 'town';
-        g.newGame({ seed, biome, difficulty: diff, start });
+        g.newGame({ seed, biome, difficulty: diff, start, autoGrow: document.getElementById('ng-grow')?.checked ?? start !== 'blank' });
         this.modalOpen = false;
         document.getElementById('modal').classList.add('hidden');
         break;

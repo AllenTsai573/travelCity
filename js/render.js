@@ -810,7 +810,8 @@ export class Renderer {
 
   // 道路標線（依道路類型沿中心線產生）
   // joint：同種道路相接處（兩段之間的短弧）：不畫車道虛線，分隔島兩端用方頭，跟前後兩段接成一條連續的線
-  markingsFor(T, core, joint = false) {
+  // joint：路口兩段同類道路之間的銜接帶；flip：銜接帶方向與路段方向相反（車道偏移要反過來）
+  markingsFor(T, core, joint = false, flip = false) {
     const lines = [];
     // 鐵路：兩條軌道，每條是一排枕木（寬虛線）加兩條鋼軌
     if (T.rail) {
@@ -836,14 +837,14 @@ export class Renderer {
       } else if ((T.median || 0) > 0) {
         lines.push({ pts: offsetPoly(core, 0.18), c: '#e8c547', w: 0.15, dash: null });
         lines.push({ pts: offsetPoly(core, -0.18), c: '#e8c547', w: 0.15, dash: null });
-      } else if (T.rank !== 0 && !joint) {
+      } else if (T.rank !== 0) {
         lines.push({ pts: core, c: '#e8c547', w: 0.15, dash: [3, 3] });
       }
     }
     for (const dir of [1, -1]) {
       const n = dir > 0 ? T.fwd : T.bwd;
-      for (let i = 0; i < n - 1 && !joint; i++) {
-        const o = (laneOffset(T, dir, i) + laneOffset(T, dir, i + 1)) / 2;
+      for (let i = 0; i < n - 1; i++) {
+        const o = (laneOffset(T, dir, i) + laneOffset(T, dir, i + 1)) / 2 * (flip ? -1 : 1);
         lines.push({ pts: offsetPoly(core, o), c: 'rgba(255,255,255,0.8)', w: 0.14, dash: [3, 5] });
       }
     }
@@ -998,7 +999,7 @@ export class Renderer {
         const C = Renderer.withNormals(pts.map((p, i) => ({ x: p.x, y: p.y, w: e1.hw + (e2.hw - e1.hw) * sm(clamp(cum[i] / tot, 0, 1)), h: n.level })));
         return {
           body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, 0.5),
-          mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc, true) : this.transitionMarks(n, e1, e2, C),
+          mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc, true, e1.s.a === n.id) : this.transitionMarks(n, e1, e2, C),
         };
       };
       if (segs.length === 2) {

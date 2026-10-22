@@ -77,10 +77,22 @@ export class Terrain {
       }
       const keep = new Set(list.filter(l => b.islands && l.edge));
       for (const l of list.filter(l => !keep.has(l) && l.cells.length <= n * n * 0.05 && l.cells.length > 60).sort((p, q) => q.cells.length - p.cells.length).slice(0, lakes)) keep.add(l);
-      for (const l of list) if (!keep.has(l)) for (const k of l.cells) H[k] = b.water + 0.03 + (b.water - H[k]) * 0.2;
+      for (const l of list) if (!keep.has(l)) for (const k of l.cells) H[k] = b.water + 0.06 + (b.water - H[k]) * 0.2;   // 高過岸邊的沙地色帶（0～0.03），填平處是一般草地
       if (hasRiver) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; H[k] = river((i + 0.5) * this.cell, (j + 0.5) * this.cell, H[k]); }
     }
     for (let k = 0; k < n * n; k++) this.water[k] = this.h[k] < b.water ? 1 : 0;
+    if (v2) {
+      // 沙灘色帶只留在水邊（4 格 = 32 m 內）：填平的湖原本的岸邊、遠離水的低地都改成一般草地
+      const H = this.h, dist = new Uint8Array(n * n).fill(255), q = [];
+      for (let k = 0; k < n * n; k++) if (this.water[k]) { dist[k] = 0; q.push(k); }
+      for (let qi = 0; qi < q.length; qi++) {
+        const k = q[qi], i = k % n, d = dist[k] + 1;
+        if (d > 4) continue;
+        for (const o of [i > 0 ? k - 1 : -1, i < n - 1 ? k + 1 : -1, k - n, k + n]) if (o >= 0 && o < n * n && dist[o] > d) { dist[o] = d; q.push(o); }
+      }
+      const lo = b.water + 0.035;
+      for (let k = 0; k < n * n; k++) if (dist[k] > 4 && H[k] < lo) H[k] = lo + (H[k] - b.water) * 0.3;
+    }
     this.genTrees(seed);
     this.canvas = null;
   }

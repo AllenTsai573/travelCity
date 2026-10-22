@@ -231,7 +231,7 @@ export class Renderer {
       s = Math.max(0, tr.len + s);
     }
     const p = pointAt(tr.pts, tr.cum, s);
-    p.lat = vh.lat ? vh.lat * Math.exp(-2.2 * extra) : 0;
+    p.lat = vh.lat || 0;
     return p;
   }
 
@@ -809,7 +809,8 @@ export class Renderer {
   }
 
   // 道路標線（依道路類型沿中心線產生）
-  markingsFor(T, core) {
+  // joint：同種道路相接處（兩段之間的短弧）：不畫車道虛線，分隔島兩端用方頭，跟前後兩段接成一條連續的線
+  markingsFor(T, core, joint = false) {
     const lines = [];
     // 鐵路：兩條軌道，每條是一排枕木（寬虛線）加兩條鋼軌
     if (T.rail) {
@@ -829,24 +830,32 @@ export class Renderer {
     lines.push({ pts: offsetPoly(core, -(hw - 0.75)), c: 'rgba(255,255,255,0.75)', w: 0.15, dash: null, edge: true });
     if (T.bwd > 0) {
       if ((T.median || 0) > 1) {
-        lines.push({ pts: core, c: T.green ? '#6f9e4f' : '#9a9a92', w: T.median - 0.4, dash: null, median: true });
+        lines.push({ pts: core, c: T.green ? '#6f9e4f' : '#9a9a92', w: T.median - 0.4, dash: null, median: true, sq: joint });
         lines.push({ pts: offsetPoly(core, T.median / 2 - 0.2), c: '#e8c547', w: 0.15, dash: null });
         lines.push({ pts: offsetPoly(core, -(T.median / 2 - 0.2)), c: '#e8c547', w: 0.15, dash: null });
       } else if ((T.median || 0) > 0) {
         lines.push({ pts: offsetPoly(core, 0.18), c: '#e8c547', w: 0.15, dash: null });
         lines.push({ pts: offsetPoly(core, -0.18), c: '#e8c547', w: 0.15, dash: null });
-      } else if (T.rank !== 0) {
+      } else if (T.rank !== 0 && !joint) {
         lines.push({ pts: core, c: '#e8c547', w: 0.15, dash: [3, 3] });
       }
     }
     for (const dir of [1, -1]) {
       const n = dir > 0 ? T.fwd : T.bwd;
-      for (let i = 0; i < n - 1; i++) {
+      for (let i = 0; i < n - 1 && !joint; i++) {
         const o = (laneOffset(T, dir, i) + laneOffset(T, dir, i + 1)) / 2;
         lines.push({ pts: offsetPoly(core, o), c: 'rgba(255,255,255,0.8)', w: 0.14, dash: [3, 5] });
       }
     }
-    for (const m of lines) m.cum = polyCum(m.pts);
+    for (const m of lines) {
+      m.cum = polyCum(m.pts);
+      // 虛線依這一段的長度微調成整數個週期，兩端都停在間隔的正中間：前後兩段相接時虛線連得起來，不會在接縫出現半截線段
+      if (m.dash) {
+        const L = m.cum[m.cum.length - 1], P = m.dash[0] + m.dash[1], k = L / (Math.max(1, Math.round(L / P)) * P);
+        m.dash = m.dash.map(x => x * k);
+        m.off = m.dash[0] + m.dash[1] / 2;
+      }
+    }
     return lines;
   }
 
@@ -989,7 +998,7 @@ export class Renderer {
         const C = Renderer.withNormals(pts.map((p, i) => ({ x: p.x, y: p.y, w: e1.hw + (e2.hw - e1.hw) * sm(clamp(cum[i] / tot, 0, 1)), h: n.level })));
         return {
           body: Renderer.ribbonPoly(C, 0), curbs: Renderer.ribbonPoly(C, 0.5),
-          mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc) : this.transitionMarks(n, e1, e2, C),
+          mk: e1.s.type === e2.s.type && arc.length > 2 ? this.markingsFor(e1.s.T, arc, true) : this.transitionMarks(n, e1, e2, C),
         };
       };
       if (segs.length === 2) {
@@ -1310,12 +1319,14 @@ export class Renderer {
             if (m.poly) { ctx.fillStyle = m.c; this.fillPoly(m.poly); continue; }
             ctx.strokeStyle = m.c;
             ctx.lineWidth = m.w;
-            ctx.lineCap = m.median ? 'butt' : 'round';
+            ctx.lineCap = m.median ? (m.sq ? 'square' : 'butt') : 'round';
             ctx.setLineDash(m.dash || []);
+            ctx.lineDashOffset = m.off || 0;
             this.strokePoly(m.pts);
           }
         }
         ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
         ctx.lineCap = 'round';
         // 停止線（號誌 / 全向停車：實線）與讓路線（自動路權下需讓路的方向：虛線）
         ctx.strokeStyle = 'rgba(255,255,255,0.85)';
@@ -1399,9 +1410,9 @@ export class Renderer {
       const x = p.x - p.dy * lat, y = p.y + p.dx * lat;
       if (x < v.x0 || x > v.x1 || y < v.y0 || y > v.y1) continue;
       let dx = p.dx, dy = p.dy;
-      // 換車道時車頭稍微偏向；停在公車停靠區時車身擺正
-      if (lat && !vh.inBay) {
-        const k = -lat * 0.08;
+      // 換車道時車頭順著 S 形曲線的方向；停在公車停靠區時車身擺正
+      if (vh.latSlope && !vh.inBay) {
+        const k = vh.latSlope;
         dx = p.dx - p.dy * k; dy = p.dy + p.dx * k;
         const L = Math.hypot(dx, dy); dx /= L; dy /= L;
       }

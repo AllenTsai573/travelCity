@@ -15,7 +15,6 @@ const isBuild = id => BUILD.some(b => b.id === id);
 const TOOLS = [
   { id: 'select', icon: '🖱️', name: '選取', key: 'V' },
   { id: 'build', icon: '🛣️', name: '道路建設', key: 'R' },
-  { id: 'junction', icon: '🚦', name: '路口', key: 'J' },
   { id: 'zone', icon: '🏘️', name: '分區', key: 'Z' },
   { id: 'bulldoze', icon: '🚧', name: '拆除', key: 'B' },
 ];
@@ -145,12 +144,10 @@ export class UI {
       html += groups.map(gr => `<div class="grp ix"><span class="lbl">${gr}</span>` + TEMPLATE_ORDER.filter(k => TEMPLATES[k].group === gr).map(k => `<button data-sub="ix" data-v="${k}" class="th ix ${t.ixType === k ? 'on' : ''}" title="${TEMPLATES[k].desc}">${interchangeThumb(k)}<b>${TEMPLATES[k].name}</b></button>`).join('') + `</div>`).join('');
       html += `<div class="grp"><button data-sub="rot" data-v="-1" title="Q">↺</button><button data-sub="rot" data-v="1" title="E">↻</button></div>`;
       html += `<div class="hint">${TEMPLATES[t.ixType].desc}。移到兩條不同高度道路的交叉處可直接套用；空地上則連主線一起建造。${TEMPLATES[t.ixType].freeOnly || TEMPLATES[t.ixType].tee ? '（此型式只能建在空地）' : ''}</div>`;
-    } else if (t.tool === 'junction') {
-      html += `<div class="hint">點擊路口：切換紅綠燈 / 全向停車 / 讓路標誌，調整時相，並可逐條編輯車道連接。</div>`;
     } else if (t.tool === 'bulldoze') {
       html += `<div class="hint">點擊道路或建築以拆除。</div>`;
     } else {
-      html += `<div class="hint">點擊車輛、建築、路段或路口查看資訊 · 拖曳平移 · 滾輪縮放 · WASD 移動</div>`;
+      html += `<div class="hint">點擊車輛、建築、路段或路口查看資訊（點路口可切換號誌 / 全向停車 / 讓路、調整時相、拖曳編輯車道連接） · 拖曳平移 · 滾輪縮放 · WASD 移動</div>`;
     }
     this.subbar.innerHTML = html;
   }

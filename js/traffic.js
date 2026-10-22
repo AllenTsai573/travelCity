@@ -871,7 +871,8 @@ export class Traffic {
       v.s = s2;
       v.track = tl;
       this.insertSorted(tl, v);
-      v.lat = -d * LANE_W;
+      // 換到旁邊車道：畫面上從原車道的位置沿 S 形曲線開過去（v.lat0 為起始橫向偏移，v.lcP 為進度）
+      v.lat = (v.lat || 0) - d * LANE_W; v.lat0 = v.lat; v.lcP = 0;
       v.nextConn = null;
       v.lcCool = mand ? 1.2 : 4;
       if (follow && follow.yieldTo === v) follow.yieldTo = null;
@@ -959,7 +960,16 @@ export class Traffic {
       v.v = Math.max(0, v.v + v.acc * dt);
       v.s += v.v * dt;
       v.braking = v.acc < -1.2;
-      if (v.lat) { v.lat *= Math.exp(-dt * 2.2); if (Math.abs(v.lat) < 0.02) v.lat = 0; }
+      // 換車道的橫向移動跟著往前開的距離走（約 2.2 秒的行駛距離、至少 12 m），停著時不會橫移；S 形曲線，車頭沿曲線方向
+      if (v.lat && !v.inBay) {
+        if (v.lat0 === undefined || v.lat0 === 0) { v.lat0 = v.lat; v.lcP = 0; }
+        const D = clamp(v.v * 2.2, 12, 40);
+        v.lcP = Math.min(1, (v.lcP || 0) + v.v * dt / D);
+        const p = v.lcP;
+        v.lat = v.lat0 * (1 - p * p * (3 - 2 * p));
+        v.latSlope = -v.lat0 * 6 * p * (1 - p) / D;
+        if (p >= 1) { v.lat = 0; v.lat0 = 0; v.latSlope = 0; }
+      }
       v.lcCool -= dt;
       if (v.yieldTo) v.yieldT -= dt;
       v.age += dt;
@@ -988,7 +998,7 @@ export class Traffic {
             for (let k = v.idx + 1; k < tr.vehs.length; k++) if (!tr.vehs[k].inBay) { f = tr.vehs[k]; break; }
             const gap = f ? v.s - v.len - f.s : Infinity;
             if (f && (gap < 8 || (f.v > 2 && gap / f.v < 2.5))) { v.dwell = 0.2; continue; }
-            v.inBay = false;
+            v.inBay = false; v.lat0 = v.lat; v.lcP = 0;
           }
           this.nextBusStop(v);
         }

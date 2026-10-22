@@ -5,7 +5,7 @@
 // - 公車：從總站的公車停車格開出，依序繞行各站，每站停靠時上下客；路線取消時開回總站停好
 // - 乘客：家裡車子都開走（或選擇搭公車）的居民，若起點與目的地附近（WALK 公尺內）都有站牌、搭同一條路線或在轉乘站換一次車到得了，
 //   就走到站牌等車；否則走路
-import { pointAt, clamp } from './util.js';
+import { pointAt, clamp, closestOnPoly } from './util.js';
 import { routeFromPoint, findRoute } from './routing.js';
 import { CLOCK } from './config.js';
 
@@ -150,26 +150,42 @@ export class Transit {
     let li = this.planRail(old, 0);
     if (depots.length) {
       const cands = [];
+      // 可以設站牌的路段：一般地面道路，扣掉兩端路口後至少 34 m；站牌離路口 10～30 m（路段越長越遠，公車停靠時不會擋到路口）
+      const usable = s => s.len - s.ra - s.rb, gap = s => clamp((usable(s) - 14) / 2, 10, 30);
+      const okSeg = s => s && !s.T.internal && s.T.access && s.drawLevel === 0 && usable(s) >= 34;
+      const inSeg = (s, u) => clamp(u, s.ra + gap(s), s.len - s.rb - gap(s));
+      // 臨路路段太短（棋盤小街廓、場內道路）：改用 120 m 內最近、夠長的道路
+      const segFor = (b, ref) => {
+        let s = net.segs.get(ref.seg);
+        if (okSeg(s)) return { s, u: ref.u };
+        s = net.segs.get(b.seg);
+        if (okSeg(s)) return { s, u: b.u };
+        let best = null;
+        for (const s2 of net.segs.values()) {
+          if (!okSeg(s2) || s2.bbox.x0 > b.x + 120 || s2.bbox.x1 < b.x - 120 || s2.bbox.y0 > b.y + 120 || s2.bbox.y1 < b.y - 120) continue;
+          const c = closestOnPoly(s2.pts, s2.cum, b);
+          if (c.d < 120 && (!best || c.d < best.d)) best = { s: s2, u: c.s, d: c.d };
+        }
+        return best;
+      };
       // 玩家手動放的站牌：排在最前面（權重最大），一定會成為站牌
       for (const m of C.busStops) {
         const sn = net.segNear(m.x, m.y, 12, 0);
         if (!sn || !sn.seg.T.access || sn.seg.T.internal) continue;
-        cands.push({ seg: sn.seg.id, u: clamp(sn.u, Math.min(sn.seg.ra + 30, sn.seg.len / 2), Math.max(sn.seg.len - sn.seg.rb - 30, sn.seg.len / 2)), w: 1e9, manual: true });
+        cands.push({ seg: sn.seg.id, u: clamp(sn.u, Math.min(sn.seg.ra + gap(sn.seg), sn.seg.len / 2), Math.max(sn.seg.len - sn.seg.rb - gap(sn.seg), sn.seg.len / 2)), w: 1e9, manual: true });
       }
       for (const b of C.buildings) {
         if (b.abandoned || !(b.zone === 'R' || b.zone === 'C' || b.zone === 'I')) continue;
-        const ref = b.front || { seg: b.seg, u: b.u }, s = net.segs.get(ref.seg);
-        if (!s || s.T.internal || !s.T.access || s.drawLevel !== 0) continue;
-        // 站牌離路口至少 30 m（公車停靠時不會擋到路口）
-        if (s.len - s.ra - s.rb < 70 || C.busStops.some(m => Math.hypot(m.x - b.x, m.y - b.y) < STOP_GAP * 0.6)) continue;
-        cands.push({ seg: s.id, u: clamp(ref.u, s.ra + 30, s.len - s.rb - 30), w: C.cap(b) * (b.zone === 'R' ? 1 : 0.8) });
+        const f = segFor(b, b.front || { seg: b.seg, u: b.u });
+        if (!f || C.busStops.some(m => Math.hypot(m.x - b.x, m.y - b.y) < STOP_GAP * 0.6)) continue;
+        cands.push({ seg: f.s.id, u: inSeg(f.s, f.u), w: C.cap(b) * (b.zone === 'R' ? 1 : 0.8) });
       }
       cands.sort((a, b) => b.w - a.w);
       for (const c of cands) {
         const s = net.segs.get(c.seg), p = pointAt(s.pts, s.cum, c.u);
         if (!depots.some(d => Math.hypot(d.x - p.x, d.y - p.y) < RANGE)) continue;
         // 附近原本就有站牌（同方向）：沿用原來的站牌，站位不動
-        const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t) && t.type !== 'rail' && t.u >= net.segs.get(t.seg).ra + 30 && t.u <= net.segs.get(t.seg).len - net.segs.get(t.seg).rb - 30);
+        const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t) && t.type !== 'rail' && okSeg(net.segs.get(t.seg)) && Math.abs(t.u - inSeg(net.segs.get(t.seg), t.u)) < 0.01);
         const q = o ? { x: o.x, y: o.y } : p;
         if (this.stops.some(t => t.type !== 'rail' && Math.hypot(t.x - q.x, t.y - q.y) < STOP_GAP)) continue;
         if (o) { o.lines = []; o.manual = !!c.manual; this.stops.push(o); }
@@ -184,13 +200,14 @@ export class Transit {
         // 轉乘站：離總站最近的站，每條路線都從這裡出發；附設公車轉運站的鐵路總站就是車站本身（公車與列車在這裡轉乘）
         mine.sort((a, b) => Math.hypot(a.x - d.x, a.y - d.y) - Math.hypot(b.x - d.x, b.y - d.y));
         const hub = d.zt === 'RT' ? this.stop('r' + d.id) : mine.shift();
-        if (!hub || mine.length < 2) continue;
-        const nLines = clamp(Math.ceil(mine.length / (MAX_STOPS - 1)), 1, Math.min(4, Math.floor(mine.length / 2)));
+        // 城市還小的時候：轉乘站加一個站就能開一條來回的路線
+        if (!hub || mine.length < 1) continue;
+        const nLines = clamp(Math.ceil(mine.length / (MAX_STOPS - 1)), 1, Math.max(1, Math.min(4, Math.floor(mine.length / 2))));
         mine.sort((a, b) => Math.atan2(a.y - d.y, a.x - d.x) - Math.atan2(b.y - d.y, b.x - d.x));
         const per = Math.ceil(mine.length / nLines);
         for (let k = 0; k < nLines; k++) {
           const group = mine.slice(k * per, (k + 1) * per).slice(0, MAX_STOPS - 1);
-          if (group.length < 2) continue;
+          if (!group.length) continue;
           const order = [hub], left = [...group];
           let cur = hub;
           while (left.length) { left.sort((a, b) => Math.hypot(a.x - cur.x, a.y - cur.y) - Math.hypot(b.x - cur.x, b.y - cur.y)); cur = left.shift(); order.push(cur); }

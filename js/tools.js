@@ -45,8 +45,7 @@ export class Tools {
     this.plan = null;
     this.hover = null;
     this.dirty = true;
-    if (t !== 'select' && t !== 'junction') this.g.ui.select(null);
-    if (t === 'junction' && this.g.ui.selection?.type !== 'node') this.g.ui.select(null);
+    if (t !== 'select') this.g.ui.select(null);
     this.g.ui.refreshToolbar();
   }
 
@@ -78,8 +77,8 @@ export class Tools {
       this.down = { btn: e.button, sx: e.offsetX, sy: e.offsetY, cx: this.cam.x, cy: this.cam.y, rot: this.cam.rot || 0, moved: false, touch: e.pointerType === 'touch' };
       if (e.button === 1) e.preventDefault();
       if (e.button === 0 && this.tool === 'zone') this.zoneStart();
-      // 路口車道連接：從進入車道（橘點）按住拖曳到離開車道（綠點）
-      if (e.button === 0 && this.tool === 'junction') {
+      // 路口車道連接（選取工具點選路口後）：從進入車道（橘點）按住拖曳到離開車道（綠點）
+      if (e.button === 0 && this.tool === 'select') {
         const h = this.jLaneHit();
         if (h && h.kind === 'in') { this.jDrag = { node: h.node, from: h.lane }; this.g.ui.jSelLane = h.lane; }
       }
@@ -172,7 +171,7 @@ export class Tools {
     const k = e.key.toLowerCase();
     this.keys.add(k);
     this.mouse.shift = e.shiftKey; this.mouse.alt = e.altKey; this.dirty = true;
-    const map = { v: 'select', r: 'road', o: 'roundabout', u: 'upgrade', j: 'junction', z: 'zone', b: 'bulldoze', i: 'interchange' };
+    const map = { v: 'select', r: 'road', o: 'roundabout', u: 'upgrade', j: 'select', z: 'zone', b: 'bulldoze', i: 'interchange' };
     if (this.tool === 'interchange' && (k === 'q' || k === 'e')) { this.ixAngle += (k === 'e' ? 1 : -1) * Math.PI / 12; this.dirty = true; return; }
     // 其他工具：Q / E 把視角旋轉 90°
     if ((k === 'q' || k === 'e') && !e.ctrlKey && !e.metaKey) { this.g.renderer.rotate((k === 'e' ? 1 : -1) * Math.PI / 2); return; }
@@ -370,8 +369,8 @@ export class Tools {
       case 'zone': {
         if (this.zStroke) {
           const st = this.zStroke;
-          if (st.rect) { this.setTip(`取消分區：${st.rect.cols}×${st.rect.rows} 格`); break; }
-          const ok = (st.plan || []).filter(p => p.ok), cols = Math.abs(st.i1 - st.i0) + 1, Z = { name: ZONE_TYPES[this.zone].name, max: this.g.city.maxCells(this.zone, st.seg), zmax: this.g.city.maxCells(this.zone) };
+          if (st.rect) { this.setTip(`取消分區：${st.cols}×${st.rect.rows} 格`); break; }
+          const ok = (st.plan || []).filter(p => p.ok), cols = st.cols || 1, Z = { name: ZONE_TYPES[this.zone].name, max: this.g.city.maxCells(this.zone, st.seg), zmax: this.g.city.maxCells(this.zone) };
           // 說明是什麼限制了大小：分區最深格數、後方的道路 / 分區 / 建築 / 水域、這段路到路口為止
           const why = [];
           // 受道路種類限制（小路 6、市區道路 12、大道 18）或依人口解鎖的上限
@@ -379,7 +378,7 @@ export class Tools {
           else if (st.rows > Z.max) { const nx = zoneNext(this.zone, this.g.city.unlockPop()); why.push(`${Z.name}目前最深 ${Z.max} 格` + (nx ? `，人口 ${nx[0]} 時放大到 ${nx[1]} 格` : '')); }
           const want = Math.min(Math.max(2, st.rows), Z.max), short = ok.find(p => p.rows < want);
           if (short) why.push('往內' + (this.g.city.canPlaceLot(st.seg, short.u, short.side, short.cols, short.rows + 1) || '受限'));
-          if (st.past) why.push('這段路到路口為止，跨過路口要另外畫');
+          if (st.past) why.push('道路到這裡為止（分區只會沿直行方向跨過路口）');
           const railWhy = (st.plan || []).find(p => !p.ok && p.reason && p.reason.includes('鐵路'));
           if (railWhy) why.push(railWhy.reason);
           // 公車總站：說明會有幾個公車停車位（＝最多能派出幾台公車）
@@ -399,7 +398,8 @@ export class Tools {
         this.setTip(a ? `按住沿道路拖曳劃設${name}（往外拖可加深；免費）` : `移到道路旁劃設${name}`);
         break;
       }
-      case 'junction': {
+      case 'select': {
+        // 已選取路口：車道端點可以拖曳編輯車道連接
         const h = this.jLaneHit();
         this.jHover = h;
         if (this.jDrag) {
@@ -407,15 +407,9 @@ export class Tools {
           else this.setTip('拖到綠色的離開車道上放開');
           break;
         }
-        if (h) { this.hover = null; this.setTip(h.kind === 'in' ? '按住拖曳到綠點：新增連接（已存在則移除）' : '離開車道：從橘點拖到這裡'); break; }
-        const n = this.nodeAt(m.x, m.y);
-        if (n) { this.hover = { type: 'node', obj: n }; if (g.ui.selection?.obj !== n) this.setTip('點擊編輯路口'); }
-        else if (!g.ui.selection) this.setTip('點擊路口以編輯號誌、路權與車道連接');
-        break;
-      }
-      case 'select': {
-        const h = this.pick(m.x, m.y);
-        this.hover = h;
+        if (h) { this.setTip(h.kind === 'in' ? '按住拖曳到綠點：新增連接（已存在則移除）' : '離開車道：從橘點拖到這裡'); break; }
+        this.hover = this.pick(m.x, m.y);
+        if (this.hover && this.hover.type === 'node' && g.ui.selection?.obj !== this.hover.obj) this.setTip('點擊編輯路口：號誌、路權與車道連接');
         break;
       }
       case 'interchange': {
@@ -518,18 +512,63 @@ export class Tools {
     }
     const a = this.zoneAnchor(this.mouse.x, this.mouse.y);
     if (!a || a.nCells < 1) return;
-    this.zStroke = { seg: a.seg, side: a.side, i0: a.i, i1: a.i, rows: a.depth, moved: false, g0: a.g0 };
+    const ch = this.zoneChain(a.seg);
+    this.zStroke = { seg: a.seg, side: a.side, i0: a.i, i1: a.i, rows: a.depth, moved: false, g0: a.g0, chain: ch.chain, k0: ch.k0, k1: ch.k0 };
     this.zoneMove();
+  }
+  // 分區沿路拖曳可以跨過路口：從起點道路往兩頭延伸，每個路口接上方向最接近直行（夾角 25° 內）的地面道路。
+  // 回傳依序的路段 { s, rev }（rev：路段方向與延伸方向相反）與起點道路的位置 k0
+  zoneChain(seg) {
+    const net = this.net, park = this.g.city.parkRoadSet(), seen = new Set([seg.id]);
+    const ok = s => s.T.access && !s.T.rail && s.drawLevel === 0 && !park.has(s.id) && net.nodes.get(s.a).level === 0 && net.nodes.get(s.b).level === 0;
+    // 沿延伸方向的行進方向：在路段的起點（at0）或終點
+    const dir = (it, atEnd) => { const atB = it.rev ? !atEnd : atEnd, p = pointAt(it.s.pts, it.s.cum, atB ? it.s.len : 0), k = it.rev ? -1 : 1; return { x: p.dx * k, y: p.dy * k }; };
+    const next = it => {
+      const N = it.rev ? it.s.a : it.s.b, d0 = dir(it, true);
+      let best = null;
+      for (const id of net.nodes.get(N).segs) {
+        const t = net.segs.get(id);
+        if (!t || seen.has(id) || !ok(t)) continue;
+        const cand = { s: t, rev: t.b === N && t.a !== N }, d1 = dir(cand, false), dot = d0.x * d1.x + d0.y * d1.y;
+        if (dot > 0.9 && (!best || dot > best.dot)) best = { ...cand, dot };
+      }
+      if (best) seen.add(best.s.id);
+      return best && { s: best.s, rev: best.rev };
+    };
+    const chain = [{ s: seg, rev: false }];
+    let len = 0;
+    for (let it = chain[0]; len < 900 && (it = next(it));) { chain.push(it); len += it.s.len; }
+    len = 0;
+    let k0 = 0;
+    for (let it = { s: seg, rev: true }; len < 900 && (it = next(it));) { chain.unshift({ s: it.s, rev: !it.rev }); k0++; len += it.s.len; }
+    return { chain, k0 };
   }
   zoneMove() {
     const st = this.zStroke, m = this.mouse, city = this.g.city;
-    if (!this.net.segs.has(st.seg.id)) { this.zStroke = null; return; }
-    const c = this.zoneCell(st.seg, m.x, m.y, st.side);
-    if (c.i !== st.i0 || c.depth !== st.rows) st.moved = true;
-    st.i1 = c.i; st.rows = c.depth; st.past = c.past;
-    const s = st.seg, a = st.g0 + Math.min(st.i0, st.i1) * CELL, b = st.g0 + (Math.max(st.i0, st.i1) + 1) * CELL;
-    if (this.zone === 'X') st.rect = city.lotGeom(s, (a + b) / 2, st.side, Math.round((b - a) / CELL), Math.max(1, st.rows));
-    else st.plan = city.planStroke(this.zone, s, st.side, a, b, st.rows);
+    if (st.chain.some(it => !this.net.segs.has(it.s.id))) { this.zStroke = null; return; }
+    // 游標最接近延伸道路上的哪一段
+    let k = st.k0, bd = Infinity;
+    st.chain.forEach((it, j) => { const d = closestOnPoly(it.s.pts, it.s.cum, m).d; if (d < bd - 0.5) { bd = d; k = j; } });
+    const sideOf = it => (it.rev ? -st.side : st.side);
+    const c = this.zoneCell(st.chain[k].s, m.x, m.y, sideOf(st.chain[k]));
+    if (c.i !== st.i0 || k !== st.k0 || c.depth !== st.rows) st.moved = true;
+    st.k1 = k; st.i1 = c.i; st.rows = c.depth; st.past = c.past && (k === 0 || k === st.chain.length - 1);
+    // 起點到游標之間的每一段路各自劃一段（沿延伸方向排序）
+    const ord = (kk, i) => kk * 1e5 + (st.chain[kk].rev ? -i : i);
+    const [lo, hi] = ord(st.k0, st.i0) <= ord(k, c.i) ? [[st.k0, st.i0], [k, c.i]] : [[k, c.i], [st.k0, st.i0]];
+    st.plan = []; st.rects = []; st.cols = 0;
+    for (let j = lo[0]; j <= hi[0]; j++) {
+      const it = st.chain[j], s = it.s, g0 = city.gridStart(s), n = Math.floor((s.len - s.rb - g0) / CELL + 1e-6);
+      if (n < 1) continue;
+      // 延伸方向上的頭尾格（路段反向時格子編號也反過來）
+      const head = it.rev ? n - 1 : 0, tail = it.rev ? 0 : n - 1;
+      const f = j === lo[0] ? lo[1] : head, t = j === hi[0] ? hi[1] : tail;
+      const i0 = Math.min(f, t), i1 = Math.max(f, t), a = g0 + i0 * CELL, b = g0 + (i1 + 1) * CELL;
+      st.cols += i1 - i0 + 1;
+      if (this.zone === 'X') st.rects.push(city.lotGeom(s, (a + b) / 2, sideOf(it), i1 - i0 + 1, Math.max(1, st.rows)));
+      else st.plan.push(...city.planStroke(this.zone, s, sideOf(it), a, b, st.rows));
+    }
+    st.rect = st.rects.length ? st.rects[0] : null;
     this.dirty = true;
   }
   zoneCommit(dragged) {
@@ -544,8 +583,7 @@ export class Tools {
       st.plan = city.planStroke(this.zone, st.seg, st.side, st.g0 + i0 * CELL, st.g0 + (i0 + cols) * CELL, cols);
     }
     if (this.zone === 'X') {
-      const r = st.rect;
-      const hit = r ? city.lots.filter(l => Math.hypot(l.x - r.x, l.y - r.y) < l.rad + r.rad && convexOverlapSafe(l.corners, r.corners)) : [];
+      const hit = city.lots.filter(l => (st.rects || []).some(r => Math.hypot(l.x - r.x, l.y - r.y) < l.rad + r.rad && convexOverlapSafe(l.corners, r.corners)));
       for (const l of hit) city.removeLot(l);
       if (hit.length) g.notify(`已取消 ${hit.length} 塊分區`, 'minor');
       return;
@@ -561,10 +599,7 @@ export class Tools {
     const g = this.g, net = this.net, m = this.mouse;
     this.refreshHover();
     switch (this.tool) {
-      case 'select': {
-        g.ui.select(this.hover);
-        break;
-      }
+      case 'select': this.junctionClick(); break;
       case 'road': {
         const sn = this.snapRes || this.snap(m.x, m.y);
         if (!this.pts.length) {
@@ -616,7 +651,6 @@ export class Tools {
         else g.notify(`無法建造：${r.reason}`, 'warn');
         break;
       }
-      case 'junction': this.junctionClick(); break;
     }
     this.dirty = true;
   }
@@ -653,8 +687,7 @@ export class Tools {
         return;
       }
     }
-    const n = this.nodeAt(m.x, m.y);
-    ui.select(n ? { type: 'node', obj: n } : null);
+    ui.select(this.hover);
   }
 
   toggleConn(node, from, to) {
@@ -743,7 +776,7 @@ export class Tools {
         if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = Math.max(0.4, 2 / z); ctx.stroke(); }
       };
       const st = this.zStroke;
-      if (st && st.rect) quad(st.rect.corners, 'rgba(255,70,70,0.35)', '#ff5a5a');
+      if (st && st.rect) for (const rc of st.rects) quad(rc.corners, 'rgba(255,70,70,0.35)', '#ff5a5a');
       else if (st && st.plan) {
         const col = ZONES[ZONE_TYPES[this.zone].zone].color[1];
         for (const p of st.plan) {
@@ -766,19 +799,8 @@ export class Tools {
       const f = this.ix.fr;
       ctx.fillStyle = f.snap ? '#ffd25e' : '#5ac8ff';
       ctx.beginPath(); ctx.arc(f.x, f.y, Math.max(3, 8 / z), 0, Math.PI * 2); ctx.fill();
-    } else if (this.tool === 'junction') {
-      ctx.strokeStyle = 'rgba(255,210,94,0.6)';
-      ctx.lineWidth = 1.5 / z;
-      const v = r.view(20);
-      for (const n of net.nodes.values()) {
-        if (n.segs.length < 2 || n.x < v.x0 || n.x > v.x1 || n.y < v.y0 || n.y > v.y1) continue;
-        if (n.segs.length === 2 && n.radius < 1) continue;
-        ctx.beginPath(); ctx.arc(n.x, n.y, n.radius + 3, 0, Math.PI * 2); ctx.stroke();
-      }
-      if (this.hover) {
-        ctx.strokeStyle = '#ffd25e'; ctx.lineWidth = 3 / z;
-        ctx.beginPath(); ctx.arc(this.hover.obj.x, this.hover.obj.y, this.hover.obj.radius + 4, 0, Math.PI * 2); ctx.stroke();
-      }
+    }
+    if (this.tool === 'select' && this.g.ui.selection?.type === 'node') {
       // 拖曳中的連接線
       const h = this.jHover;
       if (h) {

@@ -19,7 +19,8 @@ export function driveway(zone, kind, geo) {
   // 住宅區的巷道（盡頭迴車，不打通）：低密度兩側是宅地；中 / 高密度兩側是停車格，後面才是建物
   // 公車總站：中央場內車道（兩側是公車停車格）
   // 公車總站、計程車行的中央場內車道；鐵路車站、貨運站直接臨路進出
-  if (zone === 'T') return (geo.zt === 'T' || geo.zt === 'TX') && geo.cols >= 6 ? { end: d - 6 } : null;
+  // 公車總站要 7 格寬，中央車道兩側才放得下 13.5 m 深的公車停車格
+  if (zone === 'T') return (geo.zt === 'T' ? geo.cols >= 7 : geo.zt === 'TX' && geo.cols >= 6) ? { end: d - 6 } : null;
   // 高密度住宅的地下 / 立體停車場、立體停車場的購物中心：停車場前的單向車道（右進右出）
   const gd = garageDrive(geo.zt, kind, geo.cols, geo.rows);
   if (gd) return { end: gd.cv, lot: { aisles: [gd.ua, gd.ub], oneway: true, front: gd.cv }, garage: true };

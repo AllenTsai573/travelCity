@@ -324,7 +324,8 @@ export function lotArt(b) {
     // 太窄的總站：臨路幾個公車停車格（直接從道路進出）＋後方辦公室
     base = '#c4c2bb';
     const spine = w / 2, real = !!b.roads, bus = { c: '#d23c2c', h: 1, truck: true, bus: true };
-    if (b.cols >= 6 && b.rows >= 5) {
+    // 7 格寬以上：中央車道兩側都放得下公車停車格；更窄的用臨路一排公車停車格（6 格寬時兩側都放不下，會一台公車都沒有）
+    if (b.cols >= 7 && b.rows >= 5) {
       if (!real) road([{ u: spine, v: 0 }, { u: spine, v: d - 6 }], 7);
       const yardEnd = Math.max(16, d * 0.64);
       for (const sd of [-1, 1]) {
@@ -449,24 +450,28 @@ export function lotArt(b) {
       hedge(w * 0.36, 1, w * 0.64, 1.7);
       for (let i = 0; i < 6; i++) tree(4 + r() * (w - 8), d * 0.66 + r() * (d * 0.32), 0.9);
     } else if (k === 'office') {
-      // 辦公大樓：臨路停車格、側邊地下停車場入口；石材基座＋玻璃帷幕主樓，前廣場
-      const tw = (w - 10) * 0.8, td = (d - 12) * 0.75, th = 16 + lv * 9 + Math.min(18, Math.min(w, d) * 0.25) + r() * 5;
-      garageRamp(Math.round(b.cols * b.rows * 0.5));
+      // 辦公大樓：臨路停車格、側邊地下停車場入口；石材基座＋玻璃帷幕主樓（最寬約 42 m，大地塊其餘是廣場與植栽）
+      // 基座與塔樓以同一個底座排序（tier），基座先畫，不會蓋住塔樓
+      const tw = Math.min(42, (w - 10) * 0.8), td = Math.min(42, (d - 12) * 0.75), th = 16 + lv * 9 + Math.min(18, Math.min(w, d) * 0.25) + r() * 5;
+      garageRamp(Math.round(Math.min(b.cols * b.rows, 200) * 0.5));
       loadingBay(0.6);
       frontBays(4.4, w - 6.5);
       rect(4.4, 6.4, w - 7, 8.4, '#d9d6cf');
-      rect(w / 2 - tw / 2 - 2, d / 2 - td / 2 + 1, w / 2 + tw / 2 + 2, d / 2 + td / 2 + 5, pick(r, ['#b9b4aa', '#c4bfb3', '#a9a59c']), 6, { wall: pick(r, ['#d8d2c4', '#cfc6b4', '#e0dbd0']), win: true });
+      const cu = w / 2, cv = Math.min(d / 2 + 3, 12 + td / 2 + 4), big = Math.min(b.cols, b.rows) >= 7;
+      const base = [cu - tw / 2 - 2, cv - td / 2 - 2, cu + tw / 2 + 2, cv + td / 2 + 2];
+      rect(...base, pick(r, ['#b9b4aa', '#c4bfb3', '#a9a59c']), 6, { wall: pick(r, ['#d8d2c4', '#cfc6b4', '#e0dbd0']), win: true, tier: 0, base });
       const glassC = pick(r, ['#7fa7c9', '#8fb7d6', '#9bb0c4', '#6f93b3', '#8aa6a0', '#a2a9b8', '#6d8fa8', '#93a7b5']);
-      const cu = w / 2, cv = d / 2 + 3, big = Math.min(b.cols, b.rows) >= 7;
-      if (!big) rect(cu - tw / 2, cv - td / 2, cu + tw / 2, cv + td / 2, glassC, th, { glass: true, mull: true, units: 2 });
+      if (!big) rect(cu - tw / 2, cv - td / 2, cu + tw / 2, cv + td / 2, glassC, th, { glass: true, mull: true, units: 2, tier: 1, base });
       else {
         // 摩天大樓：三段退縮的玻璃帷幕塔樓（直向窗框），頂部有天線；地塊越大、等級越高越高（約 80～190 m）
-        const H = 55 + lv * 30 + Math.min(45, b.cols * b.rows / 6) + r() * 15, base = [cu - tw / 2, cv - td / 2, cu + tw / 2, cv + td / 2];
+        const H = 55 + lv * 30 + Math.min(45, b.cols * b.rows / 6) + r() * 15;
         [[1, 0.6], [0.78, 0.85], [0.56, 1]].forEach(([sc, hf], k2) => rect(cu - tw / 2 * sc, cv - td / 2 * sc, cu + tw / 2 * sc, cv + td / 2 * sc, k2 % 2 ? glassC : shadeHex(glassC, 0.94), H * hf,
-          { glass: true, mull: true, units: k2 === 2 ? 3 : 0, tier: k2, base }));
-        items.push({ t: 'circle', u: cu, v: cv, r: 0.45, c: '#c9ccd0', h: H * 1.14, tier: 3, base });
+          { glass: true, mull: true, units: k2 === 2 ? 3 : 0, tier: k2 + 1, base }));
+        items.push({ t: 'circle', u: cu, v: cv, r: 0.45, c: '#c9ccd0', h: H * 1.14, tier: 4, base });
       }
-      tree(w - 3, d - 3, 0.8);
+      // 塔樓以外的空地：廣場與一排排行道樹
+      const tg = Math.max(9, Math.max(w, d) / 9);
+      for (let v = 12; v < d - 3; v += tg) for (let u = 4; u < w - 3; u += tg) if (u < base[0] - 3 || u > base[2] + 3 || v < base[1] - 3 || v > base[3] + 3) tree(u, v, 0.8);
     } else if (k === 'gas') {
       // 加油站：前方頂棚與加油島、後方便利商店，兩個出入口
       base = '#b9b6ae';

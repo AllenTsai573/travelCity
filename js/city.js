@@ -7,6 +7,7 @@ import { lotArt, lotAisles, lotParkArea, oneWayLot, garageDrive } from './lotart
 const ema = (a, x, k) => a + (x - a) * k;
 // 有公車可搭時（起訖附近都有同一條路線的站牌），就算有車也改搭公車的居民比例
 const BUS_SHARE = 0.5, TAXI_SHARE = 0.06;
+const GROWTH = { R: 0.25, C: 0.15, I: 0.12 };
 
 // 需要場內道路的建築：工業園區（主幹道＋大園區的橫向道路）與附停車場的商業（從臨路開進停車場的車道）
 // 回傳車道終點與橫向道路離路邊的距離（公尺），與 lotart.js 的配置一致
@@ -210,9 +211,15 @@ export class City {
     if (!seg) { this.removeLot(l); return null; }
     this.removeLot(l);
     const geo = this.lotGeom(seg, l.u, l.side, l.cols, l.rows);
-    const kind = this.pickKind(l.zt, l.cols, l.rows);
-    const plan = driveway(l.zone, kind, Object.assign({ zt: l.zt }, geo));
-    const roads = plan ? this.buildParkRoads(geo, seg, l.u, plan) : null;
+    let kind = this.pickKind(l.zt, l.cols, l.rows);
+    let plan = driveway(l.zone, kind, Object.assign({ zt: l.zt }, geo));
+    let roads = plan ? this.buildParkRoads(geo, seg, l.u, plan) : null;
+    // 大型停車場的場內道路開不出來（例如太靠近路口）：改蓋不需要停車場車道的辦公大樓，免得車子穿過一排排車位開到路上
+    if (plan && !roads && l.zone === 'C' && plan.lot) {
+      kind = 'office';
+      plan = driveway(l.zone, kind, Object.assign({ zt: l.zt }, geo));
+      roads = plan ? this.buildParkRoads(geo, seg, l.u, plan) : null;
+    }
     const b = this.addBuilding(l.zt, seg, l.u, l.side, l.cols, l.rows, level, kind, geo);
     if (roads) {
       // 臨路的位置可能因開路而被切開，改記最近的臨路路段
@@ -1032,9 +1039,10 @@ export class City {
     const failRate = st.lastFails / Math.max(10, st.lastTrips + st.lastFails);
     const jam = (tm.moving > 30 ? clamp((0.5 - tm.avgSpeedRatio) * 2.5, 0, 1) : 0) + clamp((failRate - 0.08) * 4, 0, 1);
     this.jam = clamp(jam, 0, 1.5);
-    this.demand.R = clamp(((jc + ji) - pop * 0.5 + 30) / (pop * 0.2 + 30) + hb - this.jam, -1, 1);
-    this.demand.C = clamp((pop * 0.18 - jc + 10) / (pop * 0.1 + 20) - this.jam * 0.6, -1, 1);
-    this.demand.I = clamp((pop * 0.3 - ji + 15) / (pop * 0.1 + 20) + (this.liveOutside().length ? 0 : -0.5) - this.jam * 0.6, -1, 1);
+    // 成長壓力（GROWTH）：不論住 / 商 / 工比例，都持續有人想搬進來、開店、設廠；交通狀況差時會被抵銷
+    this.demand.R = clamp(((jc + ji) - pop * 0.5 + 30) / (pop * 0.2 + 30) + hb + GROWTH.R - this.jam, -1, 1);
+    this.demand.C = clamp((pop * 0.18 - jc + 10) / (pop * 0.1 + 20) + GROWTH.C - this.jam * 0.6, -1, 1);
+    this.demand.I = clamp((pop * 0.3 - ji + 15) / (pop * 0.1 + 20) + GROWTH.I + (this.liveOutside().length ? 0 : -0.5) - this.jam * 0.6, -1, 1);
   }
 
   // ---------- 自動發展 ----------

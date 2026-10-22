@@ -181,7 +181,20 @@ class Game {
     this.city.update(dt * CLOCK);
   }
 
+  // 主迴圈：任何一步出錯都不會讓遊戲停住（下一幀照樣排程），錯誤訊息顯示在畫面上方便回報
   frame(now) {
+    requestAnimationFrame(t => this.frame(t));
+    try { this.frameBody(now); } catch (e) { this.reportError(e); }
+  }
+  reportError(e) {
+    console.error(e);
+    const msg = (e && e.message) || String(e), where = ((e && e.stack) || '').split('\n')[1] || '';
+    this._errs = this._errs || new Set();
+    if (this._errs.has(msg)) return;
+    this._errs.add(msg);
+    this.notify(`⚠ 程式錯誤（遊戲會繼續執行，請截圖回報）：${msg} ${where.trim().replace(/^at /, '').replace(/https?:\/\/[^/]+/, '').slice(0, 120)}`, 'warn');
+  }
+  frameBody(now) {
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     if (this.net) {
@@ -202,7 +215,6 @@ class Game {
       this.renderer.draw();
       this.ui.update(dt);
     }
-    requestAnimationFrame(t => this.frame(t));
   }
 }
 

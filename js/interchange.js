@@ -205,8 +205,8 @@ export const TEMPLATES = {
     },
   },
   spui: {
-    group: '服務型', name: '單點式 SPUI', desc: '左轉匯集到主線正下方的單一號誌路口（大半徑轉彎），右轉走自由右轉匝道不必等號誌；佔地小、通行量大', L: 360, Lc: 300,
-    main: 'highway', cross: 'avenue', M: 1, C: 0,
+    group: '服務型', name: '單點式 SPUI', desc: '左轉匯集到主線正下方的單一號誌路口（大半徑轉彎），右轉走自由右轉匝道不必等號誌；佔地小、通行量大；橫交道路為林蔭大道（3+3）', L: 360, Lc: 300,
+    main: 'highway', cross: 'boulevard', M: 1, C: 0,
     build() {
       // 參考 MoDOT / KYTC 的 SPUI 設計：出口匝道在 x≈-150 分成兩支，左轉進中央號誌，右轉以半徑 60 m 自由併入橫交道路
       const out = [], dx = 0.894, dy = 0.447, X = 125, W = 28, R = 50, Lr = 265;

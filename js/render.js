@@ -4,6 +4,7 @@ import { LANE_W, LEVEL_H, ZONES, CLOCK, FLOW_KINDS, zoneColor } from './config.j
 import { pointAt, offsetPoly, polyCum, cutPoly, clamp, arcCurve, convexHull, pointInPoly, closestOnPoly } from './util.js';
 import { halfWidth, laneOffset } from './network.js';
 import { fxAt } from './traffic.js';
+import { routeFromPoint } from './routing.js';
 
 const DRAW_LEVELS = [-2, -1, 0, 1, 2, 3];
 // 斜看的俯角 55°：畫面上下方向壓縮成 sin 55°；建物高度（以俯視的 0.5 倍為準）乘上 2 / tan 55°，畫面上的高度 = 實際高度 × cos 55°
@@ -173,10 +174,12 @@ export class Renderer {
     // 分區圖：不畫建物的立體部分，只看各地塊的分區顏色
     if (!g.zonemap) this.drawBuildings(v, 'tall');
     this.drawNetwork(v, L => L > 0);
-    if (g.zonemap) this.drawZoneMap(v);
-    if (g.transitmap) this.drawTransitMap(v);
-    if (g.flowmap) this.drawFlows(v);
-    if (g.heatmap) this.drawHeatmap(v);
+    // 疊加圖層各自保護：其中一層出錯時其他照常畫（錯誤由 main.js 顯示）
+    const layer = f => { try { f(); } catch (e) { this.worldTf(); g.reportError && g.reportError(e); } };
+    if (g.zonemap) layer(() => this.drawZoneMap(v));
+    if (g.transitmap) layer(() => this.drawTransitMap(v));
+    if (g.flowmap) layer(() => this.drawFlows(v));
+    if (g.heatmap) layer(() => this.drawHeatmap(v));
     this.drawSelection();
     g.tools.drawOverlay(ctx, this);
     this.screenTf();
@@ -280,18 +283,58 @@ export class Renderer {
     }
   }
 
-  // 大眾運輸路線圖：所有公車路線（路線顏色）與鐵路路線（深色加路線色），站牌畫成白點、手動站牌外圈加粗，還沒排進路線的手動站牌是灰色
+  // 有向路段序列的連續折線：每段走中間車道，路段之間沿實際的路口連接線（轉彎曲線）接起來，不會在路口斷開
+  pathLine(keys) {
+    const net = this.game.net, out = [];
+    let cur = null;
+    for (let i = 0; i < keys.length; i++) {
+      const L = net.links.get(keys[i]);
+      if (!L || !L.lanes.length) continue;
+      const mid = L.lanes[Math.floor(L.lanes.length / 2)];
+      let lane = mid;
+      if (cur) {
+        // 上一段到這一段的路口連接：優先從目前車道出發，接到這一段的車道
+        let c = cur.conns.find(c => c.to.link === L && !c.dead);
+        if (!c) for (const l2 of cur.link.lanes) { c = l2.conns.find(c => c.to.link === L && !c.dead); if (c) break; }
+        if (c) { if (c.from !== cur) out.push(...c.from.pts.slice(-1)); out.push(...c.pts); lane = c.to; }
+      }
+      out.push(...lane.pts);
+      cur = lane;
+    }
+    return out;
+  }
+  // 沿折線每隔 gap 公尺畫一個指向行進方向的三角箭頭
+  arrowsAlong(pts, color, size, gap) {
+    if (pts.length < 2) return;
+    const ctx = this.ctx, cum = polyCum(pts), L = cum[cum.length - 1];
+    ctx.fillStyle = color;
+    for (let d = Math.min(gap / 2, L / 2); d < L; d += gap) {
+      const p = pointAt(pts, cum, d), nx = -p.dy, ny = p.dx;
+      ctx.beginPath();
+      ctx.moveTo(p.x + p.dx * size, p.y + p.dy * size);
+      ctx.lineTo(p.x - p.dx * size * 0.7 + nx * size * 0.75, p.y - p.dy * size * 0.7 + ny * size * 0.75);
+      ctx.lineTo(p.x - p.dx * size * 0.35, p.y - p.dy * size * 0.35);
+      ctx.lineTo(p.x - p.dx * size * 0.7 - nx * size * 0.75, p.y - p.dy * size * 0.7 - ny * size * 0.75);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+
+  // 大眾運輸路線圖：每條路線依行駛順序沿車道畫成連續的線（公車：路線顏色；鐵路：深色底加路線色），每隔一段畫行進方向箭頭；
+  // 站牌畫成白點、手動站牌外圈加粗，還沒排進路線的手動站牌是灰色
   drawTransitMap(v) {
-    const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit, net = g.net;
+    const g = this.game, ctx = this.ctx, z = this.cam.z, tr = g.transit;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const ln of tr.lines) {
-      ctx.globalAlpha = 0.9;
-      for (const k of ln.path || []) {
-        const L = net.links.get(k);
-        if (!L || !this.inView(L.seg.bbox, v)) continue;
-        const pts = offsetPoly(L.seg.pts, L.dir * (ln.rail ? 2.5 : halfWidth(L.seg.T) * 0.5));
-        if (ln.rail) { ctx.strokeStyle = '#2b2f36'; ctx.lineWidth = Math.max(3, 7 / z); this.strokePoly(pts); }
-        ctx.strokeStyle = ln.color; ctx.lineWidth = Math.max(1.6, (ln.rail ? 3.5 : 4) / z); this.strokePoly(pts);
+      for (const leg of ln.legs || [ln.path || []]) {
+        const pts = this.pathLine(leg);
+        if (pts.length < 2) continue;
+        const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+        if (Math.max(...xs) < v.x0 || Math.min(...xs) > v.x1 || Math.max(...ys) < v.y0 || Math.min(...ys) > v.y1) continue;
+        ctx.globalAlpha = 0.92;
+        if (ln.rail) { ctx.strokeStyle = '#2b2f36'; ctx.lineWidth = Math.max(3, 8 / z); this.strokePoly(pts); }
+        ctx.strokeStyle = ln.color; ctx.lineWidth = Math.max(1.6, (ln.rail ? 4 : 4.5) / z); this.strokePoly(pts);
+        ctx.globalAlpha = 1;
+        this.arrowsAlong(pts, ln.rail ? ln.color : '#ffffff', Math.max(1.4, 5 / z), Math.max(40, 160 / z));
       }
     }
     ctx.globalAlpha = 1;
@@ -307,23 +350,42 @@ export class Renderer {
     }
   }
 
-  // 行程圖：每組起點 → 終點畫一條弧線（顏色依行程種類、粗細依最近的往來量），終點畫一個圓點；點選建築時只突顯它的行程
+  // 行程圖：每組起點 → 終點依實際會走的路線（快取，路網改變才重算）把往來量累加到每個有向路段與路口轉彎上，
+  // 沿車道畫成連續的線：顏色是該路段最多的行程種類、越粗往來越多（細到粗），路段中間有行進方向箭頭；點選建築時只看它的行程
   drawFlows(v) {
-    const g = this.game, ctx = this.ctx, z = this.cam.z, net = g.net, sel = g.ui.selection, focus = sel && sel.type === 'building' ? sel.obj : null;
-    const pos = o => (o.outside ? net.nodes.get(o.node) : o);
+    const g = this.game, ctx = this.ctx, z = this.cam.z, net = g.net, ver = net.version, sel = g.ui.selection, focus = sel && sel.type === 'building' ? sel.obj : null;
     const col = Object.fromEntries(FLOW_KINDS.map(([k, , c]) => [k, c]));
-    const list = [...g.city.flows.values()].filter(f => !focus || f.a === focus || f.b === focus).sort((p, q) => p.n - q.n).slice(-400);
-    ctx.lineCap = 'round';
+    const list = [...g.city.flows.values()].filter(f => !focus || f.a === focus || f.b === focus).sort((p, q) => q.n - p.n).slice(0, 500);
+    let budget = 30;
+    const vol = new Map(), turn = new Map();
+    const add = (m, k, kind, n) => { const o = m.get(k) || m.set(k, { n: 0, by: {} }).get(k); o.n += n; o.by[kind] = (o.by[kind] || 0) + n; };
     for (const f of list) {
-      const a = pos(f.a), b = pos(f.b);
-      if (!a || !b) continue;
-      if (Math.max(a.x, b.x) < v.x0 || Math.min(a.x, b.x) > v.x1 || Math.max(a.y, b.y) < v.y0 || Math.min(a.y, b.y) > v.y1) continue;
-      const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, cx = (a.x + b.x) / 2 - dy * 0.18, cy = (a.y + b.y) / 2 + dx * 0.18;
-      ctx.strokeStyle = col[f.kind] || '#fff'; ctx.globalAlpha = focus ? 0.9 : 0.5;
-      ctx.lineWidth = Math.min(7, 1 + Math.log2(1 + f.n)) * 1.3 / z;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(cx, cy, b.x, b.y); ctx.stroke();
-      ctx.fillStyle = ctx.strokeStyle; ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(1.2, 3.5 / z), 0, Math.PI * 2); ctx.fill();
-      if (L < 1) continue;
+      if (!f.route || f.route.ver !== ver) {
+        if (budget-- <= 0) continue;
+        const a = f.a, b = f.b, r = a.seg != null && b.seg != null ? routeFromPoint(net, { seg: a.seg, u: a.u, id: a.id }, { seg: b.seg, u: b.u, id: b.id }) : null;
+        f.route = { ver, path: r ? r.path : [] };
+      }
+      const p = f.route.path;
+      for (let i = 0; i < p.length; i++) { add(vol, p[i], f.kind, f.n); if (i) add(turn, p[i - 1] + '>' + p[i], f.kind, f.n); }
+    }
+    const width = n => (1.2 + Math.min(11, Math.sqrt(n) * 1.5)) / z;
+    const color = o => col[Object.entries(o.by).sort((p, q) => q[1] - p[1])[0][0]] || '#fff';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = focus ? 0.95 : 0.8;
+    // 路口轉彎（先畫，路段蓋在上面）
+    for (const [k, o] of turn) {
+      const [k1, k2] = k.split('>').map(Number), L1 = net.links.get(k1), L2 = net.links.get(k2);
+      if (!L1 || !L2 || !this.inView(L1.seg.bbox, v)) continue;
+      let c = null;
+      for (const l of L1.lanes) { c = l.conns.find(c => c.to.link === L2 && !c.dead); if (c) break; }
+      if (!c) continue;
+      ctx.strokeStyle = color(o); ctx.lineWidth = width(o.n); this.strokePoly(c.pts);
+    }
+    for (const [k, o] of vol) {
+      const L = net.links.get(k);
+      if (!L || !L.lanes.length || !this.inView(L.seg.bbox, v)) continue;
+      const lane = L.lanes[Math.floor(L.lanes.length / 2)];
+      ctx.strokeStyle = color(o); ctx.lineWidth = width(o.n); this.strokePoly(lane.pts);
+      if (lane.len * z > 50) { ctx.globalAlpha = 1; this.arrowsAlong(lane.pts, '#ffffff', Math.max(1.2, width(o.n) * 0.9 + 1.5 / z), lane.len + 1); ctx.globalAlpha = focus ? 0.95 : 0.8; }
     }
     ctx.globalAlpha = 1;
   }

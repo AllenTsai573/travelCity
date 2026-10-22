@@ -6,7 +6,7 @@
 // - 乘客：家裡車子都開走（或選擇搭公車）的居民，若起點與目的地附近（WALK 公尺內）都有站牌、搭同一條路線或在轉乘站換一次車到得了，
 //   就走到站牌等車；否則走路
 import { pointAt, clamp } from './util.js';
-import { routeFromPoint } from './routing.js';
+import { routeFromPoint, findRoute } from './routing.js';
 import { CLOCK } from './config.js';
 
 // 計程車：叫車的居民在 TAXI_RANGE 公尺內有停著計程車的車行 / 招呼站才叫得到
@@ -134,9 +134,9 @@ export class Transit {
       seq.forEach((t, i) => { const n2 = seq[(i + 1) % seq.length]; loop += Math.hypot(n2.x - t.x, n2.y - t.y) * 1.2 / 20 + 12; });
       const nt = clamp(Math.round(loop / 90), 1, 3);
       const line = { id: li, rail: true, name: `鐵路 ${no} 號線`, color: RAIL_COLORS[(no - 1) % RAIL_COLORS.length], depot: T.id, hub: s0.id, stops: seq.map(t => t.id), buses: nt, headway: loop / nt * CLOCK, nextT: 0 };
-      const keys = new Set();
-      seq.forEach((t, i) => { const n2 = seq[(i + 1) % seq.length], r = routeFromPoint(net, { seg: t.seg, u: t.u, id: 'x' }, { seg: n2.seg, u: n2.u, id: 'x' }); if (r) for (const kk of r.path) keys.add(kk); });
-      line.path = [...keys];
+      line.legs = [];
+      seq.forEach((t, i) => { const n2 = seq[(i + 1) % seq.length], r = routeFromPoint(net, { seg: t.seg, u: t.u, id: 'x' }, { seg: n2.seg, u: n2.u, id: 'x' }); if (r) line.legs.push(r.path); });
+      line.path = [...new Set(line.legs.flat())];
       for (const t of new Set(seq)) t.lines.push(line.id);
       this.lines.push(line);
     }
@@ -194,21 +194,17 @@ export class Transit {
           const order = [hub], left = [...group];
           let cur = hub;
           while (left.length) { left.sort((a, b) => Math.hypot(a.x - cur.x, a.y - cur.y) - Math.hypot(b.x - cur.x, b.y - cur.y)); cur = left.shift(); order.push(cur); }
+          // 依實際行駛方向（公車到站後只能順著原方向開走）把站序調到總行駛時間最短，減少繞回頭與迴轉
+          const tour = this.bestTour(order, from, d.id);
           li++;
-          // 繞一圈的估計時間（模擬秒）：站間直線距離 × 1.3，平均 9 m/s，每站停 6 秒；發車間隔 = 一圈時間 / 公車數
+          // 繞一圈的時間（模擬秒）：實際路線的行駛時間＋每站停 6 秒；發車間隔 = 一圈時間 / 公車數
           // 公車數以發車間隔約 HEADWAY 秒為準，不超過總站公車位平均分給各路線的數量
-          let loop = 0;
-          order.forEach((t, i) => { const n2 = order[(i + 1) % order.length]; loop += Math.hypot(n2.x - t.x, n2.y - t.y) * 1.3 / 9 + 6; });
+          const loop = tour.cost + tour.order.length * 6;
           const nb = clamp(Math.round(loop / HEADWAY), 1, Math.max(1, Math.min(MAX_BUSES, Math.floor(buses / nLines))));
-          const line = { id: li, name: `${li} 路`, color: LINE_COLORS[(li - 1) % LINE_COLORS.length], depot: d.id, hub: hub.id, stops: order.map(t => t.id), buses: nb, headway: loop / nb * CLOCK, nextT: 0 };
-          // 實際行駛路徑（畫路線圖用）：總站 → 各站 → 回到第一站
-          const keys = new Set();
-          [from, ...order, order[0]].forEach((p, i, arr) => {
-            if (!i) return;
-            const q = i === 1 ? from : this.stopPoint(arr[i - 1]), pp = this.stopPoint(p), r = routeFromPoint(net, { seg: q.seg, u: q.u, id: d.id }, { seg: pp.seg, u: pp.u, id: d.id });
-            if (r) for (const k of r.path) keys.add(k);
-          });
-          line.path = [...keys];
+          const line = { id: li, name: `${li} 路`, color: LINE_COLORS[(li - 1) % LINE_COLORS.length], depot: d.id, hub: hub.id, stops: tour.order.map(t => t.id), buses: nb, headway: loop / nb * CLOCK, nextT: 0 };
+          // 實際行駛路徑（畫路線圖用）：依序的每一段（總站 → 各站 → 回到第一站）
+          line.legs = tour.legs;
+          line.path = [...new Set(tour.legs.flat())];
           for (const t of order) t.lines.push(line.id);
           this.lines.push(line);
         }
@@ -232,6 +228,56 @@ export class Transit {
       if (i >= 0) { v.stopIdx = i; const pt = this.stopPoint(this.stop(L.stops[i]), v.train); if (v.busDest.seg !== pt.seg) { v.busDest = { ...v.busDest, seg: pt.seg, u: pt.u }; if (v.train) tr.trainRoute(v); else tr.reroute(v); } }
       else if (!v.dwell) { v.stopIdx = -1; tr.nextBusStop(v); }
     }
+  }
+
+  // 從某站（以 inKey 這個方向的路段抵達；null 表示從總站出發、兩個方向都可以）開到 to 站的路線（含起點路段），有快取
+  legRoute(fromPt, inKey, to, gate, memo) {
+    const key = (inKey ?? 'p' + fromPt.seg + ':' + Math.round(fromPt.u)) + '>' + to.id;
+    if (memo.has(key)) return memo.get(key);
+    const net = this.net, pt = this.stopPoint(to), dest = { seg: pt.seg, u: pt.u, id: gate };
+    let r = null;
+    if (inKey === null || inKey === undefined) r = routeFromPoint(net, { seg: fromPt.seg, u: fromPt.u, id: gate }, dest);
+    else {
+      const L = net.links.get(inKey);
+      if (L) {
+        const ahead = L.dir > 0 ? pt.u - fromPt.u : fromPt.u - pt.u;
+        if (pt.seg === L.seg.id && ahead > 4) r = { path: [L.key], cost: ahead / L.eff };
+        else {
+          const f = findRoute(net, [{ link: L, cost: (L.dir > 0 ? L.seg.len - fromPt.u : fromPt.u) / L.eff }], dest, [gate]);
+          if (f) r = f;
+        }
+      }
+      // 順著原方向到不了（例如死路）：允許在站牌掉頭，但加重成本
+      if (!r) { const b = routeFromPoint(net, { seg: fromPt.seg, u: fromPt.u, id: gate }, dest); if (b) r = { path: b.path, cost: b.cost + 300 }; }
+    }
+    memo.set(key, r);
+    return r;
+  }
+  // 一圈的行駛時間與每一段路線：總站 → order[0] → … → 回到 order[0]，每站以抵達的方向接著開
+  tourCost(order, from, gate, memo) {
+    let cost = 0, pt = from, inKey = null;
+    const legs = [];
+    for (let i = 0; i <= order.length; i++) {
+      const to = order[i % order.length], r = this.legRoute(pt, inKey, to, gate, memo);
+      if (!r) return { cost: Infinity, legs };
+      cost += r.cost; legs.push(r.path);
+      pt = this.stopPoint(to); inKey = r.path[r.path.length - 1];
+    }
+    return { cost, legs };
+  }
+  // 站序最佳化（2-opt）：轉乘站固定在第一站，其餘站的順序反轉片段，總行駛時間變短就採用
+  bestTour(order, from, gate) {
+    const memo = new Map();
+    let best = order, bc = this.tourCost(best, from, gate, memo);
+    for (let pass = 0; pass < 4; pass++) {
+      let improved = false;
+      for (let i = 1; i < best.length - 1; i++) for (let j = i + 1; j < best.length; j++) {
+        const cand = [...best.slice(0, i), ...best.slice(i, j + 1).reverse(), ...best.slice(j + 1)], cc = this.tourCost(cand, from, gate, memo);
+        if (cc.cost < bc.cost - 0.5) { best = cand; bc = cc; improved = true; }
+      }
+      if (!improved) break;
+    }
+    return { order: best, cost: isFinite(bc.cost) ? bc.cost : 0, legs: bc.legs };
   }
 
   // 依路線缺少的公車數，從總站派車

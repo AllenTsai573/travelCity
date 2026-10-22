@@ -17,7 +17,7 @@
 python3 -m http.server 8765        # 在 travelCity 目錄下執行，打開 http://localhost:8765
 
 # 全部測試（Node 18 以上，無頭執行，不需要瀏覽器）
-npm test                            # = art.test.js && sim.test.js && interchange.test.js
+npm test                            # = scripts/check-syntax.mjs（所有模組語法）&& art.test.js && sim.test.js && interchange.test.js
 node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 ```
 
@@ -54,7 +54,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 | `tools.js` | 玩家工具與輸入：道路（角度吸附以起點道路為基準、吸附地塊後緣 `lotAlign`）、圓環、交流道、升級、路口（拖曳新增 / 移除車道連接）、分區（沿路拖曳、`zoneCells` 格子、右鍵 / Esc 取消）、拆除 |
 | `ui.js` | 頂部資訊列、工具列（道路 / 圓環 / 交流道 / 升級合併為「道路建設」）、副工具列、資訊面板、對話框 |
 | `worldgen.js` | 開局：外部連線（地圖邊緣 2 條高速公路＋1 條聯外道路）、棋盤狀小鎮（分街廓鋪設）、接上一條高速公路到小鎮的大道（優先接大道端點），接上的那條市區道路沿高速公路方向一路改為林蔭大道（`boulevardFrom`，3+3 與高速公路車道數相同）、初始分區 |
-| `transit.js` | 大眾運輸：`plan()` 每 6 遊戲小時（或總站增減時）重新規劃站牌與路線（依建築容量挑站、依方位分組、最近鄰排序，`line.path` 為實際行駛的有向路段供繪圖）、`dispatch()` 依發車間隔派車、`board(trip)` 讓居民到站牌排隊、`exchange(v, stop)` 上下客 |
+| `transit.js` | 大眾運輸：`plan()` 每個遊戲日（或總站 / 車站增減、手動站牌變動時）重新規劃站牌與路線（依建築容量挑站、依方位分組、最近鄰排序後 `bestTour` 以「到站方向」計算的實際行駛時間做 2-opt，`line.legs` 為依序的每段有向路段，`line.path` 為全部路段）、`dispatch()` 依發車間隔派車、`board(trip)` 讓居民到站牌排隊、`exchange(v, stop)` 上下客 |
 | `main.js` | 主迴圈（固定 0.1 s 模擬步、最多 80 步 / 幀）、存讀檔（localStorage，存檔記錄 `mapSize`） |
 
 ## 重要概念與慣例
@@ -86,6 +86,9 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 - **單向場內道路**（`ROAD_TYPES.service1`）：大型停車場（`lotart.oneWayLot`：量販店 / 購物中心 / 超市）與停車樓前的車道（`lotart.garageDrive`：高密度住宅、`mallp` 立體停車場購物中心）。`city.buildParkRoads` 依 `plan.lot.oneway` 依序建造：入口 → 前方分配車道 → 各停車車道 → 後方集散車道 → 出口；入口一律在臨路車道上游端（`-ty·nx + tx·ny > 0` 時在 u 小的那端），`network.genConnections` 讓 service1 與一般道路的左轉進出加上 240 秒的尋路成本（`conn.pen`），平常都右進右出（避免排隊回堵出口造成整個停車場卡死），只有沒有別的路時才左轉（例如停車場在通往地圖邊緣的路上）。室內車位（`indoor`）有 `out`（出口車道位置），`slotRoad(b, i, truck, out)`、`trySpawn` 開出時用 out；`slotBusy` 對室內車位只擋同一條車道。
 - **公車停靠區**：站牌在最外側車道停靠的公車 `v.inBay = true`、`v.lat = v.bayLat`（偏到路邊加寬區），`leader` / `leaderOnLaneStart` / `hasSpace` / `neighbors` 都略過停靠區裡的公車（`lastOnLane`），後車直接開過；離開時等後方淨空。`render.drawBays` 畫加寬路面。手動站牌 `city.busStops`（`toggleBusStop`，分區工具 `zone = 'STOP'`），`transit.plan` 以最高權重排進站牌。
 - **行程圖 / 路線圖**：`city.flows`（`recordFlow` 在 `onTripEnd` 記錄去程，每小時 ×0.88 衰減），`g.flowmap`（`F`）由 `render.drawFlows` 畫弧線（`FLOW_KINDS` 顏色）；`g.transitmap`（`L`）由 `render.drawTransitMap` 畫所有路線，圖例 `#flowlegend`、`#transitlegend`。
+- **主迴圈防當機**：`main.frame` 先排下一幀再執行 `frameBody`，出錯時 `reportError` 在畫面顯示錯誤訊息（同一訊息只顯示一次），遊戲繼續；`render.draw` 的疊加圖層各自 try/catch。
+- **地圖線條**：`render.pathLine(keys)` 把有向路段序列沿中間車道與路口連接線（`conn.pts`）接成連續折線，`arrowsAlong` 畫箭頭；行程圖以 `routeFromPoint` 算每組往來的路線（`f.route` 依 `net.version` 快取，每幀最多算 30 條），累加到路段與轉彎上再畫。
+- **成長壓力**：`city.js` 的 `GROWTH = { R: 0.25, C: 0.15, I: 0.12 }` 加在需求上（交通差時被 `jam` 抵銷）。大型商業的停車場道路開不出來時改蓋辦公大樓；工業沒有實際園區道路時一律用前院式（`compact`）配置。
 - **卡死排除**：`traffic` 的 `GRID_T = 90` 模擬秒，車道最前面（`isHead`）停住超過就 `finish(v, false)`，計數 `traffic.cleared`。
 - **計程車**：分區 `TX`（計程車行）、`TS`（招呼站），zone 都是 `T`；車位是小客車車位（`slotOcc` 停著黃色計程車 `TAXI_COLOR`）。`transit.callTaxi(trip)` 從 1.6 km 內最近有車的站 `trySpawn({ kind: 'taxi', taxi: 乘客行程 }, 接客點)`；車輛 `v.taxi = { pax, stage }`、目的地沿用 `v.busDest`，到點停 3 秒後 `traffic.nextTaxiStage`：stage 0 接客 → stage 1 下客（乘客 `onTripEnd`）→ 改成 `taxiret` 行程開回 `transit.taxiHome` 找到的空車位。叫車時機：`spawnFrom` 中 `TAXI_SHARE`（有車也叫）、以及沒車可開時公車不行才叫車，再不行才走路。
 - **鐵路**：`ROAD_TYPES.rail`（`rail: true`、rank 5）。`genConnections` 不在鐵路與道路之間建連接，平面相交的節點就是平交道（衝突點照常計算；`canEnter` 中車輛遇到 14 秒內會到的列車一律等）。外部鐵路在 `city.railOutside`（不在 `city.outside`，不產生汽車車流）。車站分區 `RT`（總站）、`RS`（車站）、`RC`（貨運站），zone 都是 `T`、`ZONE_TYPES.rail`；`city.railNear(geo)` 找地塊後方 / 兩側 30 m 內的地面鐵軌，`planStroke` 沒有就不能劃，`city.platformOf(b)` 是月台（快取）。
@@ -122,6 +125,7 @@ node tests/interchange.test.js cloverleaf   # 只測一種交流道模板
 12. 擁塞圖改為綠到紅的連續漸層（沿路分段）、臨路道路限制地塊大小（小路 6 / 市區 12 / 大道 18 / 林蔭不限）、里程碑進度表、沙盒全部解鎖、開局高速公路接林蔭大道
 13. 計程車（車行、招呼站）、公車總站劃設提示停車位數、鐵路（軌道、平交道、外部鐵路、總站 / 車站 / 貨運站、客運與貨運列車、總站附設公車轉運站）
 14. 公車擋路修正（靠外側車道、沒人上下車不停、站牌離路口 30 m、每線最多 8 台）、公車停靠區、手動公車站牌、行程圖、大眾運輸路線圖、卡死自動排除、鐵路上不能蓋圓環、模組版本號（import map）
+15. 行程圖與路線圖沿道路畫成連續的線（箭頭、行程圖細到粗）、公車站序依行駛方向最佳化、SPUI 橫交道路改林蔭大道、需求加成長壓力、主迴圈防當機（錯誤顯示在畫面）、npm test 加語法檢查
 
 ## 已知問題 / 可以繼續的方向
 

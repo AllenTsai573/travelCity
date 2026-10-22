@@ -12,9 +12,9 @@ import { halfWidth } from './network.js';
 import { polyBBox } from './util.js';
 
 // 交流道佔地（沿主線、橫向的半寬，公尺）：範圍內不鋪其他地面道路
-const FOOT = { turbine: [540, 540], spui: [330, 320], diamond: [330, 320] };
+const FOOT = { turbine: [540, 540], windmill: [460, 460], spui: [330, 320], diamond: [330, 320] };
 // 交流道主線、橫交道路的半長（模板的 L、Lc）
-const HALF = { turbine: [500, 500], spui: [360, 300], diamond: [360, 300] };
+const HALF = { turbine: [500, 500], windmill: [420, 420], spui: [360, 300], diamond: [360, 300] };
 
 export function generateCity(g) {
   const net = g.net;
@@ -101,7 +101,7 @@ function buildCity(g, fullRebuild) {
   const interchange = (key, cands, ux, uy, M, Cc) => {
     // 依偏好順序：先試完全沒有水域的位置，再試只有一點點的
     const all = cands.map(([x, y]) => ({ x, y, w: wetFoot(key, x, y, ux, uy) }));
-    const list = [...all.filter(c => c.w < 0.005), ...all.filter(c => c.w >= 0.005 && c.w < 0.06)].slice(0, 6);
+    const list = [...all.filter(c => c.w < 0.005), ...all.filter(c => c.w >= 0.005 && c.w < 0.25).sort((p, q) => p.w - q.w)].slice(0, 6);
     for (const c of list) {
       const fr = { ok: true, x: c.x, y: c.y, ux, uy, M, C: Cc, snap: false };
       const r = placeInterchange(g, key, fr);
@@ -136,7 +136,9 @@ function buildCity(g, fullRebuild) {
     if (!best || w < best.w) best = { ya, xb, w };
   }
   let YA = best.ya, XB = best.xb;
-  const turbine = interchange('turbine', [[XB, YA], [XB + 60, YA], [XB - 60, YA], [XB, YA + 60], [XB, YA - 60]], 1, 0, 1, 2);
+  // 系統交流道：渦輪型，水域太多放不下時改用佔地較小的風車型
+  const sysC = [[XB, YA], [XB + 60, YA], [XB - 60, YA], [XB, YA + 60], [XB, YA - 60]];
+  const turbine = interchange('turbine', sysC, 1, 0, 1, 2) || interchange('windmill', sysC, 1, 0, 1, 2);
   if (turbine) { XB = turbine.x; YA = turbine.y; }
   // 東西向高速公路上：SPUI 在市中心附近（與渦輪至少隔 950 m）、鑽石型在西側
   const ax = [];
@@ -170,7 +172,7 @@ function buildCity(g, fullRebuild) {
   const ends = (fr, h, ax) => (fr ? [-1, 1].map(s => { const L = HALF[fr.key][0], p = along(fr, s * L); return [p, h, ax(p)]; }) : []);
   freeway([[{ x: 4, y: YA }, 0, 4], [{ x: 150, y: YA }, 1, 150, true], ...ends(dA, 1, p => p.x), ...ends(sA, 1, p => p.x), ...ends(turbine, 1, p => p.x), [{ x: S - 150, y: YA }, 1, S - 150, true], [{ x: E, y: YA }, 0, E]]);
   // 南北向：渦輪的橫交道路在第 2 層（沒有渦輪時在交會處升到第 2 層跨過東西向）
-  const tB = turbine ? [-1, 1].map(s => { const p = across(turbine, s * HALF.turbine[1]); return [p, 2, p.y]; }) : [[{ x: XB, y: YA - 150 }, 2, YA - 150], [{ x: XB, y: YA + 150 }, 2, YA + 150]];
+  const tB = turbine ? [-1, 1].map(s => { const p = across(turbine, s * HALF[turbine.key][1]); return [p, 2, p.y]; }) : [[{ x: XB, y: YA - 150 }, 2, YA - 150], [{ x: XB, y: YA + 150 }, 2, YA + 150]];
   freeway([[{ x: XB, y: 4 }, 0, 4], [{ x: XB, y: 150 }, 1, 150, true], ...tB, ...ends(sB, 1, p => p.y), ...ends(dB, 1, p => p.y), [{ x: XB, y: S - 150 }, 1, S - 150, true], [{ x: XB, y: E }, 0, E]]);
   const outNode = (p, name) => { const n = net.nodeNear(p.x, p.y, 3, 0); if (n && n.segs.length === 1) { city.addOutside(n, name); return true; } return false; };
   outNode({ x: 4, y: YA }, '西方高速公路'); outNode({ x: E, y: YA }, '東方高速公路'); outNode({ x: XB, y: 4 }, '北方高速公路'); outNode({ x: XB, y: E }, '南方高速公路');
@@ -229,6 +231,17 @@ function buildCity(g, fullRebuild) {
   if (rn({ x: E, y: RY })) city.addRailOutside(rn({ x: E, y: RY }), '東方鐵路');
   net.rebuild();
 
+  // 只有一端相接的地面道路（停在交流道範圍、水域邊的短截）拆掉，一路拆到路口為止
+  for (let changed = true, guard = 0; changed && guard < 20; guard++) {
+    changed = false;
+    for (const n of [...net.nodes.values()]) {
+      if (n.segs.length !== 1 || n.outside || n.level !== 0) continue;
+      const sg = net.segs.get(n.segs[0]);
+      if (!sg || sg.T.rail || sg.type === 'highway' || sg.type === 'ramp') continue;
+      net.removeSegment(sg);
+      changed = true;
+    }
+  }
   fullRebuild();
   // 車站：鐵路旁的道路上依序找可以劃設的位置（planStroke 會檢查要緊鄰鐵軌）
   const station = (zt, cols, rows, x, y) => {

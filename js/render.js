@@ -1446,11 +1446,26 @@ export class Renderer {
   // lat：橫向偏移（連節公車換車道時）
   drawTrain(vh, detail, lat = 0) {
     const ctx = this.ctx, n = vh.cars || 3, gap = vh.icb ? 0.4 : 0.8, cl = (vh.len - (n - 1) * gap) / n;
+    // 車廂沿開過的軌跡（traffic.trailPush）排列；軌跡還不夠長（剛發車）時沿目前與上一段軌道
+    const head = pointAt(vh.track.pts, vh.track.cum, clamp(vh.s, 0, vh.track.len));
+    let path = null;
+    if (vh.trail && vh.trail.length) {
+      const P = [head];
+      for (let i = vh.trail.length - 1; i >= 0; i--) { const q = vh.trail[i], l = P[P.length - 1]; if (Math.hypot(q.x - l.x, q.y - l.y) > 0.05) P.push(q); }
+      const cum = polyCum(P);
+      if (P.length > 1 && cum[cum.length - 1] >= vh.len - 0.5) path = { P, cum };
+    }
     const at = back => {
-      let tr = vh.track, s = vh.s - back;
-      if (s < 0 && vh.prevTrack && !vh.prevTrack.dead && vh.prevTrack.pts) { tr = vh.prevTrack; s = tr.len + s; }
-      const p = pointAt(tr.pts, tr.cum, clamp(s, 0, tr.len));
-      return lat ? { x: p.x - p.dy * lat, y: p.y + p.dx * lat } : p;
+      let p;
+      if (path) p = pointAt(path.P, path.cum, clamp(back, 0, path.cum[path.cum.length - 1]));
+      else {
+        let tr = vh.track, s = vh.s - back;
+        if (s < 0 && vh.prevTrack && !vh.prevTrack.dead && vh.prevTrack.pts) { tr = vh.prevTrack; s = tr.len + s; }
+        p = pointAt(tr.pts, tr.cum, clamp(s, 0, tr.len));
+      }
+      if (!lat) return p;
+      const d = pointAt(vh.track.pts, vh.track.cum, clamp(vh.s, 0, vh.track.len));
+      return { x: p.x - d.dy * lat, y: p.y + d.dx * lat };
     };
     for (let k = n - 1; k >= 0; k--) {
       const f = at(k * (cl + gap)), r = at(k * (cl + gap) + cl);

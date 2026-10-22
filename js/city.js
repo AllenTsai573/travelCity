@@ -881,7 +881,7 @@ export class City {
     this.growT += dt;
     if (this.growT >= 30) {
       this.growT = 0;
-      if ((this.jam || 0) < 0.35 && g.time >= this.growStart) { this.developLots(); if (g.autoGrow) this.autoGrow(); }
+      if ((this.jam || 0) < 0.35 && g.time >= this.growStart) { this.developLots(); if (g.autoGrow) { this.autoGrow(); this.autoTransit(); } }
     }
   }
 
@@ -1165,6 +1165,50 @@ export class City {
   }
 
   // 自動劃設的地塊大小：城市越大，住宅密度越高、偶爾出現大型商場
+  // 自動發展也劃大眾運輸（每次最多一塊，前一塊還沒蓋好時先不劃）：
+  // - 公車總站：有 300 人以上的住宅不在任何公車總站 1.8 km 內 → 在這些住宅的中心附近劃一座
+  // - 計程車招呼站：每 1500 人一座，劃在還沒有計程車站涵蓋的商業區附近
+  // - 跨縣市公車站：人口 1000 以上、有接通的外部連線、還沒有跨縣市公車站時，劃在商業區中心附近
+  autoTransit() {
+    if (this.lots.some(l => l.zone === 'T')) return;
+    const g = this.game, B = this.buildings.filter(b => !b.abandoned), has = zt => B.filter(b => b.zt === zt);
+    const center = list => ({ x: list.reduce((a, b) => a + b.x, 0) / list.length, y: list.reduce((a, b) => a + b.y, 0) / list.length });
+    const depots = B.filter(b => b.zt === 'T' || b.zt === 'IT' || (b.zt === 'RT' && b.busHub));
+    if (this.maxCells('T')) {
+      const far = B.filter(b => b.zone === 'R' && !depots.some(d => Math.hypot(d.x - b.x, d.y - b.y) < (ZONE_TYPES[d.zt].range || 1800)));
+      if (far.reduce((a, b) => a + this.cap(b), 0) >= 300 && this.placeTransit('T', 8, 6, center(far))) return;
+    }
+    const taxi = [...has('TS'), ...has('TX')];
+    if (this.maxCells('TS') && taxi.length < Math.floor(this.pop / 1500)) {
+      const shops = B.filter(b => b.zone === 'C' && !taxi.some(t => Math.hypot(t.x - b.x, t.y - b.y) < (ZONE_TYPES[t.zt].range || 1800)));
+      if (shops.length && this.placeTransit('TS', 4, 2, center(shops))) return;
+    }
+    if (this.maxCells('IB') && this.pop >= 1000 && !has('IB').length && !has('IT').length && this.liveOutside().length) {
+      const shops = B.filter(b => b.zone === 'C');
+      if (shops.length) this.placeTransit('IB', 10, 8, center(shops));
+    }
+  }
+  // 在 p 附近的一般道路旁劃一塊大眾運輸分區（離 p 越近越好）；成功回傳 true
+  placeTransit(zt, cols, rows, p) {
+    const net = this.game.net, comp = this.mainComponent(), park = this.parkRoadSet();
+    const mid = s => ({ x: (s.bbox.x0 + s.bbox.x1) / 2, y: (s.bbox.y0 + s.bbox.y1) / 2 });
+    const segs = [...net.segs.values()].filter(s => s.T.access && !s.T.internal && s.drawLevel === 0 && comp.has(s.a) && !park.has(s.id) && s.len > cols * CELL + 20)
+      .map(s => [Math.hypot(mid(s).x - p.x, mid(s).y - p.y), s]).filter(e => e[0] < 900).sort((a, b) => a[0] - b[0]).slice(0, 40).map(e => e[1]);
+    for (const s of segs) for (const side of [1, -1]) {
+      const c = Math.min(cols, this.maxCells(zt, s)), g0 = this.gridStart(s, side), end = s.len - this.endTrim(s, true, side);
+      const t = closestOnPoly(s.pts, s.cum, p).s, u0 = clamp(g0 + Math.round((t - c * CELL / 2 - g0) / CELL) * CELL, g0, end - c * CELL);
+      if (u0 < g0 - 1e-6) continue;
+      for (let r = rows; r >= 2; r--) {
+        const plan = this.planStroke(zt, s, side, u0, u0 + c * CELL, r).find(q => q.ok && q.cols === c);
+        if (!plan) continue;
+        this.addLot(zt, s, plan.u, side, plan.cols, plan.rows);
+        this.game.notify(`自動發展：劃設了${ZONE_TYPES[zt].name}（${plan.cols}×${plan.rows} 格）`, 'minor');
+        return true;
+      }
+    }
+    return false;
+  }
+
   autoLotSize(zone, seg) {
     const rng = this.game.rng, pop = this.pop;
     const R = (a, b) => rng.int(a, b);

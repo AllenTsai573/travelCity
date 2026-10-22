@@ -14,7 +14,8 @@ import { halfWidth } from './network.js';
 import { polyBBox, pointAt } from './util.js';
 
 // 交流道佔地（沿主線、橫向的半寬，公尺）：範圍內不鋪其他地面道路
-const FOOT = { turbine: [540, 540], windmill: [460, 460], spui: [330, 320], diamond: [330, 320] };
+// 服務型交流道的匝道在主線兩側 80 m 內、沿主線 270 m 內；平行主線的街道離主線 140 m 以上、橫交的街道離中心 290 m 以上
+const FOOT = { turbine: [540, 540], windmill: [460, 460], spui: [290, 140], diamond: [290, 140] };
 // 交流道主線、橫交道路的半長（模板的 L、Lc）
 const HALF = { turbine: [500, 500], windmill: [420, 420], spui: [360, 300], diamond: [360, 300] };
 
@@ -217,7 +218,8 @@ function buildCity(g, fullRebuild) {
     if (ry === null || w < ry.w) ry = { y, w };
   }
   // 站前道路離客運線 80 m；客運月台軌在南側 14 m、貨運線在北側 32 m，車站地塊的後方緊鄰鐵軌
-  const RY = ry ? ry.y : (YM + YD) / 2, RW = 80, SID = 14, FY = RY - 32;
+  // 站前道路（市區道路，路緣到中心 5.8 m）離客運線 RW：深 8 格（48 m）的車站地塊後緣剛好貼著月台軌（中心 SID、半寬約 5 m）
+  const RY = ry ? ry.y : (YM + YD) / 2, SID = 14, RW = SID + 5.6 + 48 + 5.8, FY = RY - 32;
 
   // ---------- 鐵路（先鋪，之後的道路都從高架下方穿過） ----------
   // 一條東西向高架鐵路：地圖邊緣是地面（外部鐵路），進來 150 m 爬到第 1 層；跨過南北向高速公路處升到第 2 層
@@ -258,9 +260,10 @@ function buildCity(g, fullRebuild) {
   // 街道的位置：每 200 m 一條，離幹道 / 高速公路太近（< 120 m）的省略；鐵路兩側各一條站前道路
   const gridX = uniq(steps(XW, XE, 200).filter(x => ![XW, XD, XM, XE, XB].some(a => Math.abs(a - x) < 120)));
   const yMajor = [YN, YM, YD, YS, RY - RW, RY + RW];
-  const gridY = uniq(steps(YA + 200, YS, 200).filter(y => ![...yMajor, YA].some(a => Math.abs(a - y) < 110)));
-  const allX = uniq([XW, XD, XM, XE, ...gridX]), allY = uniq([YN, YA + 200 > YM ? YM : YA + 200, YM, YD, YS, RY - RW, RY + RW, ...gridY].filter(y => y > YA + 150 || y === YN));
-  const northY = uniq([YN, ...steps(YN + 200, YA - 150, 200)]);   // 高速公路以北
+  // 整個外環內每 200 m 一條（高速公路以北也是），離幹道、高速公路、鐵路站前道路太近的省略
+  const gridY = uniq(steps(YN + 200, YS, 200).filter(y => ![...yMajor, YA].some(a => Math.abs(a - y) < 110) && !(y > RY - RW && y < RY + RW)));
+  const allX = uniq([XW, XD, XM, XE, ...gridX]), allY = uniq([YN, YM, YD, YS, RY - RW, RY + RW, ...gridY]);
+  const northY = [];
 
   // ---------- 幹道 ----------
   const ysAll = uniq([...northY, ...allY]);
@@ -282,7 +285,7 @@ function buildCity(g, fullRebuild) {
   // ---------- 街道 ----------
   // 南北向街道（鐵路高架，全部從下方穿過）
   for (const x of gridX) NS(x, ysAll, 'street');
-  for (const y of [...gridY, ...northY.filter(y => y !== YN), RY - RW, RY + RW]) EW(y, xsAll, 'street');
+  for (const y of [...gridY, RY - RW, RY + RW]) EW(y, xsAll, 'street');
   net.rebuild();
 
 
@@ -324,13 +327,14 @@ function buildCity(g, fullRebuild) {
   };
   // 客運車站在南側站前道路、背對月台軌；貨運站在北側站前道路、背對貨運線
   const made = [];
-  for (const [zt, cols, rows] of [['RT', 16, 9], ['RS', 8, 8], ['RS', 8, 8], ['RS', 8, 8]]) {
+  for (const [zt, cols, rows] of [['RT', 16, 8], ['RS', 8, 8], ['RS', 8, 8], ['RS', 8, 8]]) {
     const x0 = platforms[made.length];
     if (x0 === undefined) break;
     const l = station(zt, cols, rows, x0, RY + RW);
     if (l) made.push(l);
   }
-  const rc = station('RC', 16, 6, XC, RY - RW);
+  // 貨運站在北側：後緣貼著貨運線（中心 FY、半寬約 5 m）
+  const rc = station('RC', 16, Math.floor((RW - 5.8 - (RY - FY) - 5.6) / 6), XC, RY - RW);
   if (rc) made.push(rc);
   city.recount();
   g.money = savedMoney;

@@ -4,7 +4,7 @@
 // - 依即時壅塞重新規劃路線
 import { LANE_W, VEHICLE_COLORS, CLOCK } from './config.js';
 import { findRoute, routeFromPoint } from './routing.js';
-import { clamp, pointAt } from './util.js';
+import { clamp, pointAt, closestOnPoly } from './util.js';
 import { laneOffset, halfWidth } from './network.js';
 
 // 卡死排除：排在最前面、停住超過 GRID_T 模擬秒（約 6 個遊戲小時）的車移除，後面的車才能動
@@ -325,7 +325,7 @@ export class Traffic {
     if (!r) return 'noroute';
     const L = net.links.get(r.path[0]), lane = L && L.lanes[0];
     if (!lane) return 'noroute';
-    const s = clamp(net.segUToLaneS(lane, st.u), 0, lane.len - 0.5);
+    const s = clamp(Math.max(net.segUToLaneS(lane, st.u), Math.min(lane.len - 0.5, 68)), 0, lane.len - 0.5);
     if (!this.spaceAt(lane, s, 70, 70)) return 'wait';
     const v = this.createVehicle(true);
     Object.assign(v, { train: true, cars: 3, bus: line.id, len: 66, w: 3.1, a: 0.7, b: 1.1, T: 2, v0f: 1, color: line.color, pax: [], stopIdx: 0, dwell: 0,
@@ -336,18 +336,67 @@ export class Traffic {
     this.vehicles.push(v);
     return 'ok';
   }
-  // 列車重新規劃：從目前位置往兩個方向找到下一站的路線；要往回開時換到另一條軌道（在車站折返）
+  // 多節車廂的車（列車、連節公車）開過的軌跡：最新的點在最後，只留車長 + 20 m；車廂沿這條軌跡排列，
+  // 經過短軌道、道岔、彎道時不會疊在一起
+  trailPush(v) {
+    const tr = v.track;
+    if (!tr || !tr.pts) return;
+    const p = pointAt(tr.pts, tr.cum, clamp(v.s, 0, tr.len)), T = v.trail || (v.trail = []), last = T[T.length - 1];
+    if (last && Math.hypot(p.x - last.x, p.y - last.y) < 1) return;
+    T.push({ x: p.x, y: p.y });
+    let L = 0;
+    for (let i = T.length - 1; i > 0; i--) {
+      L += Math.hypot(T[i].x - T[i - 1].x, T[i].y - T[i - 1].y);
+      if (L > v.len + 20) { if (i > 1) T.splice(0, i - 1); break; }
+    }
+  }
+  // 車頭到車尾的折線（沿開過的軌跡往回車長的距離）；軌跡不夠長時是 null
+  trainBody(v) {
+    const tr = v.track, T = v.trail;
+    if (!tr || !tr.pts || !T || T.length < 2) return null;
+    let p = pointAt(tr.pts, tr.cum, clamp(v.s, 0, tr.len)), left = v.len;
+    const out = [{ x: p.x, y: p.y }];
+    for (let i = T.length - 1; i >= 0; i--) {
+      const q = T[i], d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d >= left) { out.push({ x: p.x + (q.x - p.x) * left / d, y: p.y + (q.y - p.y) * left / d }); return out; }
+      if (d > 0.05) out.push({ x: q.x, y: q.y });
+      left -= d; p = q;
+    }
+    return null;
+  }
+  // 列車重新規劃：從目前位置往兩個方向找到下一站的路線；要往回開時在原地折返：
+  // 車尾變成車頭，換到另一條軌道（列車停在原處，不會繞著車頭原地掉頭）
   trainRoute(v) {
     const net = this.net, lane = v.track;
     if (!lane || lane.kind !== 'lane') { this.reroute(v); return; }
-    const u = net.laneSToSegU(lane, v.s), dest = v.busDest;
-    const r = routeFromPoint(net, { seg: lane.seg.id, u, id: 'x' }, { seg: dest.seg, u: dest.u, id: 'x' });
+    const u = net.laneSToSegU(lane, v.s), dest = v.busDest, to = { seg: dest.seg, u: dest.u, id: 'x' };
+    let r = routeFromPoint(net, { seg: lane.seg.id, u, id: 'x' }, to);
     if (!r) { v.lost = true; v.route = [lane.link.key]; v.ri = 0; return; }
     const L = net.links.get(r.path[0]);
     if (L && L !== lane.link && L.lanes.length) {
-      const nl = L.lanes[0];
+      const body = this.trainBody(v), tail = body && body[body.length - 1];
+      let at = { seg: lane.seg, u };
+      if (tail) {
+        // 車尾所在的軌道（最近的鐵路路段）
+        let best = null;
+        for (const s of net.segs.values()) {
+          if (!s.T.rail || tail.x < s.bbox.x0 - 10 || tail.x > s.bbox.x1 + 10 || tail.y < s.bbox.y0 - 10 || tail.y > s.bbox.y1 + 10) continue;
+          const c = closestOnPoly(s.pts, s.cum, tail);
+          if (c.d < 8 && (!best || c.d < best.d)) best = { seg: s, u: c.s, d: c.d };
+        }
+        if (best) {
+          const r2 = routeFromPoint(net, { seg: best.seg.id, u: best.u, id: 'x' }, to);
+          if (r2) { at = best; r = r2; }
+        }
+      }
+      const L2 = net.links.get(r.path[0]), nl = L2.lanes[0];
       this.removeFromTrack(v); v.prevTrack = null;
-      this.place(v, nl, clamp(net.segUToLaneS(nl, u), 0, nl.len - 0.5)); v.v = 0;
+      this.place(v, nl, clamp(net.segUToLaneS(nl, at.u), 0, nl.len - 0.5)); v.v = 0;
+      // 原本的車身（車頭 → 車尾）就是新的軌跡（最新的點 = 新的車頭在最後），平移到另一條軌道上
+      if (body) {
+        const h = pointAt(nl.pts, nl.cum, v.s), dx = h.x - tail.x, dy = h.y - tail.y;
+        v.trail = body.map(p => ({ x: p.x + dx, y: p.y + dy }));
+      } else v.trail = null;
     }
     v.route = r.path; v.ri = 0; v.nextConn = null; v.committed = false; v.lost = false;
   }
@@ -986,6 +1035,7 @@ export class Traffic {
       if (v.v < 0.5) v.waitT += dt; else { v.waitT = 0; v.triedReroute = false; }
       this.advance(v);
       if (v.dead) { anyDead = true; continue; }
+      if (v.cars) this.trailPush(v);
       const tr = v.track;
       if (v.bus && tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === v.busDest.seg && v.s >= this.destS(v)) {
         // 公車到站：停在站牌前上下客，時間到開往下一站；沒有人要上下車就不停（直接開往下一站，不擋住後面的車）

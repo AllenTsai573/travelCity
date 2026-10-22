@@ -812,10 +812,12 @@ export class Traffic {
       }
     }
     // 快到路邊的車位：先換到最外側車道，轉進去時才不用橫越同向車道（有足夠車距才換，不硬切）
-    if (atDest && v.slotPt && v.trip.to.zone && lane.idx < lanes.length - 1) {
+    // 公車快到站牌時也先靠到最外側車道，停靠時不擋住其他車道
+    const curb = v.bus && !v.train;
+    if (atDest && lane.idx < lanes.length - 1 && (curb || (v.slotPt && v.trip.to.zone))) {
       const dS = this.destS(v) - v.s, p = pointAt(lane.pts, lane.cum, clamp(v.s, 0, lane.len));
-      // distEff 設很大：不急迫，只在車距足夠（≥ 3 m、後車不必急煞）時才換
-      if (dS > 0 && dS < 250 && (v.slotPt.x - p.x) * -p.dy + (v.slotPt.y - p.y) * p.dx > 0) { mand = 1; distEff = 999; }
+      // distEff 設很大：不急迫，只在車距足夠（≥ 3 m、後車不必急煞）時才換；快到站時（公車）越來越急
+      if (dS > 0 && dS < 250 && (curb || (v.slotPt.x - p.x) * -p.dy + (v.slotPt.y - p.y) * p.dx > 0)) { mand = 1; distEff = curb ? Math.max(30, dS) : 999; }
     }
     if (!mand && (distEnd < 40 || v.s < 5)) return;
     const opts = mand ? [mand] : [-1, 1];
@@ -943,8 +945,12 @@ export class Traffic {
       if (v.dead) { anyDead = true; continue; }
       const tr = v.track;
       if (v.bus && tr.kind === 'lane' && v.ri >= v.route.length - 1 && tr.link.seg.id === v.busDest.seg && v.s >= this.destS(v)) {
-        // 公車到站：停在站牌前上下客，時間到開往下一站
-        if (!v.dwell) { const st = this.game.transit.stop(v.busDest.stop); v.dwell = st ? this.game.transit.exchange(v, st) : 1; }
+        // 公車到站：停在站牌前上下客，時間到開往下一站；沒有人要上下車就不停（直接開往下一站，不擋住後面的車）
+        if (!v.dwell) {
+          const st = this.game.transit.stop(v.busDest.stop);
+          if (st && !v.train && !this.game.transit.needStop(v, st)) { this.nextBusStop(v); continue; }
+          v.dwell = st ? this.game.transit.exchange(v, st) : 1;
+        }
         v.s = this.destS(v); v.v = 0; v.dwell -= dt;
         if (v.dwell <= 0) this.nextBusStop(v);
         continue;

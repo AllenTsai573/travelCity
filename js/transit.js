@@ -17,7 +17,7 @@ const RAIL_COLORS = ['#e8eef2', '#f2e9d6', '#e3f0e6'];
 // 鐵路：車站步行範圍較大；列車載客量；貨運列車的班距（遊戲分鐘）
 const RAIL_WALK = 800, TRAIN_CAP = 300, FREIGHT_EVERY = 240;
 // 時間膨脹：公車繞一圈要好幾個遊戲小時，候車上限以模擬秒計（MAX_WAIT_S）；每條路線最多 MAX_STOPS 站
-const STOP_GAP = 240, WALK = 450, RANGE = 1500, PLAN_EVERY = 1440, MAX_WAIT_S = 240, MAX_STOPS = 9, CAPACITY = 60, HEADWAY = 50;
+const STOP_GAP = 240, WALK = 450, RANGE = 1500, PLAN_EVERY = 1440, MAX_WAIT_S = 240, MAX_STOPS = 9, CAPACITY = 60, HEADWAY = 80, MAX_BUSES = 8;
 export const BUS_LEN = 12, BUS_W = 2.6;
 
 export class Transit {
@@ -154,15 +154,16 @@ export class Transit {
         if (b.abandoned || !(b.zone === 'R' || b.zone === 'C' || b.zone === 'I')) continue;
         const ref = b.front || { seg: b.seg, u: b.u }, s = net.segs.get(ref.seg);
         if (!s || s.T.internal || !s.T.access || s.drawLevel !== 0) continue;
-        if (s.len - s.ra - s.rb < 24) continue;
-        cands.push({ seg: s.id, u: clamp(ref.u, s.ra + 10, s.len - s.rb - 10), w: C.cap(b) * (b.zone === 'R' ? 1 : 0.8) });
+        // 站牌離路口至少 30 m（公車停靠時不會擋到路口）
+        if (s.len - s.ra - s.rb < 70) continue;
+        cands.push({ seg: s.id, u: clamp(ref.u, s.ra + 30, s.len - s.rb - 30), w: C.cap(b) * (b.zone === 'R' ? 1 : 0.8) });
       }
       cands.sort((a, b) => b.w - a.w);
       for (const c of cands) {
         const s = net.segs.get(c.seg), p = pointAt(s.pts, s.cum, c.u);
         if (!depots.some(d => Math.hypot(d.x - p.x, d.y - p.y) < RANGE)) continue;
         // 附近原本就有站牌（同方向）：沿用原來的站牌，站位不動
-        const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t));
+        const o = old.find(t => Math.hypot(t.x - p.x, t.y - p.y) < STOP_GAP * 0.5 && t.dx * p.dx + t.dy * p.dy > 0.7 && net.segs.has(t.seg) && !this.stops.includes(t) && t.type !== 'rail' && t.u >= net.segs.get(t.seg).ra + 30 && t.u <= net.segs.get(t.seg).len - net.segs.get(t.seg).rb - 30);
         const q = o ? { x: o.x, y: o.y } : p;
         if (this.stops.some(t => t.type !== 'rail' && Math.hypot(t.x - q.x, t.y - q.y) < STOP_GAP)) continue;
         if (o) { o.lines = []; this.stops.push(o); }
@@ -192,7 +193,7 @@ export class Transit {
           // 公車數以發車間隔約 HEADWAY 秒為準，不超過總站公車位平均分給各路線的數量
           let loop = 0;
           order.forEach((t, i) => { const n2 = order[(i + 1) % order.length]; loop += Math.hypot(n2.x - t.x, n2.y - t.y) * 1.3 / 9 + 6; });
-          const nb = clamp(Math.round(loop / HEADWAY), 1, Math.max(1, Math.floor(buses / nLines)));
+          const nb = clamp(Math.round(loop / HEADWAY), 1, Math.max(1, Math.min(MAX_BUSES, Math.floor(buses / nLines))));
           const line = { id: li, name: `${li} 路`, color: LINE_COLORS[(li - 1) % LINE_COLORS.length], depot: d.id, hub: hub.id, stops: order.map(t => t.id), buses: nb, headway: loop / nb * CLOCK, nextT: 0 };
           // 實際行駛路徑（畫路線圖用）：總站 → 各站 → 回到第一站
           const keys = new Set();
@@ -269,6 +270,13 @@ export class Transit {
   }
   // 沒有公車可搭：走路（行程照樣完成）
   walk(trip) { this.stats.walked++; this.city.onTripEnd(trip, true, 300); }
+
+  // 這一站有沒有人要上下車（沒有的話公車不停）
+  needStop(v, stop) {
+    const L = this.line(v.bus);
+    if (!L) return true;
+    return v.pax.some(p => p.to === stop.id || !L.stops.includes(p.to)) || stop.queue.some(p => p.line === v.bus && p.to !== stop.id);
+  }
 
   // 公車到站：下車的乘客完成行程，等車的乘客上車；回傳停靠秒數
   exchange(v, stop) {

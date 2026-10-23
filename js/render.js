@@ -165,16 +165,18 @@ export class Renderer {
     ctx.strokeRect(0, 0, g.terrain.size, g.terrain.size);
     const v = this.view(40);
     if (!baked) this.drawTrees(v);
-    // 地塊鋪面 → 地面 / 地下道路與車 → 建物立體部分 → 高架道路
+    // 地塊鋪面 → 地面 / 地下道路與車 → 高架道路（含月台、列車）→ 建物立體部分
+    // 高架道路畫在建物之前：建物往畫面上方拉高，比高架道路更靠近鏡頭的大樓會蓋住後方的高架鐵路 / 高速公路，
+    // 不會變成鐵路從大樓上面穿過去（高架道路下方不會有建物，所以不會反過來被蓋錯）
     this.drawBuildings(v, 'ground');
     this.drawNetwork(v, L => L <= 0);
     this.drawArrivals(v);
     this.drawGates(v);
     this.drawStops(v);
-    // 分區圖：不畫建物的立體部分，只看各地塊的分區顏色
-    if (!g.zonemap) this.drawBuildings(v, 'tall');
     this.drawNetwork(v, L => L > 0);
     this.drawPlatforms(v);
+    // 分區圖：不畫建物的立體部分，只看各地塊的分區顏色
+    if (!g.zonemap) this.drawBuildings(v, 'tall');
     // 疊加圖層各自保護：其中一層出錯時其他照常畫（錯誤由 main.js 顯示）
     const layer = f => { try { f(); } catch (e) { this.worldTf(); g.reportError && g.reportError(e); } };
     if (g.zonemap) layer(() => this.drawZoneMap(v));
@@ -1445,7 +1447,7 @@ export class Renderer {
         const L = Math.hypot(dx, dy); dx /= L; dy /= L;
       }
       // 列車：沿軌道畫成一節一節的車廂（每節約 20 m），彎道上也會順著軌道；跨縣市連節公車也是兩節沿車道彎折
-      if (vh.train || vh.icb) { this.drawTrain(vh, detail, vh.icb ? lat : 0); continue; }
+      if (vh.train || vh.icb) { this.drawTrain(vh, detail, lat); continue; }
       this.localTf(x, y, dx, dy);
       const hl = vh.len / 2, hw = vh.w / 2;
       if (vh.fadeIn !== undefined && vh.fadeIn < 1) ctx.globalAlpha = vh.fadeIn;
@@ -1506,8 +1508,8 @@ export class Renderer {
   // lat：橫向偏移（連節公車換車道時）
   drawTrain(vh, detail, lat = 0) {
     const ctx = this.ctx, n = vh.cars || 3, gap = vh.icb ? 0.4 : 0.8, cl = (vh.len - (n - 1) * gap) / n;
-    // 車廂沿開過的軌跡（traffic.trailPush）排列；軌跡還不夠長（剛發車）時沿目前與上一段軌道
-    const head = pointAt(vh.track.pts, vh.track.cum, clamp(vh.s, 0, vh.track.len));
+    // 車廂沿開過的軌跡（traffic.trailPush，已含橫向偏移）排列；軌跡還不夠長（剛發車）時沿目前與上一段軌道
+    const hc = pointAt(vh.track.pts, vh.track.cum, clamp(vh.s, 0, vh.track.len)), head = { x: hc.x - hc.dy * lat, y: hc.y + hc.dx * lat };
     let path = null;
     if (vh.trail && vh.trail.length) {
       const P = [head];
@@ -1517,8 +1519,8 @@ export class Renderer {
     }
     const at = back => {
       let p;
-      if (path) p = pointAt(path.P, path.cum, clamp(back, 0, path.cum[path.cum.length - 1]));
-      else {
+      if (path) return pointAt(path.P, path.cum, clamp(back, 0, path.cum[path.cum.length - 1]));
+      {
         let tr = vh.track, s = vh.s - back;
         if (s < 0 && vh.prevTrack && !vh.prevTrack.dead && vh.prevTrack.pts) { tr = vh.prevTrack; s = tr.len + s; }
         p = pointAt(tr.pts, tr.cum, clamp(s, 0, tr.len));

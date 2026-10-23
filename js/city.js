@@ -838,8 +838,8 @@ export class City {
           b.acc.goods -= 1;
           if (b.stock < 1) continue;
           // 約三成商品外銷（貨車開往外部連線）
-          // 有鐵路貨運站時外銷的商品送到貨運站，由貨運列車載出去
-          const ex = rng.chance(0.3), rc = ex ? this.nearCargo(b, false) : null;
+          // 3 km 內有鐵路貨運站時一半的商品外銷：送到貨運站，由貨運列車載出去
+          const near = this.nearCargo(b, false), ex = rng.chance(near ? 0.5 : 0.3), rc = ex ? near : null;
           const d = rc || (ex && this.liveOutside().length ? this.pickOutside(b) : this.pickGoodsDest(b));
           if (d) { b.stock -= 1; this.pushTrip(b, { kind: 'goods', from: b, to: d, truck: true }); }
         }

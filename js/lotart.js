@@ -403,7 +403,8 @@ export function lotArt(b) {
   } else if (b.zt === 'RC') {
     // 鐵路貨運站：臨路一排貨車卸貨位，中間貨櫃堆場與門式起重機，後方是貨物月台與倉庫
     base = '#bab4a7';
-    for (let u = 1; u + 3.4 <= w - 1 && u < 1 + 6 * 3.8; u += 3.8) loadingBay(u);
+    // 臨路一排貨車卸貨位（大的貨運站最多 12 個）
+    for (let u = 1; u + 3.4 <= w - 1 && u < 1 + 12 * 3.8; u += 3.8) loadingBay(u);
     const pv = d - 8;
     rect(1, pv, w - 1, d - 0.5, '#a39c90', 1.2);
     if (pv - 11 > 6) yard(2, 11, w * 0.62, pv - 1.5);

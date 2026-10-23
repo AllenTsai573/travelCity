@@ -341,9 +341,11 @@ export class Traffic {
   trailPush(v) {
     const tr = v.track;
     if (!tr || !tr.pts) return;
-    const p = pointAt(tr.pts, tr.cum, clamp(v.s, 0, tr.len)), T = v.trail || (v.trail = []), last = T[T.length - 1];
+    // 記錄實際畫出的位置（含橫向偏移：折返時沿渡線斜斜開到另一條軌道）
+    const c = pointAt(tr.pts, tr.cum, clamp(v.s, 0, tr.len)), lat = v.lat || 0, p = { x: c.x - c.dy * lat, y: c.y + c.dx * lat };
+    const T = v.trail || (v.trail = []), last = T[T.length - 1];
     if (last && Math.hypot(p.x - last.x, p.y - last.y) < 1) return;
-    T.push({ x: p.x, y: p.y });
+    T.push(p);
     let L = 0;
     for (let i = T.length - 1; i > 0; i--) {
       L += Math.hypot(T[i].x - T[i - 1].x, T[i].y - T[i - 1].y);
@@ -354,7 +356,8 @@ export class Traffic {
   trainBody(v) {
     const tr = v.track, T = v.trail;
     if (!tr || !tr.pts || !T || T.length < 2) return null;
-    let p = pointAt(tr.pts, tr.cum, clamp(v.s, 0, tr.len)), left = v.len;
+    const c = pointAt(tr.pts, tr.cum, clamp(v.s, 0, tr.len)), lat = v.lat || 0;
+    let p = { x: c.x - c.dy * lat, y: c.y + c.dx * lat }, left = v.len;
     const out = [{ x: p.x, y: p.y }];
     for (let i = T.length - 1; i >= 0; i--) {
       const q = T[i], d = Math.hypot(q.x - p.x, q.y - p.y);
@@ -365,7 +368,7 @@ export class Traffic {
     return null;
   }
   // 列車重新規劃：從目前位置往兩個方向找到下一站的路線；要往回開時在原地折返：
-  // 車尾變成車頭，換到另一條軌道（列車停在原處，不會繞著車頭原地掉頭）
+  // 車尾變成車頭，開出去時沿渡線斜斜地移到另一條軌道（橫向偏移 v.lat 隨行駛慢慢歸零，不會瞬間移過去）
   trainRoute(v) {
     const net = this.net, lane = v.track;
     if (!lane || lane.kind !== 'lane') { this.reroute(v); return; }
@@ -392,10 +395,12 @@ export class Traffic {
       const L2 = net.links.get(r.path[0]), nl = L2.lanes[0];
       this.removeFromTrack(v); v.prevTrack = null;
       this.place(v, nl, clamp(net.segUToLaneS(nl, at.u), 0, nl.len - 0.5)); v.v = 0;
-      // 原本的車身（車頭 → 車尾）就是新的軌跡（最新的點 = 新的車頭在最後），平移到另一條軌道上
+      // 原本的車身（車頭 → 車尾）就是新的軌跡（最新的點 = 新的車頭在最後）；新車頭先留在原本的軌道上，
+      // 以橫向偏移表示，開動後沿 S 形（12～40 m）移到新的軌道，後面的車廂沿著軌跡跟過去
       if (body) {
-        const h = pointAt(nl.pts, nl.cum, v.s), dx = h.x - tail.x, dy = h.y - tail.y;
-        v.trail = body.map(p => ({ x: p.x + dx, y: p.y + dy }));
+        const h = pointAt(nl.pts, nl.cum, v.s), off = (tail.x - h.x) * -h.dy + (tail.y - h.y) * h.dx;
+        v.lat = off; v.lat0 = off; v.lcP = 0; v.latSlope = 0;
+        v.trail = body;
       } else v.trail = null;
     }
     v.route = r.path; v.ri = 0; v.nextConn = null; v.committed = false; v.lost = false;

@@ -441,7 +441,8 @@ for (const b of ['desert', 'snow', 'tropical']) {
   assert(pax.length >= 2 && pax.every(b => { const s = gc.net.segs.get(C.platformOf(b).seg); return s.len < 200 && gc.net.nodes.get(s.a).segs.length === 2; }), `客運車站停在月台軌上（${pax.length} 站）`);
   assert(rc && pax.every(b => compOf(b) !== compOf(rc)), '貨運線與客運線分軌');
   // 跨縣市客運列車：客運鐵路接到外部鐵路，列車從地圖外開進來停靠各站
-  assert(gc.transit.ict.length === 1 && gc.transit.ict[0].stations.length === pax.length && gc.traffic.vehicles.some(v => v.ict), `跨縣市列車（${gc.transit.ict.map(L => L.name + ' ' + L.stations.length + ' 站').join('')}）`);
+  const IL = gc.transit.ict[0];
+  assert(gc.transit.ict.length === 1 && IL.stations.length === 1 && C.byId.get(IL.hub).zt === 'RT' && IL.all.length === pax.length && gc.traffic.vehicles.some(v => v.ict), `跨縣市列車只停對外車站（鐵路總站），其他 ${IL ? IL.all.length - 1 : 0} 站搭市內鐵路轉乘`);
 }
 
 // 地形第 2 版：湖泊最多兩個、河流不一定有，水域少；舊存檔（第 1 版）地形不變

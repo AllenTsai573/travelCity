@@ -220,7 +220,10 @@ function buildCity(g, fullRebuild) {
   }
   // 站前道路離客運線 80 m；客運月台軌在南側 14 m、貨運線在北側 32 m，車站地塊的後方緊鄰鐵軌
   // 站前道路（市區道路，路緣到中心 5.8 m）離客運線 RW：深 8 格（48 m）的車站地塊後緣剛好貼著月台軌（中心 SID、半寬約 5 m）
-  const RY = ry ? ry.y : (YM + YD) / 2, SID = 14, RW = SID + 5.6 + 48 + 5.8, FY = RY - 32;
+  // 站前道路是大道（地塊最大 18 格，鐵路總站、貨運站放得下 16 格寬），路緣到中心 SF；貨運線在客運線北側 20 m，
+  // 北側的貨運站地塊可以深到 7 格
+  const SF = halfWidth(ROAD_TYPES.avenue) + 1.5;
+  const RY = ry ? ry.y : (YM + YD) / 2, SID = 14, RW = SID + 5.6 + 48 + SF, FY = RY - 20;
 
   // ---------- 鐵路（先鋪，之後的道路都從高架下方穿過） ----------
   // 一條東西向高架鐵路：地圖邊緣是地面（外部鐵路），進來 150 m 爬到第 1 層；跨過南北向高速公路處升到第 2 層
@@ -298,7 +301,8 @@ function buildCity(g, fullRebuild) {
   // ---------- 街道 ----------
   // 南北向街道（鐵路高架，全部從下方穿過）
   for (const x of gridX) NS(x, ysAll, 'street');
-  for (const y of [...gridY, RY - RW, RY + RW]) EW(y, xsAll, 'street');
+  for (const y of gridY) EW(y, xsAll, 'street');
+  for (const y of [RY - RW, RY + RW]) EW(y, xsAll, 'avenue');
   // 高架高速公路兩側的側道（離主線 50 m）：高速公路沿線不會留下一整條沒有路的帶狀空地；交流道範圍內不鋪
   for (const d of [-50, 50]) {
     EW(YA + d, uniq([XW, ...xsAll, XE]), 'street');
@@ -394,7 +398,7 @@ function buildCity(g, fullRebuild) {
     if (l) made.push(l);
   }
   // 貨運站在北側：後緣貼著貨運線（中心 FY、半寬約 5 m）
-  const rc = station('RC', 16, Math.floor((RW - 5.8 - (RY - FY) - 5.6) / 6), XC, RY - RW);
+  const rc = station('RC', 16, Math.floor((RW - SF - (RY - FY) - 5.6) / 6), XC, RY - RW);
   if (rc) made.push(rc);
   city.recount();
   g.money = savedMoney;

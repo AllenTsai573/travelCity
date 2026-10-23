@@ -24,6 +24,8 @@ export const ART_LEN = 18;
 // 發車條件：候車 ICB_MIN 人以上，或最早的人已等 ICB_MAXHOLD 分鐘
 const ICB_CAP = 90, ICB_HEADWAY = 45, ICB_AWAY = 120, ICB_WAIT_S = 400, ICB_MIN = 15, ICB_MAXHOLD = 180;
 const ICB_COLORS = ['#2f6db5', '#1b8a8f', '#6b4fb3', '#b5651d'];
+// 幹線：連接各公車總站轉乘站的最遠距離、顏色
+const TRUNK_MAX = 5000, TRUNK_COLORS = ['#3b3b3b', '#5c4033', '#2e4a62'];
 // 跨縣市客運列車（四節車廂、每站停 20 秒）：發車間隔（遊戲分鐘，兩個方向輪流）、載客量、車站步行範圍、候車上限（模擬秒）
 export const ICT_COLOR = '#c0392b';
 const ICT_HEADWAY = 180, ICT_CAP = 300, ICT_WALK = 1200, ICT_WAIT_S = 500;
@@ -242,8 +244,10 @@ export class Transit {
           this.lines.push(line);
         }
       }
+      li = this.planTrunks(depots, li);
     }
     this.stops = this.stops.filter(t => t.lines.length);
+    this._xg = null;
     // 等車的乘客：站牌取消、或原本的路線到不了目的地的，重新找站牌（找不到就走路）
     const again = [];
     for (const t of old) {
@@ -261,6 +265,56 @@ export class Transit {
       if (i >= 0) { v.stopIdx = i; const pt = this.stopPoint(this.stop(L.stops[i]), v.train); if (v.busDest.seg !== pt.seg) { v.busDest = { ...v.busDest, seg: pt.seg, u: pt.u }; if (v.train) tr.trainRoute(v); else tr.reroute(v); } }
       else if (!v.dwell) { v.stopIdx = -1; tr.nextBusStop(v); }
     }
+  }
+
+  // 幹線：把各公車總站的轉乘站連起來（最小生成樹，彼此 TRUNK_MAX 公尺內），幹線公車只停兩端的轉乘站。
+  // 各總站的路線只在 1.8 km 內，住宅區和工業區離得遠時要靠幹線轉乘（例如住宅 → 轉乘站 → 幹線 → 另一個轉乘站 → 工廠）
+  planTrunks(depots, li) {
+    const near = d => {
+      const L = this.lines.find(l => l.depot === d.id && !l.rail);
+      if (L) return this.stop(L.hub);
+      let best = null, bd = rangeOf(d);
+      for (const t of this.stops) { if (t.type === 'rail' || !t.lines.length) continue; const dd = Math.hypot(t.x - d.x, t.y - d.y); if (dd < bd) { bd = dd; best = t; } }
+      return best;
+    };
+    const hubs = depots.map(d => ({ d, h: near(d) })).filter(e => e.h);
+    // 最小生成樹（Prim）
+    const inT = new Set(hubs.length ? [hubs[0]] : []), edges = [];
+    while (inT.size < hubs.length) {
+      let best = null;
+      for (const a of inT) for (const b of hubs) {
+        if (inT.has(b)) continue;
+        const d = Math.hypot(a.h.x - b.h.x, a.h.y - b.h.y);
+        if (!best || d < best.d) best = { a, b, d };
+      }
+      if (!best) break;
+      inT.add(best.b);
+      if (best.d <= TRUNK_MAX && best.a.h !== best.b.h) edges.push(best);
+    }
+    let k = 0;
+    for (const { a, b } of edges) {
+      const from = { seg: a.d.seg, u: a.d.u, id: a.d.id }, tour = this.bestTour([a.h, b.h], from, a.d.id);
+      if (!tour.legs || tour.legs.length < 2) continue;
+      li++; k++;
+      const loop = tour.cost + 12, slots = Math.floor(this.city.truckSlotsOf(a.d).length / 3);
+      const nb = clamp(Math.round(loop / HEADWAY), 1, Math.max(1, Math.min(4, slots)));
+      const line = { id: li, name: `幹線 ${k}`, color: TRUNK_COLORS[(k - 1) % TRUNK_COLORS.length], depot: a.d.id, hub: a.h.id, stops: tour.order.map(t => t.id), buses: nb, headway: loop / nb * CLOCK, nextT: 0, trunk: true };
+      line.legs = tour.legs; line.path = [...new Set(tour.legs.flat())];
+      for (const t of [a.h, b.h]) t.lines.push(line.id);
+      this.lines.push(line);
+    }
+    return li;
+  }
+  // 路線之間的轉乘點：兩條路線共用的站牌（公車 ↔ 公車、公車 ↔ 列車都算），規劃後第一次用到時計算
+  xferGraph() {
+    if (this._xg) return this._xg;
+    const m = new Map();
+    for (const A of this.lines) {
+      const set = new Set(A.stops), out = [];
+      for (const B of this.lines) { if (B === A) continue; const at = B.stops.find(s => set.has(s)); if (at !== undefined) out.push({ line: B.id, at }); }
+      m.set(A.id, out);
+    }
+    return (this._xg = m);
   }
 
   // 從某站（以 inKey 這個方向的路段抵達；null 表示從總站出發、兩個方向都可以）開到 to 站的路線（含起點路段），有快取
@@ -398,7 +452,8 @@ export class Transit {
 
   // ---------- 跨縣市客運列車 ----------
   // 每條客運鐵路（同一個鐵路連通區裡有鐵路總站 / 車站）只要接到外部鐵路就開一條：列車從一端的外部鐵路開進來，
-  // 依序停靠各站（停在進站月台軌），從另一端的外部鐵路開出去；兩個方向輪流發車（只有一端時同一端進出）
+  // 只停一個對外的車站（鐵路總站；沒有總站時是離入口最近的車站，停在進站月台軌），再從另一端的外部鐵路開出去；
+  // 兩個方向輪流發車（只有一端時同一端進出）。其他車站像捷運一樣由市內鐵路服務，要出城的人搭市內鐵路到對外車站轉乘
   ictPlan() {
     const C = this.city, net = this.net, comp = this.railComp(), old = new Map(this.ict.map(L => [L.id, L])), by = new Map();
     for (const b of this.railStations()) {
@@ -415,7 +470,10 @@ export class Transit {
       const A = net.nodes.get(a.node), id = 'ict' + a.node;
       const L = old.get(id) || { id, inQ: [], nextT: 0, dir: 0 };
       L.ends = [a.node, b.node]; L.name = `${a.name.replace('鐵路', '')}－${b.name.replace('鐵路', '')}跨縣市列車`;
-      L.stations = list.sort((p, q) => Math.hypot(p.x - A.x, p.y - A.y) - Math.hypot(q.x - A.x, q.y - A.y)).map(s => s.id);
+      // 對外車站：鐵路總站，沒有的話離入口最近的車站；all：這條鐵路上所有車站（出城的人從這些車站搭市內鐵路過來轉乘）
+      list.sort((p, q) => Math.hypot(p.x - A.x, p.y - A.y) - Math.hypot(q.x - A.x, q.y - A.y));
+      const hub = list.find(s => s.zt === 'RT') || list[0];
+      L.stations = [hub.id]; L.hub = hub.id; L.all = list.map(s => s.id);
       this.ict.push(L);
       old.delete(id);
     }
@@ -427,19 +485,27 @@ export class Transit {
     const out = trip.to.outside ? trip.to : trip.from.outside ? trip.from : null, local = out === trip.to ? trip.from : trip.to;
     if (!out || !local || local.outside || local.dead) return false;
     let best = null, bd = ICT_WALK;
-    for (const L of this.ict) for (const sid of L.stations) {
+    for (const L of this.ict) for (const sid of L.all || L.stations) {
       const s = this.city.byId.get(sid);
       if (!s || s.dead) continue;
-      const d = Math.hypot(s.x - local.x, s.y - local.y);
-      if (d < bd) { bd = d; best = { L, s }; }
+      // 不是對外車站：要有市內鐵路同時停靠這站與對外車站
+      const local2 = sid === L.hub ? null : this.railLineBetween(sid, L.hub);
+      if (sid !== L.hub && !local2) continue;
+      const d = Math.hypot(s.x - local.x, s.y - local.y) + (local2 ? 300 : 0);
+      if (d < bd) { bd = d; best = { L, s, local: local2 }; }
     }
     if (!best) return false;
-    const now = this.game.time;
-    if (out === trip.to) { const q = this.ictQ.get(best.s.id) || this.ictQ.set(best.s.id, []).get(best.s.id); q.push({ trip, t: now }); }
-    else best.L.inQ.push({ trip, t: now, station: best.s.id });
+    const now = this.game.time, hub = best.L.hub;
+    if (out === trip.to) {
+      // 出城：在對外車站等跨縣市列車；住在其他車站附近的先搭市內鐵路到對外車站（到站時 exchange 把他排進 ictQ）
+      if (best.local) this.stop('r' + best.s.id).queue.push({ trip, to: 'r' + hub, line: best.local.id, t: now, ict: hub });
+      else (this.ictQ.get(hub) || this.ictQ.set(hub, []).get(hub)).push({ trip, t: now });
+    } else best.L.inQ.push({ trip, t: now, station: best.s.id });
     trip.ict = true; trip.transit = true;
     return true;
   }
+  // 同時停靠兩個鐵路車站（建築 id）的市內鐵路路線
+  railLineBetween(a, b) { return this.lines.find(l => l.rail && l.stops.includes('r' + a) && l.stops.includes('r' + b)) || null; }
   ictUpdate() {
     const C = this.city, tr = this.game.traffic, now = this.game.time;
     const key = this.railStations().map(b => b.id).join(',') + '|' + C.railOutside.map(o => o.node).join(',') + '|' + this.net.version;
@@ -467,8 +533,16 @@ export class Transit {
       tr.removeFromTrack(v); v.dead = true; v.track = null;
       return;
     }
-    const sid = I.stops[I.idx];
-    I.pax = I.pax.filter(p => { if (p.station !== sid) return true; this.city.onTripEnd(p.trip, true, now - p.t); this.stats.ict = (this.stats.ict || 0) + 1; return false; });
+    const sid = I.stops[I.idx], hubStop = this.stop('r' + sid);
+    I.pax = I.pax.filter(p => {
+      if (p.station === null) return true;   // 出城的乘客留在車上
+      this.stats.ict = (this.stats.ict || 0) + 1;
+      // 目的地在其他車站附近：在對外車站轉搭市內鐵路；沒有市內鐵路就從這裡走過去
+      const rl = p.station !== sid && hubStop && this.railLineBetween(sid, p.station);
+      if (rl) { hubStop.queue.push({ trip: p.trip, to: 'r' + p.station, line: rl.id, t: p.t }); this.stats.transfers = (this.stats.transfers || 0) + 1; }
+      else this.city.onTripEnd(p.trip, true, now - p.t);
+      return false;
+    });
     const q = this.ictQ.get(sid) || [];
     while (q.length && I.pax.length < ICT_CAP) { const p = q.shift(); I.pax.push({ trip: p.trip, t: p.t, station: null }); }
     I.idx++;
@@ -488,21 +562,38 @@ export class Transit {
     const R = t => (t.type === 'rail' ? RAIL_WALK : WALK);
     const s1s = this.stops.map(t => [t, Math.hypot(t.x - a.x, t.y - a.y)]).filter(e => e[1] <= R(e[0]));
     const s2s = this.stops.map(t => [t, Math.hypot(t.x - b.x, t.y - b.y)]).filter(e => e[1] <= R(e[0]));
+    if (!s1s.length || !s2s.length) return false;
+    // 起點附近每條路線最近的站、終點附近每條路線最近的站
+    const starts = new Map(), ends = new Map();
+    for (const [s, d] of s1s) for (const l of s.lines) if (!starts.has(l) || d < starts.get(l).d) starts.set(l, { s, d });
+    for (const [s, d] of s2s) for (const l of s.lines) if (!ends.has(l) || d < ends.get(l).d) ends.set(l, { s, d });
+    // 以路線為節點的廣度優先搜尋：最多轉乘兩次（例如 住宅的路線 → 幹線 → 工業區的路線），轉乘一次算多走 300 m
+    const G = this.xferGraph(), seen = new Map(), q = [];
+    for (const [l, e] of starts) { seen.set(l, { k: 0, prev: null, at: null, d0: e.d }); q.push(l); }
+    for (let i = 0; i < q.length; i++) {
+      const A = q[i], a = seen.get(A);
+      if (a.k >= 2) continue;
+      for (const { line: B, at } of G.get(A) || []) if (!seen.has(B)) { seen.set(B, { k: a.k + 1, prev: A, at, d0: a.d0 }); q.push(B); }
+    }
     let best = null;
-    for (const [s1, d1] of s1s) for (const [s2, d2] of s2s) {
-      if (s2 === s1) continue;
-      const ln = s1.lines.find(l => s2.lines.includes(l));
-      if (ln) { if (!best || d1 + d2 < best.d) best = { s1, s2, ln, d: d1 + d2 }; continue; }
-      // 轉乘：兩條路線屬於同一個總站，在轉乘站換車
-      for (const l1 of s1.lines) for (const l2 of s2.lines) {
-        const L1 = this.line(l1), L2 = this.line(l2);
-        if (!L1 || !L2 || L1.hub !== L2.hub || s1.id === L1.hub || s2.id === L2.hub) continue;
-        const d = d1 + d2 + 300;
-        if (!best || d < best.d) best = { s1, s2: this.stop(L1.hub), ln: l1, d, next: { line: l2, to: s2.id } };
-      }
+    for (const [l, e] of ends) {
+      const n = seen.get(l);
+      if (!n) continue;
+      const cost = n.d0 + e.d + n.k * 300;
+      if (!best || cost < best.cost) best = { l, e, n, cost };
     }
     if (!best) return false;
-    best.s1.queue.push({ trip, to: best.s2.id, line: best.ln, t: t0, next: best.next });
+    // 由終點往回組出每一段：[路線, 下車的站]
+    const legs = [{ line: best.l, to: best.e.s.id }];
+    for (let L = best.l, n = best.n; n.prev !== null; L = n.prev, n = seen.get(L)) legs.unshift({ line: n.prev, to: n.at });
+    const s1 = starts.get(legs[0].line).s;
+    // 去掉起訖相同的段（在起點站就換車的情形）
+    let from = s1.id;
+    const real = [];
+    for (const g of legs) { if (g.to !== from) real.push(g); from = g.to; }
+    if (!real.length) return false;
+    const chain = real.slice(1).reduceRight((nx, g) => ({ line: g.line, to: g.to, next: nx }), undefined);
+    s1.queue.push({ trip, to: real[0].to, line: real[0].line, t: t0, next: chain });
     return true;
   }
   // 沒有公車可搭：走路（行程照樣完成）
@@ -525,7 +616,8 @@ export class Transit {
     for (const p of off) {
       n++;
       // 轉乘：在這站排下一條路線
-      if (p.next) { stop.queue.push({ trip: p.trip, to: p.next.to, line: p.next.line, t: p.t }); this.stats.transfers = (this.stats.transfers || 0) + 1; continue; }
+      if (p.next) { stop.queue.push({ trip: p.trip, to: p.next.to, line: p.next.line, t: p.t, next: p.next.next }); this.stats.transfers = (this.stats.transfers || 0) + 1; continue; }
+      if (p.ict !== undefined && p.to === stop.id) { (this.ictQ.get(p.ict) || this.ictQ.set(p.ict, []).get(p.ict)).push({ trip: p.trip, t: p.t }); this.stats.transfers = (this.stats.transfers || 0) + 1; continue; }
       this.stats.riders++; if (v.train) this.stats.railRiders = (this.stats.railRiders || 0) + 1;
       this.city.onTripEnd(p.trip, true, Math.max(60, (this.game.time - p.t) / CLOCK));
     }
